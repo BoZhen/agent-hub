@@ -58,6 +58,8 @@ def cli():
     serve_parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     serve_parser.add_argument("--port", type=int, default=7800, help="Port (default: 7800)")
     serve_parser.add_argument("--db", default="hub.db", help="SQLite database path (default: hub.db)")
+    serve_parser.add_argument("--ssl-cert", default=None, help="SSL certificate file path")
+    serve_parser.add_argument("--ssl-key", default=None, help="SSL private key file path")
 
     args = parser.parse_args()
 
@@ -69,7 +71,11 @@ def cli():
             db_path=args.db,
         )
         app = create_app(config)
-        uvicorn.run(app, host=config.host, port=config.port)
+        ssl_kwargs = {}
+        if args.ssl_cert and args.ssl_key:
+            ssl_kwargs["ssl_certfile"] = args.ssl_cert
+            ssl_kwargs["ssl_keyfile"] = args.ssl_key
+        uvicorn.run(app, host=config.host, port=config.port, **ssl_kwargs)
     else:
         parser.print_help()
 
