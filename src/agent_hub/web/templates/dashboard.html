@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Agent Hub{% endblock %}
+
+{% block content %}
+<!-- Stats bar -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+  <div class="bg-surface-light rounded-lg p-4 border border-gray-700/30">
+    <div class="text-xs text-gray-400 uppercase tracking-wide">Active</div>
+    <div class="text-2xl font-bold status-active" id="stat-active">{{ stats.active_sessions }}</div>
+  </div>
+  <div class="bg-surface-light rounded-lg p-4 border border-gray-700/30">
+    <div class="text-xs text-gray-400 uppercase tracking-wide">Idle</div>
+    <div class="text-2xl font-bold status-idle" id="stat-idle">{{ stats.idle_sessions }}</div>
+  </div>
+  <div class="bg-surface-light rounded-lg p-4 border border-gray-700/30">
+    <div class="text-xs text-gray-400 uppercase tracking-wide">Stopped</div>
+    <div class="text-2xl font-bold status-stopped" id="stat-stopped">{{ stats.stopped_sessions }}</div>
+  </div>
+  <div class="bg-surface-light rounded-lg p-4 border border-gray-700/30">
+    <div class="text-xs text-gray-400 uppercase tracking-wide">Events Today</div>
+    <div class="text-2xl font-bold text-white" id="stat-today">{{ stats.today_events }}</div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Sessions list -->
+  <div class="lg:col-span-2">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Sessions</h2>
+    <div id="sessions-list" class="space-y-3">
+      {% for s in sessions %}
+      <a href="/sessions/{{ s.session_id }}"
+         class="block bg-surface-light hover:bg-surface-lighter rounded-lg p-4 border border-gray-700/30 transition"
+         id="card-{{ s.session_id }}">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="dot dot-{{ s.status }}"></span>
+            <span class="font-semibold text-white">{{ s.hostname }}</span>
+          </div>
+          <span class="text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+        </div>
+        <div class="text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+        <div class="flex items-center justify-between text-xs text-gray-500">
+          <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+          <span>{{ s.last_seen_at[:19] }}</span>
+        </div>
+      </a>
+      {% endfor %}
+      {% if not sessions %}
+      <div class="text-gray-500 text-sm py-8 text-center">No sessions yet. Start a Claude Code session with hooks configured.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Live event feed -->
+  <div>
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Live Events</h2>
+    <div id="event-feed" class="space-y-2 max-h-[600px] overflow-y-auto">
+      {% for e in recent_events %}
+      <div class="bg-surface-light rounded p-3 border border-gray-700/20 text-sm">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-accent-light text-xs">{{ e.event_type }}</span>
+          <span class="text-gray-500 text-xs">{{ e.created_at[:19] }}</span>
+        </div>
+        <div class="text-gray-300 truncate">{{ e.summary or '—' }}</div>
+      </div>
+      {% endfor %}
+      {% if not recent_events %}
+      <div class="text-gray-500 text-sm py-4 text-center">No events yet.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function onWsMessage(data) {
+  if (data.type !== 'event') return;
+
+  // Prepend to live event feed
+  const feed = document.getElementById('event-feed');
+  const el = document.createElement('div');
+  el.className = 'bg-surface-light rounded p-3 border border-gray-700/20 text-sm fade-in';
+  const time = new Date().toISOString().slice(0, 19);
+  el.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-accent-light text-xs">${data.event_type}</span>
+      <span class="text-gray-500 text-xs">${time}</span>
+    </div>
+    <div class="text-gray-300 truncate">${escapeHtml(data.summary || '—')}</div>
+  `;
+  // Remove "No events yet" placeholder
+  const placeholder = feed.querySelector('.text-center');
+  if (placeholder) placeholder.remove();
+
+  feed.prepend(el);
+  // Keep max 50 items
+  while (feed.children.length > 50) feed.lastChild.remove();
+
+  // Update session card status dot
+  const card = document.getElementById('card-' + data.session_id);
+  if (card) {
+    const dot = card.querySelector('.dot');
+    if (dot) {
+      dot.className = 'dot dot-' + data.status;
+    }
+  }
+
+  // Increment today events counter
+  const todayEl = document.getElementById('stat-today');
+  if (todayEl) todayEl.textContent = parseInt(todayEl.textContent) + 1;
+
+  // Update status counters (refresh via fetch for accuracy)
+  fetch('/api/stats').then(r => r.json()).then(s => {
+    document.getElementById('stat-active').textContent = s.active_sessions;
+    document.getElementById('stat-idle').textContent = s.idle_sessions;
+    document.getElementById('stat-stopped').textContent = s.stopped_sessions;
+  }).catch(() => {});
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+{% endblock %}

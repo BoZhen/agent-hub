@@ -7,6 +7,7 @@ from typing import Any
 import aiosqlite
 
 from agent_hub import db
+from agent_hub.api.ws import broadcaster
 from agent_hub.services import session_manager
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,22 @@ async def process_event(
     # Update session state
     if event_type == "Stop":
         await session_manager.mark_session_idle(conn, session_id)
+        status = "idle"
     else:
         await session_manager.update_session_activity(conn, session_id)
+        status = "active"
+
+    # Broadcast to WebSocket clients
+    await broadcaster.broadcast({
+        "type": "event",
+        "session_id": session_id,
+        "event_type": event_type,
+        "tool_name": tool_name,
+        "summary": summary,
+        "hostname": hostname,
+        "cwd": cwd,
+        "status": status,
+    })
 
 
 # ── Summary generation ────────────────────────────────────────

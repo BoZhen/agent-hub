@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
 
 from agent_hub import db
-from agent_hub.api import events, sessions
+from agent_hub.api import events, sessions, ws
+from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
 from agent_hub.services.session_manager import periodic_sweep
 
@@ -44,11 +44,8 @@ def create_app(config: HubConfig) -> FastAPI:
     app = FastAPI(title="Agent Hub", version="0.1.0", lifespan=lifespan)
     app.include_router(events.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
-
-    @app.get("/")
-    async def root():
-        return RedirectResponse(url="/docs")
-
+    app.include_router(ws.router)
+    app.include_router(web_routes.router)
     return app
 
 

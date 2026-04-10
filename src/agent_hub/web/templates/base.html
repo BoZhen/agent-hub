@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Agent Hub{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#1a1a2e', light: '#222244', lighter: '#2a2a4a' },
+            accent: { DEFAULT: '#7c3aed', light: '#a78bfa' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    .status-active { color: #34d399; }
+    .status-idle { color: #fbbf24; }
+    .status-stopped { color: #6b7280; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+    .dot-active { background: #34d399; box-shadow: 0 0 6px #34d399; }
+    .dot-idle { background: #fbbf24; }
+    .dot-stopped { background: #6b7280; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-surface text-gray-200 min-h-screen">
+  <nav class="border-b border-gray-700/50 px-6 py-3 flex items-center justify-between">
+    <a href="/" class="text-lg font-bold text-accent-light hover:text-white transition">Agent Hub</a>
+    <div class="flex items-center gap-4 text-sm text-gray-400">
+      <span id="ws-status" class="flex items-center gap-1">
+        <span class="dot dot-stopped" id="ws-dot"></span>
+        <span id="ws-label">disconnected</span>
+      </span>
+      <a href="/api/docs" class="hover:text-white transition">API Docs</a>
+    </div>
+  </nav>
+  <main class="max-w-7xl mx-auto px-6 py-6">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // WebSocket connection
+    let ws;
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}/ws`);
+      ws.onopen = () => {
+        document.getElementById('ws-dot').className = 'dot dot-active';
+        document.getElementById('ws-label').textContent = 'live';
+      };
+      ws.onclose = () => {
+        document.getElementById('ws-dot').className = 'dot dot-stopped';
+        document.getElementById('ws-label').textContent = 'disconnected';
+        setTimeout(connectWS, 3000);
+      };
+      ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if (typeof onWsMessage === 'function') onWsMessage(data);
+      };
+    }
+    connectWS();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
