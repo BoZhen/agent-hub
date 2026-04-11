@@ -37,12 +37,26 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 """
 
 
+_MIGRATIONS = [
+    "ALTER TABLE sessions ADD COLUMN transcript_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN input_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN cache_create_tokens INTEGER DEFAULT 0",
+]
+
+
 async def init_db(db_path: str) -> aiosqlite.Connection:
     db = await aiosqlite.connect(db_path)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
     await db.executescript(_SCHEMA)
+    for migration in _MIGRATIONS:
+        try:
+            await db.execute(migration)
+        except Exception:
+            pass  # Column already exists
     await db.commit()
     return db
 
@@ -63,19 +77,51 @@ async def upsert_session(
     cwd: str,
     model: str | None = None,
     status: str = "active",
+    transcript_path: str | None = None,
 ) -> None:
     now = _now()
     await db.execute(
         """
-        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at, transcript_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             status = excluded.status,
             last_seen_at = excluded.last_seen_at,
             model = COALESCE(excluded.model, sessions.model),
-            cwd = excluded.cwd
+            cwd = excluded.cwd,
+            transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)
         """,
-        (session_id, hub_id, hostname, cwd, model, status, now, now),
+        (session_id, hub_id, hostname, cwd, model, status, now, now, transcript_path),
+    )
+    await db.commit()
+
+
+async def update_session_usage(
+    db: aiosqlite.Connection,
+    session_id: str,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_create_tokens: int,
+) -> None:
+    await db.execute(
+        """
+        UPDATE sessions
+        SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_create_tokens = ?
+        WHERE session_id = ?
+        """,
+        (input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, session_id),
+    )
+    await db.commit()
+
+
+async def update_session_model(
+    db: aiosqlite.Connection, session_id: str, model: str
+) -> None:
+    await db.execute(
+        "UPDATE sessions SET model = ? WHERE session_id = ?",
+        (model, session_id),
     )
     await db.commit()
 

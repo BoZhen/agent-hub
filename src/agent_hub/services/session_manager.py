@@ -19,12 +19,12 @@ async def ensure_session(
     hub_id: str,
     hostname: str,
     cwd: str,
+    transcript_path: str | None = None,
     payload: dict[str, Any],
 ) -> None:
     """Create session if not exists, or reactivate on resume."""
     event_type = payload.get("hook_event_name", "")
     model = payload.get("model")  # Accept model from any event type
-    source = payload.get("source", "") if event_type == "SessionStart" else ""
 
     existing = await db.get_session(conn, session_id)
 
@@ -37,6 +37,7 @@ async def ensure_session(
             cwd=cwd,
             model=model,
             status="active",
+            transcript_path=transcript_path,
         )
     elif event_type == "SessionStart":
         await db.upsert_session(
@@ -47,6 +48,7 @@ async def ensure_session(
             cwd=cwd,
             model=model,
             status="active",
+            transcript_path=transcript_path,
         )
     elif existing.get("model") is None and model:
         # Backfill model if we learn it from a later event
@@ -57,6 +59,7 @@ async def ensure_session(
             hostname=hostname,
             cwd=cwd,
             model=model,
+            transcript_path=transcript_path,
         )
 
 

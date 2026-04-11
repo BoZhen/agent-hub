@@ -39,6 +39,12 @@
           <span class="text-xs text-gray-500">{{ s.session_id[:12] }}</span>
         </div>
         <div class="text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+        {% if s.output_tokens %}
+        <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+          <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+          <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+        </div>
+        {% endif %}
         <div class="flex items-center justify-between text-xs text-gray-500">
           <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
           <span>{{ s.last_seen_at[:19] }}</span>

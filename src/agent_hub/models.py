@@ -13,6 +13,10 @@ class SessionResponse(BaseModel):
     started_at: datetime
     last_seen_at: datetime
     stopped_at: datetime | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_create_tokens: int = 0
 
 class EventResponse(BaseModel):
     id: int

@@ -9,6 +9,7 @@ import aiosqlite
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.services import session_manager
+from agent_hub.services.transcript_reader import read_usage
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,15 @@ async def process_event(
         hub_id=hub_id,
         hostname=hostname,
         cwd=cwd,
+        transcript_path=payload.get("transcript_path"),
         payload=payload,
     )
+
+    # Enrich payload with stored model if not present (e.g. SessionStart resume)
+    if not payload.get("model"):
+        session = await db.get_session(conn, session_id)
+        if session and session.get("model"):
+            payload["model"] = session["model"]
 
     summary = generate_summary(payload)
     sanitized = _sanitize_payload(payload)
@@ -55,6 +63,19 @@ async def process_event(
         await session_manager.update_session_activity(conn, session_id)
         status = "active"
 
+    # Update usage and model from transcript (local sessions only)
+    transcript_path = payload.get("transcript_path")
+    usage_info = {}
+    if transcript_path:
+        usage = read_usage(transcript_path)
+        if usage:
+            transcript_model = usage.pop("model", None)
+            await db.update_session_usage(conn, session_id, **usage)
+            usage_info = usage
+            # Update model from transcript if changed
+            if transcript_model:
+                await db.update_session_model(conn, session_id, transcript_model)
+
     # Broadcast to WebSocket clients
     await broadcaster.broadcast({
         "type": "event",
@@ -65,6 +86,7 @@ async def process_event(
         "hostname": hostname,
         "cwd": cwd,
         "status": status,
+        **usage_info,
     })
 
 
@@ -77,11 +99,12 @@ def generate_summary(payload: dict[str, Any]) -> str:
     tool_input = payload.get("tool_input") or {}
 
     if event_type == "SessionStart":
-        model = payload.get("model", "unknown")
+        model = payload.get("model")
         source = payload.get("source", "startup")
+        model_info = f" (model: {model})" if model else ""
         if source == "resume":
-            return f"Session resumed (model: {model})"
-        return f"Session started (model: {model})"
+            return f"Session resumed{model_info}"
+        return f"Session started{model_info}"
 
     if event_type == "PreToolUse":
         return _summarize_tool_use(tool_name, tool_input)
