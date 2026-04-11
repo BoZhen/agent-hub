@@ -12,27 +12,31 @@
 #
 # Session naming: <command>-<basename-of-cwd> (e.g. claude-agent-home)
 #
-# Install: symlink this script for each CLI tool:
-#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/claude
-#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/codex
-#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/crush
+# Install:
+#   1. Move real binary/symlink out of the way:
+#      mv ~/.local/bin/claude ~/.local/bin/claude-real
+#   2. Symlink wrapper in its place:
+#      ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/claude
+#
+# Or use directly: ai-tmux claude-real [args...]
 
 set -e
 
-# Determine which command to run based on how this script was invoked
 SCRIPT_NAME=$(basename "$0")
 
-# Map script name to actual binary
+# Map script name to the real binary path
+# After installation, originals are renamed to <name>-real
 case "$SCRIPT_NAME" in
-  claude)  REAL_CMD=$(which -a claude | grep -v "$HOME/.local/bin/claude" | head -1) ;;
-  codex)   REAL_CMD=$(which -a codex | grep -v "$HOME/.local/bin/codex" | head -1) ;;
-  crush)   REAL_CMD=$(which -a crush | grep -v "$HOME/.local/bin/crush" | head -1) ;;
+  claude)  REAL_CMD="$HOME/.local/bin/claude-real" ;;
+  codex)   REAL_CMD="$HOME/.local/bin/codex-real" ;;
+  crush)   REAL_CMD="$HOME/.local/bin/crush-real" ;;
   ai-tmux) REAL_CMD="$1"; shift ;;
-  *)       REAL_CMD="$SCRIPT_NAME" ;;
+  *)       REAL_CMD="${SCRIPT_NAME}-real" ;;
 esac
 
-if [ -z "$REAL_CMD" ]; then
-  echo "Error: could not find real binary for '$SCRIPT_NAME'" >&2
+if [ ! -x "$REAL_CMD" ]; then
+  echo "Error: real binary not found at '$REAL_CMD'" >&2
+  echo "Did you rename the original? e.g.: mv ~/.local/bin/claude ~/.local/bin/claude-real" >&2
   exit 1
 fi
 
@@ -42,7 +46,7 @@ if [ -n "$TMUX" ]; then
 fi
 
 # Generate tmux session name: <command>-<dirname>
-CMD_BASE=$(basename "$REAL_CMD")
+CMD_BASE="$SCRIPT_NAME"
 DIR_BASE=$(basename "$PWD")
 SESSION_NAME="${CMD_BASE}-${DIR_BASE}"
 
