@@ -575,10 +575,31 @@ uv run agent-hub sync
 - [x] SessionStart command hook — 绕过 Claude Code 对 SessionStart HTTP hook 的限制
 - [x] systemd user service — 开机自启，`systemctl --user restart agent-hub`
 
-**实现过程中发现的约束：**
-- Claude Code HTTP hook 仅允许 loopback (127.0.0.1)，Tailscale 私有 IP 被拒绝
-- SessionStart 不支持 HTTP hook（源码 `hooks.ts:1850-1864`），使用 command hook 替代
-- 5h/weekly 限额信息不在 hook payload 或 transcript 中，无法追踪
+**实现过程中发现的约束和踩坑记录（供 hub-b 部署参考）：**
+
+1. **HTTP hook 仅允许 loopback** — Claude Code 会检查 hook URL 的解析 IP，Tailscale 私有地址 (100.x.x.x) 被拒绝。所有 HTTP hook 必须用 `http://127.0.0.1:7800`。跨机器的 hook 无法使用 HTTP type，只能用 command type + curl。
+
+2. **SessionStart 不支持 HTTP hook** — 源码 `hooks.ts:1850-1864`，headless 模式会死锁。必须使用 command hook：`bash -c 'cat | curl ... -d @-'`。
+
+3. **SessionStart hook 中检测 tmux** — 命令中加 `$(tmux display-message -p "#{session_name}" 2>/dev/null || echo "")` 传给 Hub。不在 tmux 中时返回空字符串，不影响功能。
+
+4. **MCP server 注册** — 必须用 `claude mcp add --transport sse --scope user agent-hub URL`。手动创建 `~/.claude/.mcp.json` 无效！配置写入 `~/.claude.json`。
+
+5. **Terminal URL 不能写死 localhost** — 手机通过 Tailscale 访问时，嵌入页面的 terminal 链接也得是 Tailscale IP。解决：从 HTTP request 的 Host header 动态提取 hostname，只配端口号。
+
+6. **Web Terminal 端口** — 从 7683 改为 7700。Web Terminal 和 Hub 是独立服务，分别用 systemd user service 管理。
+
+7. **tmux session 生命周期** — Hub DB 中存的 `tmux_session` 名可能过期（tmux session 被 kill 但 DB 未清理）。Dashboard 的 attach 链接会失败。Web Terminal 端会返回 4404 错误码。
+
+8. **Waiting 检测** — 依赖读取本地 transcript 文件（每 3s 检查尾部）。远程 session（transcript 不在本机）无法检测 waiting 状态。
+
+9. **Model 检测** — SessionStart resume payload 不含 model 字段。解决：从 transcript 的最后一条 assistant message 的 `message.model` 字段读取。
+
+10. **approve API** — Hub 内部通过 `http://127.0.0.1:{terminal_port}/api/terminals/{name}/send` 调用 Web Terminal。Web Terminal 如果配了 auth，Hub 也需要传 auth header（当前未实现，假设 loopback 免 auth）。
+
+11. **5h/weekly 限额** — 不在 hook payload 或 transcript 中，无法追踪。
+
+12. **前端 JS event 作用域** — `onclick="fn()"` 中的 `event` 对象在 async callback（fetch .then）中不可用。按钮操作需要直接传 DOM 元素：`onclick="fn(id, this)"`。
 
 ### Phase 3: MCP Server + 服务协同
 
