@@ -335,94 +335,52 @@ sync_status:
 
 ### 7.1 全局配置
 
-在每台设备的 `~/.claude/settings.json` 中添加：
+在每台设备的 `~/.claude/settings.json` 中添加。
 
-```json
+**重要约束：**
+- Claude Code HTTP hook 仅允许 loopback (`127.0.0.1`)，Tailscale 私有 IP 会被拒绝
+- SessionStart 不支持 HTTP hook（会导致 headless 模式死锁），必须使用 command hook
+- 本机部署时所有 hook 统一使用 `http://127.0.0.1:7800`
+
+```jsonc
 {
   "hooks": {
+    // SessionStart 必须用 command hook — HTTP hook 被 Claude Code 阻止
     "SessionStart": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
+        "type": "command",
+        "command": "bash -c 'cat | curl -s -X POST \"http://127.0.0.1:7800/api/events?host=$(hostname)\" -H \"Content-Type: application/json\" -d @-'"
       }
     ],
+    // 其余事件类型使用 HTTP hook
     "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
-      }
+      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
     ],
     "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
-      }
+      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
     ],
     "PostToolUseFailure": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
-      }
+      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
     ],
     "UserPromptSubmit": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
-      }
+      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
     ],
     "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://<hub-tailscale-ip>:7800/api/events",
-            "timeout": 5
-          }
-        ]
-      }
+      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
     ]
   }
 }
 ```
 
+替换 `HOSTNAME` 为机器名。SessionStart 的 command hook 会自动获取 hostname。
+
 ### 7.2 设计要点
 
 - **统一 endpoint** — 所有事件发送到同一个 `/api/events`，由 Hub 根据 `hook_event_name` 分发处理
-- **timeout: 5** — 设为 5 秒，避免 Hub 不可达时阻塞 Claude Code
-- **无需 auth** — Tailscale 内网本身提供了网络级鉴权（只有你的设备能访问）
-- **无需 allowedEnvVars** — 不传递敏感环境变量
-- **matcher: `*`** — 捕获所有工具事件；如果事件量过大，可后续按需过滤
+- **loopback only** — HTTP hook 必须使用 `127.0.0.1`，Claude Code 阻止私有/非 loopback 地址
+- **SessionStart command hook** — 通过 `cat | curl` 管道将 stdin payload 转发到 Hub API
+- **无需 auth** — 本机 loopback 无需鉴权；跨机器访问通过 Tailscale 内网保护
+- **hostname via query param** — `?host=HOSTNAME` 传递机器名，因为 hook payload 不含 hostname
 
 ### 7.3 hostname 识别
 
@@ -596,26 +554,56 @@ uv run agent-hub sync
 
 ## 13. 实施计划
 
-### Phase 1: 核心骨架
+### Phase 1: 核心骨架 ✅
 
-- [ ] 项目初始化（pyproject.toml, 目录结构）
-- [ ] SQLite 数据库初始化
-- [ ] `POST /api/events` 端点 — 接收并存储 hook 事件
-- [ ] 事件处理器 — payload 解析 + 摘要生成
-- [ ] 会话状态管理 — 自动状态流转
-- [ ] 基本查询 API（sessions, events）
+- [x] 项目初始化（pyproject.toml, 目录结构）
+- [x] SQLite 数据库初始化（WAL 模式 + 自动迁移）
+- [x] `POST /api/events` 端点 — 接收并存储 hook 事件
+- [x] 事件处理器 — payload 解析 + 摘要生成 + 脱敏存储
+- [x] 会话状态管理 — active → idle (Stop) → stopped (30min sweep)
+- [x] 基本查询 API（sessions, events, stats）
 
-### Phase 2: 实时 + 可视化
+### Phase 2: 实时 + 可视化 ✅
 
-- [ ] WebSocket 实时事件推送
-- [ ] Web Dashboard — 会话卡片 + 事件流
-- [ ] 会话详情页 — 时间线视图
+- [x] WebSocket 实时事件推送（broadcaster 模式）
+- [x] Web Dashboard — 会话卡片 + 实时事件流
+- [x] 会话详情页 — 事件时间线 + 分页加载
+- [x] Token usage tracking — 解析 transcript .jsonl 聚合 input/output/cache 用量
+- [x] Model auto-detection — 从 transcript 读取最新模型，支持 mid-session 切换
+- [x] Waiting-for-authorization 检测 — 后台每 3s 检查 transcript 末尾的 pending tool_use
+- [x] Mobile-friendly 响应式布局 — 两行事件卡片、紧凑 header、粉蓝/黄色状态方案
+- [x] SessionStart command hook — 绕过 Claude Code 对 SessionStart HTTP hook 的限制
+- [x] systemd user service — 开机自启，`systemctl --user restart agent-hub`
 
-### Phase 3: MCP Server
+**实现过程中发现的约束：**
+- Claude Code HTTP hook 仅允许 loopback (127.0.0.1)，Tailscale 私有 IP 被拒绝
+- SessionStart 不支持 HTTP hook（源码 `hooks.ts:1850-1864`），使用 command hook 替代
+- 5h/weekly 限额信息不在 hook payload 或 transcript 中，无法追踪
 
-- [ ] MCP Server 集成（SSE transport）
-- [ ] 实现 list_sessions / get_session / search_events / get_dashboard tools
-- [ ] 编写 install 命令 — 自动配置 Claude Code hooks + MCP
+### Phase 3: MCP Server + 服务协同
+
+**MCP Server — 让任意 Claude Code 会话查询和管理其他会话**
+
+- [ ] MCP Server 集成（FastMCP, SSE transport, 端口 7801）
+- [ ] `list_sessions` tool — 列出会话，支持 status 过滤
+- [ ] `get_session` tool — 会话详情 + 最近 N 条事件
+- [ ] `search_events` tool — 按工具名、关键词、session_id 搜索
+- [ ] `get_dashboard` tool — 全局概览（各状态数量、最近事件、按机器分组）
+- [ ] Claude Code MCP 配置 — `~/.claude/settings.json` 中注册 agent-hub MCP server
+
+**Web Terminal 集成 — 从 Dashboard 一键跳转终端操作**
+
+现有 Web Terminal (Tornado + xterm.js) 运行在 `localhost:7683`，支持手机虚拟键盘。
+
+- [ ] Dashboard session card 添加 "Terminal" 快捷按钮
+- [ ] 跳转 URL 携带 `cd <session_cwd>` 参数，Web Terminal 自动切到会话目录
+- [ ] Session 详情页 waiting 状态显示 "Open Terminal" 按钮，方便手机审批
+- [ ] 考虑 Web Terminal 支持 URL 参数预填命令（需扩展 Web Terminal 端）
+
+**统一服务门户**
+
+- [ ] Dashboard 顶部导航添加服务快捷链接（Terminal、OpenClaw 等）
+- [ ] 手机只需收藏 Hub Dashboard 一个 URL 即可访问所有服务
 
 ### Phase 4: 双 Hub 同步
 
@@ -626,12 +614,42 @@ uv run agent-hub sync
 
 ### Phase 5: 增强
 
-- [ ] 过期数据自动清理
+- [ ] 过期数据自动清理（events 90 天，payload 30 天后仅保留摘要）
 - [ ] 按项目/机器/工具维度的统计分析
 - [ ] 告警机制（会话长时间无响应等）
 - [ ] 支持标注/备注会话（手动添加任务描述）
+- [ ] Session 详情页内嵌 Terminal iframe — 同一页面查看事件 + 操作终端
+- [ ] Waiting 状态一键审批 — 通过 Web Terminal 向特定会话发送审批命令
 
-## 14. 未来扩展
+## 14. 服务拓扑
+
+当前单机部署的服务全景：
+
+```
+┌─── AMD-7975WX (Tailscale) ──────────────────────────────────┐
+│                                                              │
+│  Agent Hub (:7800)          Web Terminal (:7683)             │
+│  ┌──────────────────┐       ┌──────────────────┐            │
+│  │ Dashboard        │──────▶│ xterm.js + PTY   │            │
+│  │ REST API         │       │ 虚拟键盘 (mobile) │            │
+│  │ WebSocket        │       └──────────────────┘            │
+│  │ MCP Server (:7801)│                                      │
+│  └──────┬───────────┘                                       │
+│         │ HTTP hooks                                        │
+│  ┌──────┴───────────────────────────────────────┐           │
+│  │ Claude Code sessions (#1, #2, #3, ...)       │           │
+│  │ ← MCP client (query other sessions)          │           │
+│  └──────────────────────────────────────────────┘           │
+│                                                              │
+│  OpenClaw (:443 via Tailscale serve)                        │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+         │
+    手机 (Tailscale)
+    └── 浏览器 → Hub Dashboard → Terminal → 审批/操作
+```
+
+## 15. 未来扩展
 
 暂不实现，但架构上预留扩展空间：
 
@@ -639,3 +657,4 @@ uv run agent-hub sync
 - **远程指令** — 通过 Hub 向指定会话发送消息（需要 Claude Code 支持双向通信）
 - **任务分配** — 在 Hub 上创建任务，指定某个会话执行
 - **多用户** — 加入认证，支持团队使用
+- **Cost tracking** — 基于 token 用量计算 API 费用估算
