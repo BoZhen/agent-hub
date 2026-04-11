@@ -45,23 +45,17 @@ if [ -n "$TMUX" ]; then
   exec "$REAL_CMD" "$@"
 fi
 
-# Generate tmux session name: <command>-<dirname>
+# Generate tmux session name: <command>-<dirname>-<N>
 CMD_BASE="$SCRIPT_NAME"
 DIR_BASE=$(basename "$PWD")
-BASE_NAME="${CMD_BASE}-${DIR_BASE}"
+BASE_NAME=$(printf '%s-%s' "$CMD_BASE" "$DIR_BASE" | tr -c 'a-zA-Z0-9_-' '-' | head -c 60)
 
-# Sanitize: only allow [a-zA-Z0-9_-]
-BASE_NAME=$(echo "$BASE_NAME" | tr -c 'a-zA-Z0-9_-' '-' | head -c 60)
-
-# If session already exists, append counter
-SESSION_NAME="$BASE_NAME"
-if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-  i=2
-  while tmux has-session -t "${BASE_NAME}-${i}" 2>/dev/null; do
-    i=$((i + 1))
-  done
-  SESSION_NAME="${BASE_NAME}-${i}"
-fi
+# Find next available number (always numbered: -1, -2, -3, ...)
+i=1
+while tmux has-session -t "${BASE_NAME}-${i}" 2>/dev/null; do
+  i=$((i + 1))
+done
+SESSION_NAME="${BASE_NAME}-${i}"
 
 # Create tmux session and run the command
 exec tmux new-session -s "$SESSION_NAME" -c "$PWD" "$REAL_CMD" "$@"
