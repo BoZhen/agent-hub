@@ -78,11 +78,18 @@
       Terminal
     </a>
     {% if session.pending_tool %}
+      {% if session.tmux_session %}
+    <button onclick="approveSession('{{ session.session_id }}')"
+       class="text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+      Approve
+    </button>
+      {% else %}
     <a href="{{ terminal_url }}/?name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}"
        target="_blank"
        class="text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
       Approve &rarr;
     </a>
+      {% endif %}
     {% endif %}
   </div>
 </div>
@@ -172,6 +179,21 @@ function onWsMessage(data) {
     <span class="text-gray-400 sm:text-gray-300 text-xs sm:text-sm break-words sm:truncate sm:order-3">${escapeHtml(data.summary || '—')}</span>
   `;
   timeline.prepend(el);
+}
+
+function approveSession(sessionId) {
+  fetch(`/api/sessions/${sessionId}/approve`, {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        const btn = event.target;
+        btn.textContent = 'Sent!';
+        btn.classList.remove('animate-pulse');
+      } else {
+        alert(data.detail || 'Approve failed');
+      }
+    })
+    .catch(e => alert('Error: ' + e.message));
 }
 
 function escapeHtml(s) {

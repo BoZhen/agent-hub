@@ -1,0 +1,53 @@
+#!/bin/bash
+# ai-tmux — Auto-wrap AI CLI tools in tmux sessions
+#
+# Usage: ai-tmux <command> [args...]
+#   e.g.: ai-tmux claude
+#         ai-tmux claude --resume session-id
+#         ai-tmux codex
+#
+# Behavior:
+#   - If already inside tmux → run command directly (session name auto-detected by hook)
+#   - If NOT in tmux → create a named tmux session and run command inside it
+#
+# Session naming: <command>-<basename-of-cwd> (e.g. claude-agent-home)
+#
+# Install: symlink this script for each CLI tool:
+#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/claude
+#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/codex
+#   ln -sf ~/Git/agent-home/scripts/ai-tmux ~/.local/bin/crush
+
+set -e
+
+# Determine which command to run based on how this script was invoked
+SCRIPT_NAME=$(basename "$0")
+
+# Map script name to actual binary
+case "$SCRIPT_NAME" in
+  claude)  REAL_CMD=$(which -a claude | grep -v "$HOME/.local/bin/claude" | head -1) ;;
+  codex)   REAL_CMD=$(which -a codex | grep -v "$HOME/.local/bin/codex" | head -1) ;;
+  crush)   REAL_CMD=$(which -a crush | grep -v "$HOME/.local/bin/crush" | head -1) ;;
+  ai-tmux) REAL_CMD="$1"; shift ;;
+  *)       REAL_CMD="$SCRIPT_NAME" ;;
+esac
+
+if [ -z "$REAL_CMD" ]; then
+  echo "Error: could not find real binary for '$SCRIPT_NAME'" >&2
+  exit 1
+fi
+
+# If already inside tmux, just run directly
+if [ -n "$TMUX" ]; then
+  exec "$REAL_CMD" "$@"
+fi
+
+# Generate tmux session name: <command>-<dirname>
+CMD_BASE=$(basename "$REAL_CMD")
+DIR_BASE=$(basename "$PWD")
+SESSION_NAME="${CMD_BASE}-${DIR_BASE}"
+
+# Sanitize: only allow [a-zA-Z0-9_-]
+SESSION_NAME=$(echo "$SESSION_NAME" | tr -c 'a-zA-Z0-9_-' '-' | head -c 64)
+
+# Create tmux session and run the command
+exec tmux new-session -s "$SESSION_NAME" -c "$PWD" "$REAL_CMD" "$@"

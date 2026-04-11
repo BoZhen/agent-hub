@@ -15,6 +15,7 @@ router = APIRouter()
 async def receive_event(
     request: Request,
     host: str = Query(default="unknown"),
+    tmux_session: str = Query(default=""),
 ):
     payload = await request.json()
 
@@ -22,6 +23,10 @@ async def receive_event(
     hook_event_name = payload.get("hook_event_name")
     if not session_id or not hook_event_name:
         return {"ok": False, "error": "missing session_id or hook_event_name"}
+
+    # Inject tmux_session from query param into payload for processing
+    if tmux_session:
+        payload["_tmux_session"] = tmux_session
 
     db = request.app.state.db
     hub_id = request.app.state.config.hub_id

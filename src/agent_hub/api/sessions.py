@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from agent_hub import db
@@ -73,3 +74,38 @@ async def delete_session(request: Request, session_id: str):
             detail="Session not found or not in stopped status",
         )
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/approve")
+async def approve_session(request: Request, session_id: str):
+    """Send 'y' + Enter to the tmux session where this Claude Code is running."""
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    tmux_name = session.get("tmux_session")
+    if not tmux_name:
+        raise HTTPException(
+            status_code=400,
+            detail="No tmux session associated with this session. Claude Code must be running inside tmux.",
+        )
+
+    terminal_url = request.app.state.config.terminal_url
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{terminal_url}/api/terminals/{tmux_name}/send",
+                json={"keys": "y\n"},
+                timeout=5.0,
+            )
+            if resp.status_code == 404:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"tmux session '{tmux_name}' not found on terminal server",
+                )
+            resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Terminal server error: {e}")
+
+    return {"ok": True, "tmux_session": tmux_name}

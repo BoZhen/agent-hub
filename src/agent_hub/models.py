@@ -18,6 +18,7 @@ class SessionResponse(BaseModel):
     cache_read_tokens: int = 0
     cache_create_tokens: int = 0
     pending_tool: str | None = None
+    tmux_session: str | None = None
 
 class EventResponse(BaseModel):
     id: int

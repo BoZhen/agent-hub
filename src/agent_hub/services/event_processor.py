@@ -55,6 +55,11 @@ async def process_event(
         payload=json.dumps(sanitized, ensure_ascii=False),
     )
 
+    # Store tmux session name if provided (from SessionStart hook)
+    tmux_session = payload.get("_tmux_session")
+    if tmux_session:
+        await db.update_session_tmux(conn, session_id, tmux_session)
+
     # Update session state — clear pending_tool on any event
     await db.update_session_pending_tool(conn, session_id, None)
     if event_type == "Stop":
