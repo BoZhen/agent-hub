@@ -79,7 +79,7 @@
     </a>
     {% if session.pending_tool %}
       {% if session.tmux_session %}
-    <button onclick="approveSession('{{ session.session_id }}')"
+    <button onclick="approveSession('{{ session.session_id }}', this)"
        class="text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
       Approve
     </button>
@@ -181,12 +181,11 @@ function onWsMessage(data) {
   timeline.prepend(el);
 }
 
-function approveSession(sessionId) {
+function approveSession(sessionId, btn) {
   fetch(`/api/sessions/${sessionId}/approve`, {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
-        const btn = event.target;
         btn.textContent = 'Sent!';
         btn.classList.remove('animate-pulse');
       } else {
