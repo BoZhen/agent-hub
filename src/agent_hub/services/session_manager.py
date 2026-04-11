@@ -10,6 +10,7 @@ import aiosqlite
 
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
+from agent_hub.services import event_processor
 from agent_hub.services.telegram_bot import notify_pending as tg_notify_pending
 from agent_hub.services.transcript_reader import read_pending_tool
 
@@ -77,6 +78,7 @@ async def mark_session_idle(
     conn: aiosqlite.Connection, session_id: str
 ) -> None:
     await db.update_session_status(conn, session_id, "idle")
+    await db.update_session_pending_tool(conn, session_id, None, None)
 
 
 async def sweep_stale_sessions(
@@ -86,6 +88,7 @@ async def sweep_stale_sessions(
     stale = await db.get_stale_sessions(conn, cutoff)
     for session in stale:
         await db.update_session_status(conn, session["session_id"], "stopped")
+        await db.update_session_pending_tool(conn, session["session_id"], None, None)
     if stale:
         logger.info("Swept %d stale sessions to stopped", len(stale))
     return len(stale)
@@ -126,7 +129,7 @@ async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
     """
     # Candidates: session_id -> (tool, detail, first_seen_monotonic)
     candidates: dict[str, tuple[str, str | None, float]] = {}
-    CONFIRM_SECS = 5.0
+    CONFIRM_SECS = 6.0
 
     while True:
         try:
@@ -162,26 +165,40 @@ async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
                         })
                     continue
 
-                transcript_path = session.get("transcript_path")
-                if not transcript_path:
-                    continue
-
-                result = read_pending_tool(transcript_path)
-                pending_tool = result.name if result else None
-                pending_detail = result.detail if result else None
                 db_tool = session.get("pending_tool")
 
-                if pending_tool:
-                    prev = candidates.get(sid)
-                    if prev is None or prev[0] != pending_tool or prev[1] != pending_detail:
-                        # New candidate — start confirmation timer
-                        candidates[sid] = (pending_tool, pending_detail, now)
-                        continue
-                    # Same candidate — check if confirmed
-                    if now - prev[2] < CONFIRM_SECS:
-                        continue  # not confirmed yet
+                # Source 1: event-driven candidates from PreToolUse hook
+                evt_candidate = event_processor._pending_candidates.get(sid)
 
-                    # Confirmed pending — broadcast if DB state differs
+                # Source 2: transcript-based detection
+                transcript_path = session.get("transcript_path")
+                result = read_pending_tool(transcript_path) if transcript_path else None
+                tx_tool = result.name if result else None
+                tx_detail = result.detail if result else None
+
+                # Merge: prefer event candidate (covers MCP/Bash that
+                # don't write to transcript), fall back to transcript
+                pending_tool = None
+                pending_detail = None
+                first_seen = now
+                if evt_candidate:
+                    pending_tool, pending_detail = evt_candidate[0], evt_candidate[1]
+                    first_seen = evt_candidate[2]
+                elif tx_tool:
+                    pending_tool, pending_detail = tx_tool, tx_detail
+                    prev = candidates.get(sid)
+                    if prev and prev[0] == tx_tool and prev[1] == tx_detail:
+                        first_seen = prev[2]
+                    else:
+                        candidates[sid] = (tx_tool, tx_detail, now)
+                        continue  # new transcript candidate, wait for confirmation
+
+                if pending_tool:
+                    # Check confirmation delay
+                    if now - first_seen < CONFIRM_SECS:
+                        continue
+
+                    # Confirmed — update DB and broadcast if changed
                     if pending_tool != db_tool or pending_detail != session.get("pending_detail"):
                         await db.update_session_pending_tool(
                             conn, sid, pending_tool, pending_detail,
@@ -199,20 +216,7 @@ async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
                             sid, result, session,
                         )
                 else:
-                    # No longer pending — clear candidate and DB
                     candidates.pop(sid, None)
-                    if db_tool is not None:
-                        await db.update_session_pending_tool(conn, sid, None, None)
-                        stats = await db.get_stats(conn)
-                        await broadcaster.broadcast({
-                            "type": "pending",
-                            "session_id": sid,
-                            "pending_tool": None,
-                            "pending_detail": None,
-                            "tmux_session": session.get("tmux_session"),
-                            "waiting_count": stats["waiting_sessions"],
-                        })
-                        await tg_notify_pending(sid, None, session)
 
             # Clean up candidates for sessions no longer active
             for sid in list(candidates):

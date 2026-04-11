@@ -6,12 +6,18 @@ from typing import Any
 
 import aiosqlite
 
+from time import monotonic as _monotonic
+
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.services import session_manager
 from agent_hub.services.transcript_reader import read_usage
 
 logger = logging.getLogger(__name__)
+
+# PreToolUse candidates: session_id -> (tool_name, detail, monotonic_time)
+# Promoted to DB pending by periodic_pending_check after confirmation delay.
+_pending_candidates: dict[str, tuple[str, str, float]] = {}
 
 
 async def process_event(
@@ -60,8 +66,29 @@ async def process_event(
     if tmux_session:
         await db.update_session_tmux(conn, session_id, tmux_session)
 
-    # Update session state — clear pending_tool on any event
-    await db.update_session_pending_tool(conn, session_id, None)
+    # Pending state management:
+    # - PreToolUse: record as candidate (not in DB yet — may be auto-approved)
+    # - PostToolUse/Failure: clear pending from DB and clear candidate
+    # The periodic_pending_check promotes candidates to DB after 5s confirmation.
+    if event_type == "PreToolUse" and tool_name:
+        tool_input = payload.get("tool_input") or {}
+        detail = _extract_pending_detail(tool_name, tool_input)
+        _pending_candidates[session_id] = (tool_name, detail, _monotonic())
+    elif event_type in ("PostToolUse", "PostToolUseFailure"):
+        _pending_candidates.pop(session_id, None)
+        if (await db.get_session(conn, session_id) or {}).get("pending_tool"):
+            await db.update_session_pending_tool(conn, session_id, None, None)
+            stats = await db.get_stats(conn)
+            session_data = await db.get_session(conn, session_id)
+            await broadcaster.broadcast({
+                "type": "pending",
+                "session_id": session_id,
+                "pending_tool": None,
+                "pending_detail": None,
+                "tmux_session": session_data.get("tmux_session") if session_data else None,
+                "waiting_count": stats["waiting_sessions"],
+            })
+
     if event_type == "Stop":
         await session_manager.mark_session_idle(conn, session_id)
         status = "idle"
@@ -190,6 +217,23 @@ def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── Helpers ───────────────────────────────────────────────────
+
+
+def _extract_pending_detail(tool_name: str, tool_input: Any) -> str:
+    """Extract a human-readable detail for the pending tool."""
+    if tool_name == "Bash":
+        return _truncate(_extract_bash_command(tool_input), 150)
+    if tool_name in ("Read", "Write", "Edit"):
+        return _extract_file_path(tool_input)
+    if tool_name in ("Grep", "Glob"):
+        return _safe_get(tool_input, "pattern", "")
+    if tool_name == "Agent":
+        return _truncate(_safe_get(tool_input, "description", ""), 100)
+    if tool_name == "WebSearch":
+        return _truncate(_safe_get(tool_input, "query", ""), 100)
+    if tool_name == "WebFetch":
+        return _truncate(_safe_get(tool_input, "url", ""), 100)
+    return ""
 
 
 def _extract_bash_command(tool_input: Any) -> str:

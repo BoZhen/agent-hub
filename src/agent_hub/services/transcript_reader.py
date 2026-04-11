@@ -93,8 +93,9 @@ def read_pending_tool(transcript_path: str) -> PendingTool | None:
     try:
         size = path.stat().st_size
         with open(path, "rb") as f:
-            # Read last 16KB — enough for several messages
-            f.seek(max(0, size - 16384))
+            # Read last 256KB — needs to be large enough to span past
+            # attachment entries (embedded PDF pages can be very large).
+            f.seek(max(0, size - 262144))
             pos = f.tell()
             data = f.read().decode("utf-8", errors="replace")
 
@@ -107,8 +108,43 @@ def read_pending_tool(transcript_path: str) -> PendingTool | None:
         if not lines:
             return None
 
-        last = json.loads(lines[-1])
-        if last.get("type") != "assistant":
+        # Collect tool_use IDs that have been resolved (have a tool_result).
+        resolved_ids: set[str] = set()
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("type") != "user":
+                continue
+            msg = entry.get("message", {})
+            blocks = msg.get("content", []) if isinstance(msg, dict) else []
+            if not isinstance(blocks, list):
+                continue
+            for b in blocks:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id", "")
+                    if tid:
+                        resolved_ids.add(tid)
+
+        # Scan backwards for the last assistant message with an unresolved tool_use.
+        last = None
+        for candidate_line in reversed(lines):
+            try:
+                candidate = json.loads(candidate_line)
+            except json.JSONDecodeError:
+                continue
+            if candidate.get("type") != "assistant":
+                continue
+            content = candidate.get("message", {}).get("content", [])
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    if b.get("id", "") not in resolved_ids:
+                        last = candidate
+                        break
+            if last is not None:
+                break
+        if last is None:
             return None
 
         content = last.get("message", {}).get("content", [])

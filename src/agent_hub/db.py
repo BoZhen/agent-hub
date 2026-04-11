@@ -282,6 +282,16 @@ async def get_session_events_latest(
     return await get_session_events(db, session_id, limit=n)
 
 
+async def get_last_event(db: aiosqlite.Connection, session_id: str) -> dict | None:
+    cursor = await db.execute(
+        "SELECT id, event_uid, session_id, event_type, tool_name, summary, created_at "
+        "FROM events WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+        (session_id,),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
 async def search_events(
     db: aiosqlite.Connection,
     *,
