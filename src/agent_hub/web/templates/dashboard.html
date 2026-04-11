@@ -55,7 +55,7 @@
           </div>
         </a>
         <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20">
-          <a href="{{ terminal_url }}/?name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}"
+          <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
              target="_blank"
              class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
             Terminal
@@ -67,7 +67,7 @@
             Approve
           </button>
             {% else %}
-          <a href="{{ terminal_url }}/?name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}"
+          <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
              target="_blank"
              class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
             Approve &rarr;
