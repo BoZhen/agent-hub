@@ -28,32 +28,47 @@
     <h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Sessions</h2>
     <div id="sessions-list" class="space-y-2 sm:space-y-3">
       {% for s in sessions %}
-      <a href="/sessions/{{ s.session_id }}"
-         class="block bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition"
-         id="card-{{ s.session_id }}">
-        <div class="flex items-center justify-between mb-1.5 sm:mb-2">
-          <div class="flex items-center gap-2">
-            <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
-            <span class="font-semibold text-white text-sm sm:text-base">{{ s.hostname }}</span>
-            {% if s.pending_tool %}
-            <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
-                  id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
-            {% endif %}
+      <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition"
+           id="card-{{ s.session_id }}">
+        <a href="/sessions/{{ s.session_id }}" class="block">
+          <div class="flex items-center justify-between mb-1.5 sm:mb-2">
+            <div class="flex items-center gap-2">
+              <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
+              <span class="font-semibold text-white text-sm sm:text-base">{{ s.hostname }}</span>
+              {% if s.pending_tool %}
+              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
+                    id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
+              {% endif %}
+            </div>
+            <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
           </div>
-          <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+          {% if s.output_tokens %}
+          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+          </div>
+          {% endif %}
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+            <span>{{ s.last_seen_at[11:19] }}</span>
+          </div>
+        </a>
+        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20">
+          <a href="{{ terminal_url }}/?name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}"
+             target="_blank" onclick="event.stopPropagation()"
+             class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
+            Terminal
+          </a>
+          {% if s.pending_tool %}
+          <a href="{{ terminal_url }}/?name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}"
+             target="_blank" onclick="event.stopPropagation()"
+             class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+            Approve &rarr;
+          </a>
+          {% endif %}
         </div>
-        <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-        {% if s.output_tokens %}
-        <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-          <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-          <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-        </div>
-        {% endif %}
-        <div class="flex items-center justify-between text-xs text-gray-500">
-          <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
-          <span>{{ s.last_seen_at[11:19] }}</span>
-        </div>
-      </a>
+      </div>
       {% endfor %}
       {% if not sessions %}
       <div class="text-gray-500 text-sm py-8 text-center">No sessions yet. Start a Claude Code session with hooks configured.</div>

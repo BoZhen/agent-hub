@@ -38,6 +38,7 @@ async def dashboard(request: Request):
     rows = await cursor.fetchall()
     recent_events = [dict(r) for r in rows]
 
+    terminal_url = request.app.state.config.terminal_url
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -45,6 +46,7 @@ async def dashboard(request: Request):
             "sessions": sessions,
             "stats": stats,
             "recent_events": recent_events,
+            "terminal_url": terminal_url,
         },
     )
 
@@ -63,6 +65,7 @@ async def session_detail(
 
     events = await db.get_session_events(conn, session_id, limit=limit, offset=offset)
 
+    terminal_url = request.app.state.config.terminal_url
     return templates.TemplateResponse(
         request=request,
         name="session.html",
@@ -71,5 +74,6 @@ async def session_detail(
             "events": events,
             "limit": limit,
             "offset": offset,
+            "terminal_url": terminal_url,
         },
     )

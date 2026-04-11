@@ -37,12 +37,13 @@
 <body class="bg-surface text-gray-200 min-h-screen">
   <nav class="border-b border-gray-700/50 px-3 sm:px-6 py-3 flex items-center justify-between">
     <a href="/" class="text-lg font-bold text-accent-light hover:text-white transition">Agent Hub</a>
-    <div class="flex items-center gap-4 text-sm text-gray-400">
+    <div class="flex items-center gap-3 sm:gap-4 text-sm text-gray-400">
       <span id="ws-status" class="flex items-center gap-1">
         <span class="dot dot-stopped" id="ws-dot"></span>
-        <span id="ws-label">disconnected</span>
+        <span id="ws-label" class="hidden sm:inline">disconnected</span>
       </span>
-      <a href="/api/docs" class="hover:text-white transition">API Docs</a>
+      <a href="http://localhost:7700/" target="_blank" class="hover:text-white transition">Terminal</a>
+      <a href="/api/docs" class="hidden sm:inline hover:text-white transition">API</a>
     </div>
   </nav>
   <main class="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
