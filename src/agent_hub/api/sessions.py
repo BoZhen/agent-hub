@@ -5,6 +5,8 @@ import asyncio
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from pydantic import BaseModel
+
 from agent_hub import db
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
 
@@ -136,3 +138,28 @@ async def approve_session(
             raise HTTPException(status_code=502, detail=f"Terminal server error: {e}")
 
     return {"ok": True, "tmux_session": tmux_name, "always": always}
+
+
+class NotifyRequest(BaseModel):
+    message: str
+
+
+@router.post("/notify")
+async def send_notification(request: Request, body: NotifyRequest):
+    """Send a message to the configured Telegram chat."""
+    from agent_hub.services.telegram_bot import _bot_instance
+
+    if not _bot_instance or not _bot_instance.chat_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram bot not configured or no chat_id",
+        )
+    try:
+        await _bot_instance.app.bot.send_message(
+            chat_id=_bot_instance.chat_id,
+            text=body.message,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Telegram send failed: {e}")
+    return {"ok": True}
