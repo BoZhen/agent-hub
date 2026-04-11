@@ -12,7 +12,7 @@ from agent_hub import db
 from agent_hub.api import events, sessions, ws
 from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
-from agent_hub.services.session_manager import periodic_sweep
+from agent_hub.services.session_manager import periodic_sweep, periodic_pending_check
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,12 +30,18 @@ def create_app(config: HubConfig) -> FastAPI:
         app.state.db = conn
         app.state.config = config
         sweep_task = asyncio.create_task(periodic_sweep(conn, config.idle_timeout_minutes))
+        pending_task = asyncio.create_task(periodic_pending_check(conn))
         logger.info("Database initialized: %s", config.db_path)
         yield
         # Shutdown
         sweep_task.cancel()
+        pending_task.cancel()
         try:
             await sweep_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await pending_task
         except asyncio.CancelledError:
             pass
         await conn.close()

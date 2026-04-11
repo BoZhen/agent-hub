@@ -8,6 +8,8 @@ from typing import Any
 import aiosqlite
 
 from agent_hub import db
+from agent_hub.api.ws import broadcaster
+from agent_hub.services.transcript_reader import read_pending_tool
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +101,32 @@ async def periodic_sweep(
             break
         except Exception:
             logger.exception("Error in session sweep")
+
+
+async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
+    """Background task: check active sessions for pending tool authorization every 3s."""
+    while True:
+        try:
+            await asyncio.sleep(3)
+            sessions = await db.get_sessions(conn, status="active")
+            for session in sessions:
+                transcript_path = session.get("transcript_path")
+                if not transcript_path:
+                    continue
+                pending = read_pending_tool(transcript_path)
+                if pending != session.get("pending_tool"):
+                    await db.update_session_pending_tool(
+                        conn, session["session_id"], pending
+                    )
+                    # Count total waiting for stats
+                    stats = await db.get_stats(conn)
+                    await broadcaster.broadcast({
+                        "type": "pending",
+                        "session_id": session["session_id"],
+                        "pending_tool": pending,
+                        "waiting_count": stats["waiting_sessions"],
+                    })
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Error checking pending tools")

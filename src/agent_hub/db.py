@@ -43,6 +43,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN output_tokens INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN cache_create_tokens INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN pending_tool TEXT",
 ]
 
 
@@ -122,6 +123,16 @@ async def update_session_model(
     await db.execute(
         "UPDATE sessions SET model = ? WHERE session_id = ?",
         (model, session_id),
+    )
+    await db.commit()
+
+
+async def update_session_pending_tool(
+    db: aiosqlite.Connection, session_id: str, pending_tool: str | None
+) -> None:
+    await db.execute(
+        "UPDATE sessions SET pending_tool = ? WHERE session_id = ?",
+        (pending_tool, session_id),
     )
     await db.commit()
 
@@ -268,15 +279,14 @@ async def get_stats(db: aiosqlite.Connection) -> dict:
         row = await cursor.fetchone()
         result[f"{status}_sessions"] = row[0]
 
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM sessions WHERE pending_tool IS NOT NULL AND status = 'active'"
+    )
+    row = await cursor.fetchone()
+    result["waiting_sessions"] = row[0]
+
     cursor = await db.execute("SELECT COUNT(*) FROM events")
     row = await cursor.fetchone()
     result["total_events"] = row[0]
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    cursor = await db.execute(
-        "SELECT COUNT(*) FROM events WHERE created_at >= ?", (today,)
-    )
-    row = await cursor.fetchone()
-    result["today_events"] = row[0]
 
     return result

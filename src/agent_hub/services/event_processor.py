@@ -55,7 +55,8 @@ async def process_event(
         payload=json.dumps(sanitized, ensure_ascii=False),
     )
 
-    # Update session state
+    # Update session state — clear pending_tool on any event
+    await db.update_session_pending_tool(conn, session_id, None)
     if event_type == "Stop":
         await session_manager.mark_session_idle(conn, session_id)
         status = "idle"

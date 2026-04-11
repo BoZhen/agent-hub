@@ -17,6 +17,7 @@ class SessionResponse(BaseModel):
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_create_tokens: int = 0
+    pending_tool: str | None = None
 
 class EventResponse(BaseModel):
     id: int
@@ -31,5 +32,5 @@ class StatsResponse(BaseModel):
     active_sessions: int
     idle_sessions: int
     stopped_sessions: int
+    waiting_sessions: int
     total_events: int
-    today_events: int

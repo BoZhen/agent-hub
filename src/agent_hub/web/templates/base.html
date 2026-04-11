@@ -23,12 +23,14 @@
     .fade-in { animation: fadeIn 0.3s ease-in; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
     .status-active { color: #34d399; }
-    .status-idle { color: #fbbf24; }
+    .status-idle { color: #7dd3fc; }
     .status-stopped { color: #6b7280; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
     .dot-active { background: #34d399; box-shadow: 0 0 6px #34d399; }
-    .dot-idle { background: #fbbf24; }
+    .dot-waiting { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; animation: pulse 2s infinite; }
+    .dot-idle { background: #7dd3fc; }
     .dot-stopped { background: #6b7280; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   </style>
   {% block head %}{% endblock %}
 </head>
