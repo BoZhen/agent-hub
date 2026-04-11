@@ -42,7 +42,7 @@
         <span class="dot dot-stopped" id="ws-dot"></span>
         <span id="ws-label" class="hidden sm:inline">disconnected</span>
       </span>
-      <a href="http://localhost:7700/" target="_blank" class="hover:text-white transition">Terminal</a>
+      <a id="nav-terminal" href="#" target="_blank" class="hover:text-white transition">Terminal</a>
       <a href="/api/docs" class="hidden sm:inline hover:text-white transition">API</a>
     </div>
   </nav>
@@ -70,6 +70,8 @@
       };
     }
     connectWS();
+    // Set terminal nav link using current hostname
+    document.getElementById('nav-terminal').href = `http://${location.hostname}:7700/`;
   </script>
   {% block scripts %}{% endblock %}
 </body>

@@ -24,6 +24,13 @@ def _basename(path: str) -> str:
 templates.env.filters["basename"] = _basename
 
 
+def _terminal_url(request: Request) -> str:
+    """Derive terminal URL from the host used to access the Hub."""
+    host = request.headers.get("host", "localhost:7800").split(":")[0]
+    port = request.app.state.config.terminal_port
+    return f"http://{host}:{port}"
+
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
@@ -38,7 +45,7 @@ async def dashboard(request: Request):
     rows = await cursor.fetchall()
     recent_events = [dict(r) for r in rows]
 
-    terminal_url = request.app.state.config.terminal_url
+    terminal_url = _terminal_url(request)
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -65,7 +72,7 @@ async def session_detail(
 
     events = await db.get_session_events(conn, session_id, limit=limit, offset=offset)
 
-    terminal_url = request.app.state.config.terminal_url
+    terminal_url = _terminal_url(request)
     return templates.TemplateResponse(
         request=request,
         name="session.html",

@@ -91,11 +91,11 @@ async def approve_session(request: Request, session_id: str):
             detail="No tmux session associated with this session. Claude Code must be running inside tmux.",
         )
 
-    terminal_url = request.app.state.config.terminal_url
+    terminal_port = request.app.state.config.terminal_port
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{terminal_url}/api/terminals/{tmux_name}/send",
+                f"http://127.0.0.1:{terminal_port}/api/terminals/{tmux_name}/send",
                 json={"keys": "y\n"},
                 timeout=5.0,
             )

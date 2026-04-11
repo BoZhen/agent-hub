@@ -8,4 +8,4 @@ class HubConfig:
     port: int = 7800
     db_path: str = "hub.db"
     idle_timeout_minutes: int = 30
-    terminal_url: str = "http://localhost:7700"
+    terminal_port: int = 7700
