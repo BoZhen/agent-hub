@@ -582,28 +582,133 @@ uv run agent-hub sync
 
 ### Phase 3: MCP Server + 服务协同
 
-**MCP Server — 让任意 Claude Code 会话查询和管理其他会话**
+**MCP Server ✅ — 让任意 Claude Code 会话查询和管理其他会话**
 
-- [ ] MCP Server 集成（FastMCP, SSE transport, 端口 7801）
-- [ ] `list_sessions` tool — 列出会话，支持 status 过滤
-- [ ] `get_session` tool — 会话详情 + 最近 N 条事件
-- [ ] `search_events` tool — 按工具名、关键词、session_id 搜索
-- [ ] `get_dashboard` tool — 全局概览（各状态数量、最近事件、按机器分组）
-- [ ] Claude Code MCP 配置 — `~/.claude/settings.json` 中注册 agent-hub MCP server
+- [x] MCP Server 集成（FastMCP v3, SSE transport, 挂载在 Hub `/mcp` 路径下）
+- [x] `list_sessions` tool — 列出会话，显示 waiting/pending 状态和 token 用量
+- [x] `get_session` tool — 会话详情 + 最近 N 条事件，支持 partial ID 前缀匹配
+- [x] `search_events` tool — 按 summary 关键词、tool_name、session_id 搜索
+- [x] `get_dashboard` tool — 全局概览（各状态数量、活跃会话、最近事件）
+- [x] `get_transcript_summary` tool — 读取 transcript 尾部，提取最近 user prompts / tool calls / responses
+- [x] Claude Code MCP 注册 — `claude mcp add --transport sse --scope user agent-hub http://127.0.0.1:7800/mcp/sse`
 
-**Web Terminal 集成 — 从 Dashboard 一键跳转终端操作**
+**注意：** MCP server 配置必须通过 `claude mcp add` 命令注册，写入 `~/.claude.json`。手动创建 `.mcp.json` 文件无效。
+
+**Web Terminal 集成 — tmux 持久化 + Dashboard 联动**
 
 现有 Web Terminal (Tornado + xterm.js) 运行在 `localhost:7683`，支持手机虚拟键盘。
+核心改造：用 tmux 替代裸 PTY 作为后端，实现会话持久化和跨终端 attach。
 
-- [ ] Dashboard session card 添加 "Terminal" 快捷按钮
-- [ ] 跳转 URL 携带 `cd <session_cwd>` 参数，Web Terminal 自动切到会话目录
-- [ ] Session 详情页 waiting 状态显示 "Open Terminal" 按钮，方便手机审批
-- [ ] 考虑 Web Terminal 支持 URL 参数预填命令（需扩展 Web Terminal 端）
+选择 tmux 而非 zellij 的原因：
+- `tmux send-keys` 可以从程序发送按键（实现一键审批）
+- `tmux list-sessions` / `tmux capture-pane` 完整的 session 枚举和输出读取
+- scripting API 成熟，被广泛用作 web terminal 后端（ttyd、gotty、wetty）
+- zellij 的优势在 UI 和手动使用，但程序化控制远不如 tmux
 
-**统一服务门户**
+#### 3.1 Web Terminal 改造（独立项目，`/home/user/Git/web-terminal`）
+
+**URL 参数 API：**
+
+```
+http://localhost:7683/?name=SESSION_NAME&cwd=PATH&cmd=COMMAND&attach=TMUX_SESSION
+```
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `name` | 命名 terminal session，断开后可重连 | `?name=proj-a` |
+| `cwd` | 初始工作目录 | `?cwd=/home/user/project` |
+| `cmd` | 连接后自动执行命令 | `?cmd=claude+--resume+abc` |
+| `attach` | 直接 attach 到已有 tmux session | `?attach=claude-1` |
+
+**tmux 后端行为：**
+
+```
+连接时：
+  if ?attach=SESSION:
+    tmux attach-session -t SESSION          # attach 到已有 session
+  elif ?name=NAME:
+    tmux new-session -A -s NAME             # 创建或 reattach（-A 是关键）
+    if ?cwd: tmux send-keys "cd PATH" Enter
+    if ?cmd: tmux send-keys "CMD" Enter
+  else:
+    tmux new-session -s auto-XXXX           # 匿名 session
+
+断开时：
+  tmux session 继续存活（这是核心价值）
+  重新连接同一 ?name= 自动 reattach
+
+手机场景：
+  切换应用 → WebSocket 断开 → tmux session 存活
+  回到浏览器 → 自动 reattach → 终端状态完整保留
+```
+
+**Terminal 管理 API：**
+
+```
+GET  /api/terminals              → 列出所有活跃 tmux sessions
+POST /api/terminals/:name/send   → 向指定 session 发送按键
+     Body: {"keys": "y\n"}         （实现一键审批）
+DELETE /api/terminals/:name      → 关闭指定 tmux session
+```
+
+#### 3.2 Hub Dashboard 集成（Agent Hub 端）
+
+**Session card 添加操作按钮：**
+
+```
+┌─────────────────────────────────────────┐
+│ ● amd-tr7975wx                          │
+│ /home/user/project-a                    │
+│ claude-opus-4-6        last: 14:30:25   │
+│                                         │
+│ [Terminal]  [waiting: Bash → Approve]   │
+└─────────────────────────────────────────┘
+```
+
+- **Terminal 按钮** → `http://localhost:7683/?name=hub-SESSION_ID_PREFIX&cwd=SESSION_CWD`
+  - 打开持久化终端，自动 cd 到会话目录
+  - 再次点击 reattach 到同一终端（不会创建新的）
+
+- **Approve 按钮**（仅 waiting 状态显示）→ 两种实现路径：
+  1. 简单方案：跳转 Web Terminal attach 到 Claude Code 所在的 tmux session
+  2. 高级方案：Hub 直接调用 `POST /api/terminals/:name/send {"keys": "y\n"}`
+     - 前提：Claude Code 跑在 tmux 里，且 Hub 知道 tmux session 名
+
+**配置：** Hub 需要知道 Web Terminal 的地址：
+
+```python
+# config.py 或环境变量
+terminal_url = "http://localhost:7683"
+```
+
+#### 3.3 Claude Code 运行在 tmux 中的工作流
+
+为了让 Hub 能 attach/approve Claude Code 会话，推荐在 tmux 中启动 Claude Code：
+
+```bash
+# 启动 Claude Code 时创建命名 tmux session
+tmux new-session -d -s "claude-proj-a" -c "/home/user/project-a" "claude"
+
+# Hub 检测到 waiting 时，可以直接发送审批
+tmux send-keys -t "claude-proj-a" "y" Enter
+
+# 也可以通过 Web Terminal attach 到这个 session
+http://localhost:7683/?attach=claude-proj-a
+```
+
+未来可通过 Hub MCP tool 自动化这个流程：
+```
+> 在 /home/user/project-a 启动一个新的 Claude Code 会话
+→ MCP tool: create_claude_session(cwd="/home/user/project-a")
+→ Hub 创建 tmux session + 启动 claude
+→ Dashboard 自动显示新会话
+```
+
+#### 3.4 统一服务门户
 
 - [ ] Dashboard 顶部导航添加服务快捷链接（Terminal、OpenClaw 等）
 - [ ] 手机只需收藏 Hub Dashboard 一个 URL 即可访问所有服务
+- [ ] Terminal 管理页面 — 列出所有 tmux sessions，提供 attach/kill 操作
 
 ### Phase 4: 双 Hub 同步
 
@@ -619,34 +724,42 @@ uv run agent-hub sync
 - [ ] 告警机制（会话长时间无响应等）
 - [ ] 支持标注/备注会话（手动添加任务描述）
 - [ ] Session 详情页内嵌 Terminal iframe — 同一页面查看事件 + 操作终端
-- [ ] Waiting 状态一键审批 — 通过 Web Terminal 向特定会话发送审批命令
+- [ ] Cost tracking — 基于 token 用量和模型定价估算 API 费用
+- [ ] `create_claude_session` MCP tool — 通过 Hub 在 tmux 中启动新 Claude Code 会话
 
 ## 14. 服务拓扑
 
 当前单机部署的服务全景：
 
 ```
-┌─── AMD-7975WX (Tailscale) ──────────────────────────────────┐
-│                                                              │
-│  Agent Hub (:7800)          Web Terminal (:7683)             │
-│  ┌──────────────────┐       ┌──────────────────┐            │
-│  │ Dashboard        │──────▶│ xterm.js + PTY   │            │
-│  │ REST API         │       │ 虚拟键盘 (mobile) │            │
-│  │ WebSocket        │       └──────────────────┘            │
-│  │ MCP Server (:7801)│                                      │
-│  └──────┬───────────┘                                       │
-│         │ HTTP hooks                                        │
-│  ┌──────┴───────────────────────────────────────┐           │
-│  │ Claude Code sessions (#1, #2, #3, ...)       │           │
-│  │ ← MCP client (query other sessions)          │           │
-│  └──────────────────────────────────────────────┘           │
-│                                                              │
-│  OpenClaw (:443 via Tailscale serve)                        │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+┌─── AMD-7975WX (Tailscale) ──────────────────────────────────────┐
+│                                                                  │
+│  Agent Hub (:7800)              Web Terminal (:7683)             │
+│  ┌──────────────────┐           ┌──────────────────┐            │
+│  │ Dashboard        │──[link]──▶│ xterm.js + tmux  │            │
+│  │ REST API         │           │ 虚拟键盘 (mobile) │            │
+│  │ WebSocket        │◀──[api]──▶│ /api/terminals   │            │
+│  │ MCP Server (/mcp)│           └────────┬─────────┘            │
+│  └──────┬───────────┘                    │                      │
+│         │ HTTP hooks              tmux attach/send-keys          │
+│  ┌──────┴────────────────────────────────┴──────────┐           │
+│  │ tmux sessions                                     │           │
+│  │  ├── claude-proj-a  (Claude Code #1)             │           │
+│  │  ├── claude-proj-b  (Claude Code #2)             │           │
+│  │  └── hub-XXXX       (ad-hoc terminals)           │           │
+│  │                                                   │           │
+│  │ Claude Code ← MCP client → Agent Hub             │           │
+│  └──────────────────────────────────────────────────┘           │
+│                                                                  │
+│  OpenClaw (:443 via Tailscale serve)                            │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
          │
     手机 (Tailscale)
-    └── 浏览器 → Hub Dashboard → Terminal → 审批/操作
+    └── 浏览器 → Hub Dashboard
+         ├── 查看所有 session 状态和 token 用量
+         ├── [Terminal] 按钮 → Web Terminal (tmux reattach)
+         └── [Approve] 按钮 → tmux send-keys "y" (一键审批)
 ```
 
 ## 15. 未来扩展
@@ -657,4 +770,3 @@ uv run agent-hub sync
 - **远程指令** — 通过 Hub 向指定会话发送消息（需要 Claude Code 支持双向通信）
 - **任务分配** — 在 Hub 上创建任务，指定某个会话执行
 - **多用户** — 加入认证，支持团队使用
-- **Cost tracking** — 基于 token 用量计算 API 费用估算

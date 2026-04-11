@@ -267,6 +267,47 @@ async def get_session_events_latest(
     return await get_session_events(db, session_id, limit=n)
 
 
+async def search_events(
+    db: aiosqlite.Connection,
+    *,
+    query: str | None = None,
+    tool_name: str | None = None,
+    session_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    conditions: list[str] = []
+    params: list[str | int] = []
+    if query:
+        conditions.append("summary LIKE ?")
+        params.append(f"%{query}%")
+    if tool_name:
+        conditions.append("tool_name = ?")
+        params.append(tool_name)
+    if session_id:
+        conditions.append("session_id = ?")
+        params.append(session_id)
+    where = " AND ".join(conditions) if conditions else "1=1"
+    cursor = await db.execute(
+        f"SELECT id, event_uid, session_id, event_type, tool_name, summary, created_at "
+        f"FROM events WHERE {where} ORDER BY created_at DESC LIMIT ?",
+        (*params, limit),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_recent_events(
+    db: aiosqlite.Connection, limit: int = 20
+) -> list[dict]:
+    cursor = await db.execute(
+        "SELECT id, event_uid, session_id, event_type, tool_name, summary, created_at "
+        "FROM events ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── Stats ─────────────────────────────────────────────────────
 
 

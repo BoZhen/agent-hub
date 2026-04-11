@@ -12,6 +12,7 @@ from agent_hub import db
 from agent_hub.api import events, sessions, ws
 from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
+from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
 from agent_hub.services.session_manager import periodic_sweep, periodic_pending_check
 
 logging.basicConfig(
@@ -29,6 +30,7 @@ def create_app(config: HubConfig) -> FastAPI:
         conn = await db.init_db(config.db_path)
         app.state.db = conn
         app.state.config = config
+        mcp_set_db(conn)
         sweep_task = asyncio.create_task(periodic_sweep(conn, config.idle_timeout_minutes))
         pending_task = asyncio.create_task(periodic_pending_check(conn))
         logger.info("Database initialized: %s", config.db_path)
@@ -52,6 +54,11 @@ def create_app(config: HubConfig) -> FastAPI:
     app.include_router(sessions.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(web_routes.router)
+
+    # Mount MCP server at /mcp (SSE transport for remote MCP clients)
+    app.mount("/mcp", mcp_server.http_app(transport="sse"))
+    logger.info("MCP server mounted at /mcp/sse")
+
     return app
 
 
