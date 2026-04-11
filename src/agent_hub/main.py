@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -14,6 +15,7 @@ from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
 from agent_hub.services.session_manager import periodic_sweep, periodic_pending_check
+from agent_hub.services.telegram_bot import start_bot, stop_bot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,8 +36,10 @@ def create_app(config: HubConfig) -> FastAPI:
         sweep_task = asyncio.create_task(periodic_sweep(conn, config.idle_timeout_minutes))
         pending_task = asyncio.create_task(periodic_pending_check(conn))
         logger.info("Database initialized: %s", config.db_path)
+        telegram = await start_bot(config, conn)
         yield
         # Shutdown
+        await stop_bot()
         sweep_task.cancel()
         pending_task.cancel()
         try:
@@ -77,11 +81,14 @@ def cli():
     args = parser.parse_args()
 
     if args.command == "serve":
+        tg_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
         config = HubConfig(
             hub_id=args.hub_id,
             host=args.host,
             port=args.port,
             db_path=args.db,
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
+            telegram_chat_id=int(tg_chat_id_raw) if tg_chat_id_raw else None,
         )
         app = create_app(config)
         ssl_kwargs = {}

@@ -45,6 +45,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN cache_create_tokens INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN pending_tool TEXT",
     "ALTER TABLE sessions ADD COLUMN tmux_session TEXT",
+    "ALTER TABLE sessions ADD COLUMN pending_detail TEXT",
 ]
 
 
@@ -129,11 +130,14 @@ async def update_session_model(
 
 
 async def update_session_pending_tool(
-    db: aiosqlite.Connection, session_id: str, pending_tool: str | None
+    db: aiosqlite.Connection,
+    session_id: str,
+    pending_tool: str | None,
+    pending_detail: str | None = None,
 ) -> None:
     await db.execute(
-        "UPDATE sessions SET pending_tool = ? WHERE session_id = ?",
-        (pending_tool, session_id),
+        "UPDATE sessions SET pending_tool = ?, pending_detail = ? WHERE session_id = ?",
+        (pending_tool, pending_detail, session_id),
     )
     await db.commit()
 

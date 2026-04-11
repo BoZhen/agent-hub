@@ -48,8 +48,44 @@ def read_usage(transcript_path: str) -> dict | None:
     }
 
 
-def read_pending_tool(transcript_path: str) -> str | None:
-    """Check if the last transcript entry is an assistant message with a pending tool_use."""
+def _tool_detail(name: str, inp: dict) -> str:
+    """Extract a human-readable detail string from tool input."""
+    if name == "Bash":
+        return str(inp.get("command", ""))[:150]
+    elif name in ("Read", "Write"):
+        return str(inp.get("file_path", ""))
+    elif name == "Edit":
+        return str(inp.get("file_path", ""))
+    elif name in ("Grep", "Glob"):
+        return str(inp.get("pattern", ""))
+    elif name == "Agent":
+        return str(inp.get("description", ""))[:100]
+    elif name == "WebSearch":
+        return str(inp.get("query", ""))[:100]
+    elif name == "WebFetch":
+        return str(inp.get("url", ""))[:100]
+    return ""
+
+
+class PendingTool:
+    """Info about a pending tool_use detected in a transcript."""
+    __slots__ = ("name", "detail", "reasoning", "user_prompt")
+
+    def __init__(
+        self, name: str, detail: str,
+        reasoning: str = "", user_prompt: str = "",
+    ) -> None:
+        self.name = name
+        self.detail = detail
+        self.reasoning = reasoning
+        self.user_prompt = user_prompt
+
+
+def read_pending_tool(transcript_path: str) -> PendingTool | None:
+    """Check if the last transcript entry is an assistant message with a pending tool_use.
+
+    Returns PendingTool with tool name, detail, reasoning text, and last user prompt.
+    """
     path = Path(transcript_path)
     if not path.exists():
         return None
@@ -76,9 +112,42 @@ def read_pending_tool(transcript_path: str) -> str | None:
             return None
 
         content = last.get("message", {}).get("content", [])
+
+        # Collect text blocks before the first tool_use as reasoning
+        reasoning_parts: list[str] = []
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                return block.get("name")
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                reasoning_parts.append(block.get("text", ""))
+            elif block.get("type") == "tool_use":
+                name = block.get("name", "")
+                detail = _tool_detail(name, block.get("input", {}))
+                reasoning = "\n".join(reasoning_parts).strip()
+                # Truncate reasoning to last meaningful chunk
+                if len(reasoning) > 300:
+                    reasoning = "..." + reasoning[-297:]
+
+                # Find last user prompt by scanning backwards
+                user_prompt = ""
+                for prev_line in reversed(lines[:-1]):
+                    try:
+                        prev = json.loads(prev_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if prev.get("type") == "user":
+                        msg = prev.get("message", {})
+                        msg_content = msg.get("content") if isinstance(msg, dict) else None
+                        if isinstance(msg_content, str):
+                            user_prompt = msg_content[:200]
+                        elif isinstance(msg_content, list):
+                            for b in msg_content:
+                                if isinstance(b, dict) and b.get("type") == "text":
+                                    user_prompt = b.get("text", "")[:200]
+                                    break
+                        break
+
+                return PendingTool(name, detail, reasoning, user_prompt)
         return None
     except Exception:
         return None

@@ -10,10 +10,13 @@
 <div class="bg-surface-light rounded-lg p-3 sm:p-5 border border-gray-700/30 mb-4 sm:mb-6">
   <div class="flex items-center gap-2 sm:gap-3 mb-3">
     <span class="dot dot-{{ session.status }}"></span>
-    <h1 class="text-lg sm:text-xl font-bold text-white truncate">{{ session.hostname }}</h1>
+    <h1 class="text-lg sm:text-xl font-bold text-white truncate">{{ session.tmux_session or session.hostname }}</h1>
+    {% if session.tmux_session %}
+    <span class="text-xs sm:text-sm text-gray-500">{{ session.hostname }}</span>
+    {% endif %}
     {% if session.pending_tool %}
     <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0 bg-yellow-900/40 text-yellow-400 animate-pulse"
-    >waiting: {{ session.pending_tool }}</span>
+          id="waiting-{{ session.session_id }}">waiting: {{ session.pending_tool }}</span>
     {% else %}
     <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0
       {% if session.status == 'active' %}bg-green-900/40 text-green-400
@@ -22,6 +25,10 @@
     ">{{ session.status }}</span>
     {% endif %}
   </div>
+  {% if session.pending_detail %}
+  <div class="text-xs sm:text-sm text-yellow-300/70 font-mono truncate mb-2 ml-5"
+       id="detail-{{ session.session_id }}">{{ session.pending_detail }}</div>
+  {% endif %}
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 sm:gap-y-2 gap-x-8 text-xs sm:text-sm">
     <div class="truncate">
       <span class="text-gray-500">Dir:</span>
@@ -71,7 +78,10 @@
   </div>
   {% endif %}
   <!-- Action buttons -->
-  <div class="mt-3 pt-2 border-t border-gray-700/20 flex items-center gap-2">
+  <div class="mt-3 pt-2 border-t border-gray-700/20 flex items-center gap-2"
+       id="actions-{{ session.session_id }}"
+       data-tmux="{{ session.tmux_session or '' }}"
+       data-cwd="{{ session.cwd }}">
     <a href="{{ terminal_url }}/?{% if session.tmux_session %}attach={{ session.tmux_session }}{% else %}name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}{% endif %}"
        target="_blank"
        class="text-xs px-3 py-1.5 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
@@ -79,14 +89,18 @@
     </a>
     {% if session.pending_tool %}
       {% if session.tmux_session %}
-    <button onclick="approveSession('{{ session.session_id }}', this)"
-       class="text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+    <button onclick="approveSession('{{ session.session_id }}', false, this)"
+       class="approve-btn text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
       Approve
+    </button>
+    <button onclick="approveSession('{{ session.session_id }}', true, this)"
+       class="always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse">
+      Always
     </button>
       {% else %}
     <a href="{{ terminal_url }}/?{% if session.tmux_session %}attach={{ session.tmux_session }}{% else %}name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}{% endif %}"
        target="_blank"
-       class="text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+       class="approve-link text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
       Approve &rarr;
     </a>
       {% endif %}
@@ -142,7 +156,46 @@
 <script>
 const sessionId = "{{ session.session_id }}";
 
+function updateApproveButtons(sid, pendingTool, tmuxSession) {
+  const actions = document.getElementById('actions-' + sid);
+  if (!actions) return;
+  if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
+  const tmux = actions.dataset.tmux;
+
+  actions.querySelectorAll('.approve-btn, .always-btn, .approve-link').forEach(el => el.remove());
+
+  if (!pendingTool) return;
+
+  if (tmux) {
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approve-btn text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
+    approveBtn.textContent = 'Approve';
+    approveBtn.onclick = function() { approveSession(sid, false, this); };
+    actions.appendChild(approveBtn);
+
+    const alwaysBtn = document.createElement('button');
+    alwaysBtn.className = 'always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
+    alwaysBtn.textContent = 'Always';
+    alwaysBtn.onclick = function() { approveSession(sid, true, this); };
+    actions.appendChild(alwaysBtn);
+  } else {
+    const cwd = actions.dataset.cwd || '';
+    const prefix = sid.substring(0, 8);
+    const link = document.createElement('a');
+    link.href = `http://${location.hostname}:7700/?name=hub-${prefix}&cwd=${encodeURIComponent(cwd)}`;
+    link.target = '_blank';
+    link.className = 'approve-link text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
+    link.innerHTML = 'Approve &rarr;';
+    actions.appendChild(link);
+  }
+}
+
 function onWsMessage(data) {
+  if (data.type === 'pending' && data.session_id === sessionId) {
+    updateApproveButtons(sessionId, data.pending_tool, data.tmux_session);
+    return;
+  }
+
   if (data.type !== 'event' || data.session_id !== sessionId) return;
 
   const timeline = document.getElementById('event-timeline');
@@ -181,13 +234,20 @@ function onWsMessage(data) {
   timeline.prepend(el);
 }
 
-function approveSession(sessionId, btn) {
-  fetch(`/api/sessions/${sessionId}/approve`, {method: 'POST'})
+function approveSession(sessionId, always, btn) {
+  const url = `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : '');
+  btn.textContent = 'Sent!';
+  btn.classList.remove('animate-pulse');
+  fetch(url, {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
-        btn.textContent = 'Sent!';
-        btn.classList.remove('animate-pulse');
+        updateApproveButtons(sessionId, null);
+        // Clear waiting badge and detail in header
+        const badge = document.getElementById('waiting-' + sessionId);
+        if (badge) badge.remove();
+        const detail = document.getElementById('detail-' + sessionId);
+        if (detail) detail.remove();
       } else {
         alert(data.detail || 'Approve failed');
       }

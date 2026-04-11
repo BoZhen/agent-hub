@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -77,8 +79,16 @@ async def delete_session(request: Request, session_id: str):
 
 
 @router.post("/sessions/{session_id}/approve")
-async def approve_session(request: Request, session_id: str):
-    """Send 'y' + Enter to the tmux session where this Claude Code is running."""
+async def approve_session(
+    request: Request,
+    session_id: str,
+    always: bool = Query(default=False),
+):
+    """Send approval to the tmux session where this Claude Code is running.
+
+    If always=False (default): select option 1 "Yes" (approve once).
+    If always=True: select option 2 "Yes, allow for this session".
+    """
     conn = request.app.state.db
     session = await db.get_session(conn, session_id)
     if not session:
@@ -91,21 +101,38 @@ async def approve_session(request: Request, session_id: str):
             detail="No tmux session associated with this session. Claude Code must be running inside tmux.",
         )
 
-    terminal_port = request.app.state.config.terminal_port
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"http://127.0.0.1:{terminal_port}/api/terminals/{tmux_name}/send",
-                json={"keys": "y\n"},
-                timeout=5.0,
+    if always:
+        # Select option 2: Down arrow + Enter, via direct tmux send-keys.
+        # Trailing colon forces session-level target (avoids pane lookup errors).
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "send-keys", "-t", f"{tmux_name}:", "Down", "Enter",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip() if stderr else "unknown error"
+            raise HTTPException(
+                status_code=400,
+                detail=f"tmux send-keys failed: {err_msg}",
             )
-            if resp.status_code == 404:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"tmux session '{tmux_name}' not found on terminal server",
+    else:
+        # Select option 1: send 'y' + Enter via Web Terminal API
+        terminal_port = request.app.state.config.terminal_port
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"http://127.0.0.1:{terminal_port}/api/terminals/{tmux_name}/send",
+                    json={"keys": "y\n"},
+                    timeout=5.0,
                 )
-            resp.raise_for_status()
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Terminal server error: {e}")
+                if resp.status_code == 404:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"tmux session '{tmux_name}' not found on terminal server",
+                    )
+                resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Terminal server error: {e}")
 
-    return {"ok": True, "tmux_session": tmux_name}
+    return {"ok": True, "tmux_session": tmux_name, "always": always}

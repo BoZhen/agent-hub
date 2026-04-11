@@ -16,10 +16,10 @@
     <div class="text-xs text-gray-400 uppercase tracking-wide">Idle</div>
     <div class="text-2xl font-bold status-idle" id="stat-idle">{{ stats.idle_sessions }}</div>
   </div>
-  <div class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30">
+  <a href="/stopped" class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30 hover:bg-surface-lighter transition block">
     <div class="text-xs text-gray-400 uppercase tracking-wide">Stopped</div>
     <div class="text-2xl font-bold status-stopped" id="stat-stopped">{{ stats.stopped_sessions }}</div>
-  </div>
+  </a>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
@@ -34,7 +34,10 @@
           <div class="flex items-center justify-between mb-1.5 sm:mb-2">
             <div class="flex items-center gap-2">
               <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
-              <span class="font-semibold text-white text-sm sm:text-base">{{ s.hostname }}</span>
+              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+              {% if s.tmux_session %}
+              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+              {% endif %}
               {% if s.pending_tool %}
               <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
                     id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
@@ -42,6 +45,10 @@
             </div>
             <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
           </div>
+          {% if s.pending_detail %}
+          <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
+               id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
+          {% endif %}
           <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
           {% if s.output_tokens %}
           <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
@@ -54,7 +61,10 @@
             <span>{{ s.last_seen_at[11:19] }}</span>
           </div>
         </a>
-        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20">
+        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
+             id="actions-{{ s.session_id }}"
+             data-tmux="{{ s.tmux_session or '' }}"
+             data-cwd="{{ s.cwd }}">
           <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
              target="_blank"
              class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
@@ -62,9 +72,13 @@
           </a>
           {% if s.pending_tool %}
             {% if s.tmux_session %}
-          <button onclick="approveSession('{{ s.session_id }}', this)"
-             class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+          <button onclick="approveSession('{{ s.session_id }}', false, this)"
+             class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
             Approve
+          </button>
+          <button onclick="approveSession('{{ s.session_id }}', true, this)"
+             class="always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse">
+            Always
           </button>
             {% else %}
           <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
@@ -106,10 +120,11 @@
 
 {% block scripts %}
 <script>
-function updateWaitingBadge(sessionId, pendingTool) {
+function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
   const card = document.getElementById('card-' + sessionId);
   if (!card) return;
   const existing = document.getElementById('waiting-' + sessionId);
+  const existingDetail = document.getElementById('detail-' + sessionId);
   const dot = document.getElementById('dot-' + sessionId);
 
   if (pendingTool) {
@@ -124,16 +139,66 @@ function updateWaitingBadge(sessionId, pendingTool) {
       const nameRow = card.querySelector('.flex.items-center.gap-2');
       if (nameRow) nameRow.appendChild(badge);
     }
+    // Update or create detail line
+    if (pendingDetail) {
+      if (existingDetail) {
+        existingDetail.textContent = pendingDetail;
+      } else {
+        const detail = document.createElement('div');
+        detail.id = 'detail-' + sessionId;
+        detail.className = 'text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4';
+        detail.textContent = pendingDetail;
+        const link = card.querySelector('a.block');
+        if (link) link.insertBefore(detail, link.children[1]);
+      }
+    }
   } else {
     if (existing) existing.remove();
-    // dot restored by event handler via data.status
+    if (existingDetail) existingDetail.remove();
+  }
+}
+
+function updateApproveButtons(sessionId, pendingTool, tmuxSession) {
+  const actions = document.getElementById('actions-' + sessionId);
+  if (!actions) return;
+  // Update tmux data if provided
+  if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
+  const tmux = actions.dataset.tmux;
+
+  // Remove old approve/always buttons
+  actions.querySelectorAll('.approve-btn, .always-btn, .approve-link').forEach(el => el.remove());
+
+  if (!pendingTool) return;
+
+  if (tmux) {
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
+    approveBtn.textContent = 'Approve';
+    approveBtn.onclick = function() { approveSession(sessionId, false, this); };
+    actions.appendChild(approveBtn);
+
+    const alwaysBtn = document.createElement('button');
+    alwaysBtn.className = 'always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
+    alwaysBtn.textContent = 'Always';
+    alwaysBtn.onclick = function() { approveSession(sessionId, true, this); };
+    actions.appendChild(alwaysBtn);
+  } else {
+    const cwd = actions.dataset.cwd || '';
+    const prefix = sessionId.substring(0, 8);
+    const link = document.createElement('a');
+    link.href = `http://${location.hostname}:7700/?name=hub-${prefix}&cwd=${encodeURIComponent(cwd)}`;
+    link.target = '_blank';
+    link.className = 'approve-link text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
+    link.innerHTML = 'Approve &rarr;';
+    actions.appendChild(link);
   }
 }
 
 function onWsMessage(data) {
   // Handle pending tool updates from background task
   if (data.type === 'pending') {
-    updateWaitingBadge(data.session_id, data.pending_tool);
+    updateWaitingBadge(data.session_id, data.pending_tool, data.pending_detail);
+    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session);
     const el = document.getElementById('stat-waiting');
     if (el) el.textContent = data.waiting_count;
     return;
@@ -159,13 +224,11 @@ function onWsMessage(data) {
   feed.prepend(el);
   while (feed.children.length > 50) feed.lastChild.remove();
 
-  // Update session card
+  // Update session card dot
   const card = document.getElementById('card-' + data.session_id);
   if (card) {
     const dot = document.getElementById('dot-' + data.session_id);
     if (dot) dot.className = 'dot dot-' + data.status;
-    // Clear waiting badge on any event (tool approved or session moved on)
-    updateWaitingBadge(data.session_id, null);
   }
 
   // Update stats
@@ -177,14 +240,17 @@ function onWsMessage(data) {
   }).catch(() => {});
 }
 
-function approveSession(sessionId, btn) {
-  fetch(`/api/sessions/${sessionId}/approve`, {method: 'POST'})
+function approveSession(sessionId, always, btn) {
+  const url = `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : '');
+  btn.textContent = 'Sent!';
+  btn.classList.remove('animate-pulse');
+  fetch(url, {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
-        btn.textContent = 'Sent!';
-        btn.classList.remove('animate-pulse');
-        setTimeout(() => { btn.textContent = 'Approve'; }, 2000);
+        // Optimistic UI: clear badge and buttons immediately
+        updateWaitingBadge(sessionId, null);
+        updateApproveButtons(sessionId, null);
       } else {
         alert(data.detail || 'Approve failed');
       }

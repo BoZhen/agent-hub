@@ -34,7 +34,8 @@ def _terminal_url(request: Request) -> str:
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    sessions = await db.get_sessions(conn, limit=100)
+    sessions = await db.get_sessions(conn, status="active", limit=100)
+    sessions += await db.get_sessions(conn, status="idle", limit=100)
     stats = await db.get_stats(conn)
 
     # Get recent events across all sessions
@@ -53,6 +54,21 @@ async def dashboard(request: Request):
             "sessions": sessions,
             "stats": stats,
             "recent_events": recent_events,
+            "terminal_url": terminal_url,
+        },
+    )
+
+
+@router.get("/stopped", response_class=HTMLResponse)
+async def stopped_sessions(request: Request):
+    conn = request.app.state.db
+    sessions = await db.get_sessions(conn, status="stopped", limit=200)
+    terminal_url = _terminal_url(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="stopped.html",
+        context={
+            "sessions": sessions,
             "terminal_url": terminal_url,
         },
     )
