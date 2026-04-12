@@ -7,7 +7,6 @@ class HubConfig:
     host: str = "0.0.0.0"
     port: int = 7800
     db_path: str = "hub.db"
-    idle_timeout_minutes: int = 30
     terminal_port: int = 7700
     telegram_bot_token: str | None = None
     telegram_chat_id: int | None = None

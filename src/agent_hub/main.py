@@ -33,7 +33,7 @@ def create_app(config: HubConfig) -> FastAPI:
         app.state.db = conn
         app.state.config = config
         mcp_set_db(conn)
-        sweep_task = asyncio.create_task(periodic_sweep(conn, config.idle_timeout_minutes))
+        sweep_task = asyncio.create_task(periodic_sweep(conn))
         pending_task = asyncio.create_task(periodic_pending_check(conn))
         logger.info("Database initialized: %s", config.db_path)
         telegram = await start_bot(config, conn)

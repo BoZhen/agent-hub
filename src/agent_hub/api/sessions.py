@@ -68,15 +68,43 @@ async def get_stats(request: Request):
     return await db.get_stats(conn)
 
 
+@router.post("/sessions/clear-stopped")
+async def clear_stopped_sessions(request: Request):
+    """Bulk-delete every session with status='stopped' (and its events)."""
+    conn = request.app.state.db
+    count = await db.delete_stopped_sessions(conn)
+    return {"ok": True, "deleted": count}
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(request: Request, session_id: str):
+    """Delete a session and its events. For idle sessions with a
+    live tmux, also kill the tmux (terminates Claude) so the delete
+    is final — otherwise the session would reappear on the next
+    hook event."""
     conn = request.app.state.db
-    deleted = await db.delete_session(conn, session_id)
-    if not deleted:
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] == "active":
         raise HTTPException(
             status_code=400,
-            detail="Session not found or not in stopped status",
+            detail="Cannot delete an active session — wait until idle",
         )
+
+    tmux_name = session.get("tmux_session")
+    if session["status"] == "idle" and tmux_name:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "kill-session", "-t", f"{tmux_name}:",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate()
+        # Non-zero return is fine — tmux may already be gone.
+
+    deleted = await db.delete_session(conn, session_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Failed to delete session")
     return {"ok": True}
 
 

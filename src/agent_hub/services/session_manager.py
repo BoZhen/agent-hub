@@ -17,6 +17,23 @@ from agent_hub.services.telegram_bot import (
 logger = logging.getLogger(__name__)
 
 
+# Tmux sessions launched by Hub's `/api/tmux/new` with `command=claude`
+# are never "transferred" — they're first-class Claude sessions. We
+# track them here so `_detect_transferred` can skip the timing heuristic
+# (claude's workspace-trust prompt can delay SessionStart past the 5s
+# threshold, otherwise misclassifying them as From Tmux).
+_HUB_LAUNCHED_TMUX: dict[str, float] = {}
+_HUB_LAUNCHED_TTL = 120.0
+
+
+def mark_hub_launched(tmux_name: str) -> None:
+    import time
+    now = time.time()
+    for k in [k for k, ts in _HUB_LAUNCHED_TMUX.items() if now - ts > _HUB_LAUNCHED_TTL]:
+        _HUB_LAUNCHED_TMUX.pop(k, None)
+    _HUB_LAUNCHED_TMUX[tmux_name] = now
+
+
 async def ensure_session(
     conn: aiosqlite.Connection,
     *,
@@ -44,6 +61,25 @@ async def ensure_session(
         transferred = 0
         if tmux_session:
             transferred = await _detect_transferred(tmux_session)
+            # Retire earlier sessions that shared this tmux name — the
+            # name has been reused for a new Claude instance, so any
+            # prior session_id bound to it is definitively dead. Without
+            # this, tmux-name reuse leaves stale idle rows forever.
+            cursor = await conn.execute(
+                "SELECT session_id FROM sessions "
+                "WHERE tmux_session = ? AND session_id != ? "
+                "AND status IN ('active', 'idle')",
+                (tmux_session, session_id),
+            )
+            orphans = [r["session_id"] for r in await cursor.fetchall()]
+            for orphan_id in orphans:
+                await db.update_session_status(conn, orphan_id, "stopped")
+                await db.update_session_pending_tool(conn, orphan_id, None, None)
+            if orphans:
+                logger.info(
+                    "Retired %d older session(s) bound to reused tmux %s",
+                    len(orphans), tmux_session,
+                )
         await db.upsert_session(
             conn,
             session_id=session_id,
@@ -92,7 +128,13 @@ async def _detect_transferred(
     single command, so SessionStart fires within ~1-2s of tmux creation.
     Manual flow (create bare tmux -> attach -> type `claude`) takes >=5s
     minimum. 5s separates the two reliably.
+
+    Hub-launched sessions (via /api/tmux/new command=claude) bypass the
+    timing heuristic entirely — they may get stuck on the workspace-trust
+    prompt and exceed the threshold even though they're first-class.
     """
+    if _HUB_LAUNCHED_TMUX.pop(tmux_name, None) is not None:
+        return 0
     proc = await asyncio.create_subprocess_exec(
         "tmux", "display-message", "-t", f"{tmux_name}:",
         "-p", "#{session_created}",
@@ -183,45 +225,73 @@ async def _soft_idle_pass(
     return marked
 
 
+async def _list_alive_tmux_names() -> set[str]:
+    """Return names of currently alive tmux sessions. Empty set if
+    tmux server is down or has no sessions (both mean 'no sessions
+    alive' from our perspective)."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux", "ls", "-F", "#{session_name}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return set()
+    return {
+        line.strip()
+        for line in stdout.decode("utf-8", errors="replace").splitlines()
+        if line.strip()
+    }
+
+
+async def _sweep_dead_tmux(conn: aiosqlite.Connection) -> int:
+    """Mark active/idle sessions as stopped when their tmux is gone.
+
+    Runs before the soft-idle/stale passes so that sessions whose tmux
+    was killed (typically when the user exits Claude and its root-pane
+    tmux dies) flip to stopped within one sweep cycle instead of
+    waiting for the 30-minute stale cutoff.
+    """
+    alive = await _list_alive_tmux_names()
+    cursor = await conn.execute(
+        "SELECT session_id, tmux_session FROM sessions "
+        "WHERE status IN ('active', 'idle') AND tmux_session IS NOT NULL"
+    )
+    rows = await cursor.fetchall()
+    marked = 0
+    for row in rows:
+        if row["tmux_session"] not in alive:
+            await db.update_session_status(conn, row["session_id"], "stopped")
+            await db.update_session_pending_tool(conn, row["session_id"], None, None)
+            marked += 1
+    if marked:
+        logger.info("Dead-tmux sweep: marked %d sessions stopped", marked)
+    return marked
+
+
 async def sweep_stale_sessions(
     conn: aiosqlite.Connection,
-    idle_timeout_minutes: int,
     soft_idle_minutes: int = 10,
 ) -> int:
-    # Soft-idle pass first: demote stale active → idle unless Claude
-    # is still working (PreToolUse in flight or pane shows activity).
-    await _soft_idle_pass(conn, soft_idle_minutes)
+    """Two-pass sweep run once per tick.
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=idle_timeout_minutes)
-    stale = await db.get_stale_sessions(conn, cutoff)
-    swept = 0
-    for session in stale:
-        # Don't mark stopped if tmux session is still alive —
-        # Claude might be waiting for a long-running program.
-        tmux_name = session.get("tmux_session")
-        if tmux_name:
-            pane = await _tmux_capture(tmux_name)
-            if pane is not None:
-                # tmux session alive — refresh last_seen only (don't
-                # change status, so idle stays idle).
-                await db.touch_session(conn, session["session_id"])
-                continue
-        await db.update_session_status(conn, session["session_id"], "stopped")
-        await db.update_session_pending_tool(conn, session["session_id"], None, None)
-        swept += 1
-    if swept:
-        logger.info("Swept %d stale sessions to stopped", swept)
+    1. Dead-tmux → stopped. This is the **only** path to 'stopped' —
+       an idle session stays idle indefinitely as long as its tmux is
+       alive, so you can resume it days later.
+    2. Soft-idle: demote stale active → idle unless Claude is still
+       working (PreToolUse in flight or pane shows 'esc to interrupt').
+    """
+    swept = await _sweep_dead_tmux(conn)
+    await _soft_idle_pass(conn, soft_idle_minutes)
     return swept
 
 
-async def periodic_sweep(
-    conn: aiosqlite.Connection, idle_timeout_minutes: int
-) -> None:
-    """Background task: sweep stale sessions every 60 seconds."""
+async def periodic_sweep(conn: aiosqlite.Connection) -> None:
+    """Background task: sweep every 60 seconds."""
     while True:
         try:
             await asyncio.sleep(60)
-            await sweep_stale_sessions(conn, idle_timeout_minutes)
+            await sweep_stale_sessions(conn)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -251,24 +321,38 @@ _APPROVAL_PATTERNS = [
     "Do you want to write",
 ]
 
+# Tool preview box header → canonical tool name. Matched as a fallback
+# when the prompt is generic ("Do you want to proceed?") and the command
+# is too long to fit in the 12-line backwards scan window.
+_APPROVAL_HEADERS = {
+    "Bash command": "Bash",
+    "Edit file": "Edit",
+    "Write file": "Write",
+    "Create file": "Write",
+    "Read file": "Read",
+    "Delete file": "Delete",
+}
+
 
 _BOX_VERTICAL = "\u2502"   # │
 _SELECTOR = "\u276f"       # ❯
+
+import re as _re
+_SELECTOR_OPTION_RE = _re.compile(_SELECTOR + r"\s+1\.\s+Yes")
 
 
 def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     """Parse Claude Code approval prompt from tmux pane text.
 
-    Real Claude approvals are rendered as a bordered TUI box with the
-    selector character inside. We require three structural signals to
-    avoid false positives from pane text that merely quotes approval
-    phrases (e.g. the assistant's own explanation):
+    The approval UI's first option is always "❯ 1. Yes", rendered either
+    inside a bordered box or as plain text depending on the specific
+    tool/warning. We use three structural signals to avoid false
+    positives from pane text that merely quotes approval phrases:
 
-    1. A selector line that also contains the box vertical border —
-       i.e. the selector is inside a box, not free-standing text.
+    1. A line matching "❯ 1. Yes" — selector + fixed option structure.
+       Robust against free text that happens to contain either piece.
     2. The selector is near the bottom of the pane (active UI state).
-    3. A ". Yes" option near the selector (valid option structure).
-    4. An approval question pattern within ~15 lines above the selector.
+    3. An approval question pattern within ~15 lines above the selector.
 
     Returns (tool_name, detail, has_always) or None.
     """
@@ -277,11 +361,11 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     if total == 0:
         return None
 
-    # Signal 1: bottom-most selector line that sits inside a box.
+    # Signal 1: bottom-most line matching "❯ 1. Yes". Works for both
+    # boxed ("│ ❯ 1. Yes │") and unboxed (" ❯ 1. Yes") renderings.
     selector_idx = None
     for i in range(total - 1, -1, -1):
-        line = lines[i]
-        if _SELECTOR in line and _BOX_VERTICAL in line:
+        if _SELECTOR_OPTION_RE.search(lines[i]):
             selector_idx = i
             break
 
@@ -293,15 +377,7 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     if selector_idx < total - 30:
         return None
 
-    # Signal 3: valid option structure near the selector. The ". Yes"
-    # text appears on the same selector line or within a few lines.
-    option_window = "\n".join(
-        lines[max(0, selector_idx - 1):min(total, selector_idx + 5)]
-    )
-    if ". Yes" not in option_window:
-        return None
-
-    # Signal 4: find the question line within 15 lines above the selector.
+    # Signal 3: find the question line within 15 lines above the selector.
     prompt_idx = None
     for i in range(max(0, selector_idx - 15), selector_idx):
         if any(p in lines[i] for p in _APPROVAL_PATTERNS):
@@ -340,6 +416,32 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     m = re.search(r"delete (.+?)\?", prompt_area)
     if m:
         return ("Delete", m.group(1).strip()[:150], has_always)
+
+    # Header-based detection: scan up to 25 lines above prompt for a
+    # tool preview box header (e.g. "Bash command", "Edit file"). The
+    # header sits at the top of the preview, which may be beyond the
+    # 12-line backwards scan when the command body is long (e.g. a
+    # multi-line Python script passed to bash -c).
+    header_idx = None
+    header_tool = None
+    for i in range(max(0, prompt_idx - 25), prompt_idx):
+        stripped = lines[i].strip().strip(_BOX_VERTICAL).strip()
+        name = _APPROVAL_HEADERS.get(stripped)
+        if name:
+            header_idx = i
+            header_tool = name
+            break
+
+    if header_idx is not None and header_tool is not None:
+        # First meaningful content line after header is the detail.
+        for j in range(header_idx + 1, prompt_idx):
+            stripped = lines[j].strip().strip(_BOX_VERTICAL).strip()
+            if not stripped or all(c in "\u256c\u2500\u2501\u2550" for c in stripped):
+                continue
+            if "evaluates arguments as shell code" in stripped:
+                continue
+            return (header_tool, stripped[:150], has_always)
+        return (header_tool, "", has_always)
 
     # Scan backwards from prompt for tool info (inside the box — strip
     # box vertical borders before matching).

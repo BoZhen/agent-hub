@@ -1,23 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Stopped Sessions — Agent Hub{% endblock %}
+{% block title %}Idle Sessions — Agent Hub{% endblock %}
 
 {% block content %}
 <div class="mb-4 sm:mb-6">
   <a href="/" class="text-sm text-gray-400 hover:text-white transition py-2 inline-block">&larr; Dashboard</a>
 </div>
 
-<div class="flex items-center justify-between mb-3">
-  <h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide">
-    Stopped Sessions ({{ sessions | length }})
-  </h2>
-  {% if sessions %}
-  <button id="btn-clear" type="button"
-          onclick="clearStopped(this)"
-          class="text-xs px-3 py-1.5 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition font-semibold">
-    Clear All
-  </button>
-  {% endif %}
-</div>
+<h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">
+  Idle Sessions ({{ sessions | length }})
+</h2>
 
 <div id="sessions-list" class="space-y-2 sm:space-y-3">
   {% for s in sessions %}
@@ -25,7 +16,7 @@
     <a href="/sessions/{{ s.session_id }}" class="block">
       <div class="flex items-center justify-between mb-1.5 sm:mb-2">
         <div class="flex items-center gap-2">
-          <span class="dot dot-stopped"></span>
+          <span class="dot dot-idle"></span>
           <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
           {% if s.tmux_session %}
           <span class="text-xs text-gray-500">{{ s.hostname }}</span>
@@ -46,7 +37,12 @@
       </div>
     </a>
     <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20">
-      <button onclick="deleteSession('{{ s.session_id }}', 'stopped', false, this)"
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
+         target="_blank"
+         class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
+        Terminal
+      </a>
+      <button onclick="deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)"
          class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
         Delete
       </button>
@@ -54,15 +50,18 @@
   </div>
   {% endfor %}
   {% if not sessions %}
-  <div class="text-gray-500 text-sm py-8 text-center">No stopped sessions.</div>
+  <div class="text-gray-500 text-sm py-8 text-center">No idle sessions.</div>
   {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function deleteSession(sessionId, status, hasTmux, btn) {
-  if (!confirm('Delete this session from history?')) return;
+function deleteSession(sessionId, hasTmux, btn) {
+  const msg = hasTmux
+    ? 'This will kill the tmux session and terminate Claude. Continue?'
+    : 'Delete this session from history?';
+  if (!confirm(msg)) return;
   btn.textContent = 'Deleting…';
   btn.disabled = true;
   fetch(`/api/sessions/${sessionId}`, {method: 'DELETE'})
@@ -80,30 +79,6 @@ function deleteSession(sessionId, status, hasTmux, btn) {
     .catch(e => {
       alert('Error: ' + e.message);
       btn.textContent = 'Delete';
-      btn.disabled = false;
-    });
-}
-
-function clearStopped(btn) {
-  const count = document.querySelectorAll('[id^="card-"]').length;
-  if (!count) return;
-  if (!confirm(`Delete all ${count} stopped sessions from history?`)) return;
-  btn.textContent = 'Clearing…';
-  btn.disabled = true;
-  fetch('/api/sessions/clear-stopped', {method: 'POST'})
-    .then(async r => {
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({detail: r.statusText}));
-        alert('Clear failed: ' + (err.detail || 'unknown'));
-        btn.textContent = 'Clear All';
-        btn.disabled = false;
-        return;
-      }
-      location.reload();
-    })
-    .catch(e => {
-      alert('Error: ' + e.message);
-      btn.textContent = 'Clear All';
       btn.disabled = false;
     });
 }

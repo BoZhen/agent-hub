@@ -102,6 +102,8 @@ CREATE INDEX idx_events_hub ON events(hub_id, id);  -- 同步查询用
 CREATE INDEX idx_sessions_status ON sessions(status);
 ```
 
+> **实际 schema 的权威定义见 `src/agent_hub/db.py:init_db`**。运行时已通过自动迁移补充了以下列 (未完整列在上方骨架中): `tmux_session`、`transferred`、`pending_tool`、`pending_detail`、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_create_tokens`、`transcript_path`。
+
 ### 3.2 事件摘要生成规则
 
 收到原始 hook payload 后，Hub 提取出一行人类可读的摘要存入 `events.summary`：
@@ -124,14 +126,22 @@ CREATE INDEX idx_sessions_status ON sessions(status);
 ```
 SessionStart ──▶ active
                    │
-            ToolUse/UserPrompt (刷新 last_seen_at)
+            ToolUse / UserPrompt (刷新 last_seen_at)
                    │
-              Stop ──▶ idle
+         Stop event, 或 10min 无事件且 pane 不在 "esc to interrupt" ──▶ idle
                    │
-         超过 30 分钟无事件 ──▶ stopped
+                   │  (idle 是终态性持久状态 — 只要 tmux 还活着, 无限期保留)
+                   ▼
+         tmux session 真死 (背景 _sweep_dead_tmux 每 60s 扫一次) ──▶ stopped
                    │
          新的 SessionStart (相同 session_id, source=resume) ──▶ active
 ```
+
+**设计原则**:
+- 时间不是 stopped 的触发条件。早上睡醒之前的 idle session 全部保留,可以直接继续干活
+- stopped 的唯一入口是 tmux 死亡,通过 `tmux ls` 和 DB 做集合差实现
+- `Running` (长工具在执行) 和 `Waiting` (等审批) 是覆盖在 active 之上的派生状态,且互斥:审批阻塞期工具没在跑,不会同时出现两种徽章
+- tmux 名字复用时 `ensure_session` 自动把同名的旧 session 退休为 stopped,避免累积重复
 
 ## 4. 双 Hub 同步机制
 
@@ -235,15 +245,25 @@ Body: Claude Code hook 原始 payload
 
 响应必须尽快返回（< 100ms），不能阻塞 Claude Code 的工作流。
 
-### 5.2 查询 API
+### 5.2 查询与管理 API
 
 ```
-GET  /api/sessions                  -- 列出所有会话（支持 ?status=active 过滤）
-GET  /api/sessions/:id              -- 会话详情
-GET  /api/sessions/:id/events       -- 会话事件时间线（支持分页）
-GET  /api/sessions/:id/events/latest -- 最近 N 条事件
-GET  /api/stats                     -- 全局统计（活跃数、今日事件数等）
-DELETE /api/sessions/:id            -- 删除会话记录（仅清理已停止的）
+GET  /api/sessions                     -- 列出所有会话 (支持 ?status=active|idle|stopped 过滤)
+GET  /api/sessions/:id                 -- 会话详情 (SessionResponse 含 pending_tool / pending_detail)
+GET  /api/sessions/:id/events          -- 会话事件时间线 (分页)
+GET  /api/sessions/:id/events/latest   -- 最近 N 条事件
+POST /api/sessions/:id/approve?always= -- 远程审批 pending tool (tmux send-keys)
+DELETE /api/sessions/:id               -- 删除会话记录 (拒绝 active; idle 会连带 kill tmux; stopped 直接删)
+POST /api/sessions/clear-stopped       -- 一键清空所有 stopped 会话
+GET  /api/stats                        -- 全局统计 (active/idle/stopped/waiting 数量、今日事件数)
+POST /api/notify                       -- 从 Claude session 往 Telegram 推自定义消息
+
+-- Tmux Hub APIs:
+GET  /api/tmux/list                    -- 未被 active/idle Claude session 占用的裸 tmux
+POST /api/tmux/new                     -- 创建 detached tmux, body {name?, cwd, command?}
+                                          command 支持 "claude"/"codex", 落地启动对应进程
+POST /api/tmux/kill                    -- 按名字 kill tmux session
+GET  /api/browse?path=                 -- 目录选择器的子目录列表
 ```
 
 ### 5.3 WebSocket 实时推送
@@ -399,26 +419,31 @@ Hook payload 中不包含 hostname。Hub 通过以下方式获取：
 ### 8.1 页面结构
 
 ```
-/                          -- 仪表盘首页
-  ├── 活跃会话卡片列表
-  │     每张卡片显示：
-  │     - hostname + cwd（项目名）
-  │     - 当前状态 (active/idle)
+/                          -- 主 Dashboard: 只展示活跃和 waiting 的 session
+  ├── 顶部 stats 卡片: Active | Waiting | Idle (→/idle) | Stopped (→/stopped)
+  ├── + New 按钮: 弹出目录选择器 → POST /api/tmux/new command=claude → 新标签页打开 Web Terminal
+  ├── 活跃会话卡片列表 (Sessions / From Tmux 双 tab)
+  │     每张卡片显示:
+  │     - hostname + cwd (项目名)
+  │     - 当前状态 (active, 可能带 waiting/running 徽章)
   │     - 最后活动时间
   │     - 最近一条事件摘要
   │     - 使用的模型
-  │
-  ├── 实时事件流（WebSocket）
-  │     最近 20 条事件，实时滚动
-  │
+  │     - [Terminal] [Approve? (waiting 时)]
+  ├── 实时事件流 (WebSocket)
   └── 统计摘要
-        - 今日活跃会话数
-        - 今日事件总数
-        - 按工具分布饼图
 
-/sessions/:id              -- 会话详情页
+/idle                       -- Idle session 列表 (点 Idle 卡片进入)
+  └── 每张卡片: [Terminal] [Delete] — Delete 会 kill tmux 并清除 DB 行
+
+/stopped                    -- Stopped session 列表 (点 Stopped 卡片进入)
+  ├── 右上角 [Clear All] — 一键清空所有 stopped
+  └── 每张卡片: [Delete]
+
+/tmux                       -- Tmux Hub: 裸 tmux 的列表/创建/kill
+/sessions/:id               -- 会话详情页
   ├── 会话元信息
-  ├── 事件时间线（无限滚动）
+  ├── 事件时间线 (无限滚动)
   └── 工具使用统计
 ```
 
@@ -614,6 +639,34 @@ uv run agent-hub sync
 - [x] Claude Code MCP 注册 — `claude mcp add --transport sse --scope user agent-hub http://127.0.0.1:7800/mcp/sse`
 
 **注意：** MCP server 配置必须通过 `claude mcp add` 命令注册，写入 `~/.claude.json`。手动创建 `.mcp.json` 文件无效。
+
+**Tmux Hub + 状态机简化 + UI 流程 ✅**
+
+- [x] Tmux Hub 页面 (`/tmux`) — 裸 tmux 列表 / 创建 (带目录选择器) / kill / dead-pane 检测
+- [x] 自动转移检测 — 在预先存在的 tmux 里起 claude 会自动标记为 From Tmux
+- [x] Dashboard `+ New` 按钮 — 复用目录选择器,POST `/api/tmux/new` 带 `command=claude`,一键起 tmux+claude
+- [x] Hub-launched 会话不会被误判为 transferred — 用进程内 TTL set 记录,绕过 `_detect_transferred` 的时间阈值
+- [x] Dead-tmux sweep — `_sweep_dead_tmux` 每 60s 跑一次 `tmux ls`,跟 DB 做集合差,tmux 死了立刻 (<60s) 翻到 stopped
+- [x] 状态机彻底去时间化 — 删掉 `idle_timeout_minutes` 配置、`get_stale_sessions` 函数、`sweep_stale_sessions` 里的时间 cutoff 分支。idle 永久保留直到 tmux 死,实现"睡一觉醒来老会话还在"
+- [x] 分离 Idle / Stopped 页面 — 主 Dashboard 只展示 active (+ waiting);Idle/Stopped stat 卡片点击进入独立页面
+- [x] Delete 按钮 — 每张 idle/stopped 卡片一个;idle delete 会先 `tmux kill-session` 再清 DB 行 (避免"点了 Delete 但会话因 Claude 下次发事件又回来"的悬浮 bug)
+- [x] `POST /api/sessions/clear-stopped` + Stopped 页面 Clear All 按钮 — 一键清空历史
+- [x] 审批解析器升级 — 从硬依赖箱体边框 `│` 改成锚定 `❯ 1. Yes` pattern,既支持 boxed 又支持 unboxed 渲染;向上扫描窗口从 12 行扩到 25 行,并识别 `Bash command` / `Edit file` 等 header,工具名识别更准
+- [x] `SessionResponse` 补全 `pending_detail` 字段 — 之前 pydantic model 漏了,API 只返 `pending_tool`
+- [x] Running/Waiting 互斥 — `_enrich_running` 发现有 `pending_tool` 时 early-return,避免出现"Running Bash"和"waiting: Bash"同时显示
+- [x] Tmux 名字复用自动退休 — `ensure_session` 在创建新 session row 前,把同名 `tmux_session` 的旧 active/idle 行批量标 stopped。防止 tmux 名字复用导致的孤儿行累积
+
+**新增的踩坑 (接续 Phase 2 的 12 条)：**
+
+13. **Running 与 Waiting 语义冲突** — 当 `_enrich_running` 只看 `last_event == PreToolUse` + elapsed > 30s,会把等审批的会话(PreToolUse 已触发,用户没批)误标为 Running。修复:把 pending_tool 作为 early-return 条件,两者互斥。
+
+14. **审批提示的无框渲染** — Claude Code 的审批 UI 并非总是用 `│` 边框,Bash with shell-metachar warning 等场景会是纯文本。原解析器要求选择器行同时含 `│` 和 `❯`,会整体漏判。锚定 `❯ 1. Yes` 比箱体更可靠,同时兼容两种样式。
+
+15. **Tmux 名字复用产生幽灵 idle 行** — 昨天的 `claude-proj-1` 退出 → tmux 可能死了或被重建 → 今天又起了一个 `claude-proj-1`,新 claude 是不同的 session_id,DB 增加一行。老的 `_sweep_stale_sessions` 用 tmux 名字匹配活 tmux 就 `touch_session`,把昨天的老行 last_seen_at 一直续命。修:`ensure_session` 在创建新行时直接退休同名旧行。
+
+16. **Hub-launched claude 会被 `_detect_transferred` 误判** — `tmux new-session -d claude` 到 SessionStart 中间有 claude 的 workspace trust prompt 卡住,实际延迟可能远超 5s 阈值。加一个 `_HUB_LAUNCHED_TMUX` TTL set (120s),`_detect_transferred` 开头查一次就直接 return 0。
+
+17. **idle→stopped 不应由时间驱动** — 30 分钟 cutoff 本质上是 "最近没动就判死",但一个用户睡一觉醒来想继续的 idle session 根本没死,只是没动。正确的语义是:idle 只要 tmux 还活着就保留,stopped 只由 tmux 死亡触发。这是对 Phase 1 状态机的根本性修正。
 
 **Web Terminal 集成 — tmux 持久化 + Dashboard 联动**
 

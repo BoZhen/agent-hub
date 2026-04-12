@@ -30,6 +30,8 @@ async def _enrich_running(conn, session: dict) -> dict:
     """
     if session.get("status") != "active":
         return session
+    if session.get("pending_tool"):
+        return session
     last = await db.get_last_event(conn, session["session_id"])
     if not last or last.get("event_type") != "PreToolUse":
         return session
@@ -71,14 +73,10 @@ def _terminal_url(request: Request) -> str:
     return f"http://{host}:{port}"
 
 
-async def _fetch_active_idle(conn, transferred: int) -> list[dict]:
-    active = await db.get_sessions(
+async def _fetch_active(conn, transferred: int) -> list[dict]:
+    sessions = await db.get_sessions(
         conn, status="active", limit=100, transferred=transferred,
     )
-    idle = await db.get_sessions(
-        conn, status="idle", limit=100, transferred=transferred,
-    )
-    sessions = active + idle
     for s in sessions:
         await _enrich_running(conn, s)
     return sessions
@@ -87,8 +85,8 @@ async def _fetch_active_idle(conn, transferred: int) -> list[dict]:
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    sessions_native = await _fetch_active_idle(conn, transferred=0)
-    sessions_from_tmux = await _fetch_active_idle(conn, transferred=1)
+    sessions_native = await _fetch_active(conn, transferred=0)
+    sessions_from_tmux = await _fetch_active(conn, transferred=1)
     stats = await db.get_stats(conn)
 
     # Get recent events across all sessions
@@ -126,6 +124,22 @@ async def stopped_sessions(request: Request):
             "sessions": sessions,
             "terminal_url": terminal_url,
             "current_page": "stopped",
+        },
+    )
+
+
+@router.get("/idle", response_class=HTMLResponse)
+async def idle_sessions(request: Request):
+    conn = request.app.state.db
+    sessions = await db.get_sessions(conn, status="idle", limit=200)
+    terminal_url = _terminal_url(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="idle.html",
+        context={
+            "sessions": sessions,
+            "terminal_url": terminal_url,
+            "current_page": "idle",
         },
     )
 

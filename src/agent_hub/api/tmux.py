@@ -4,11 +4,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
+
+_ALLOWED_COMMANDS = {"claude", "codex"}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,10 +75,13 @@ async def list_tmux(request: Request) -> dict[str, list]:
 class NewTmuxRequest(BaseModel):
     name: str | None = None
     cwd: str
+    command: str | None = None  # e.g. "claude" — launched inside the new tmux
 
 
-def _auto_name(cwd: str, existing: set[str]) -> str:
+def _auto_name(cwd: str, existing: set[str], prefix: str = "") -> str:
     base = os.path.basename(cwd.rstrip("/")) or "tmux"
+    if prefix:
+        base = f"{prefix}-{base}"
     i = 1
     while f"{base}-{i}" in existing:
         i += 1
@@ -103,6 +109,17 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
     if not os.access(resolved, os.R_OK | os.X_OK):
         raise HTTPException(400, f"cwd is not accessible: {req.cwd}")
 
+    cmd_path: str | None = None
+    if req.command:
+        if req.command not in _ALLOWED_COMMANDS:
+            raise HTTPException(
+                400,
+                f"command must be one of {sorted(_ALLOWED_COMMANDS)}",
+            )
+        cmd_path = shutil.which(req.command)
+        if not cmd_path:
+            raise HTTPException(400, f"command not found in PATH: {req.command}")
+
     existing_sessions = await _tmux_ls()
     existing_names = {s["name"] for s in existing_sessions}
 
@@ -116,10 +133,18 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
         if name in existing_names:
             raise HTTPException(409, f"tmux session '{name}' already exists")
     else:
-        name = _auto_name(str(resolved), existing_names)
+        name = _auto_name(
+            str(resolved), existing_names, prefix=req.command or "",
+        )
+
+    tmux_args = [
+        "tmux", "new-session", "-d", "-s", name, "-c", str(resolved),
+    ]
+    if cmd_path:
+        tmux_args.append(cmd_path)
 
     proc = await asyncio.create_subprocess_exec(
-        "tmux", "new-session", "-d", "-s", name, "-c", str(resolved),
+        *tmux_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -128,7 +153,11 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
         err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
         raise HTTPException(500, f"tmux new-session failed: {err}")
 
-    return {"name": name, "cwd": str(resolved)}
+    if cmd_path:
+        from agent_hub.services.session_manager import mark_hub_launched
+        mark_hub_launched(name)
+
+    return {"name": name, "cwd": str(resolved), "command": req.command}
 
 
 class KillTmuxRequest(BaseModel):

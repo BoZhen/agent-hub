@@ -191,17 +191,6 @@ async def update_session_status(
     await db.commit()
 
 
-async def get_stale_sessions(
-    db: aiosqlite.Connection, cutoff: datetime
-) -> list[dict]:
-    cursor = await db.execute(
-        "SELECT * FROM sessions WHERE status IN ('active', 'idle') AND last_seen_at < ?",
-        (cutoff.isoformat(),),
-    )
-    rows = await cursor.fetchall()
-    return [dict(r) for r in rows]
-
-
 async def get_sessions(
     db: aiosqlite.Connection,
     status: str | None = None,
@@ -237,16 +226,41 @@ async def get_session(
 
 
 async def delete_session(db: aiosqlite.Connection, session_id: str) -> bool:
+    """Delete a session and its events. Refuses active sessions so
+    live work can't be wiped by accident; idle and stopped are fine."""
     cursor = await db.execute(
         "SELECT status FROM sessions WHERE session_id = ?", (session_id,)
     )
     row = await cursor.fetchone()
-    if not row or row["status"] != "stopped":
+    if not row or row["status"] == "active":
         return False
     await db.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
     await db.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
     await db.commit()
     return True
+
+
+async def delete_stopped_sessions(db: aiosqlite.Connection) -> int:
+    """Delete every session with status='stopped' and its events.
+    Returns the number of sessions removed."""
+    cursor = await db.execute(
+        "SELECT session_id FROM sessions WHERE status = 'stopped'"
+    )
+    rows = await cursor.fetchall()
+    ids = [r["session_id"] for r in rows]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    await db.execute(
+        f"DELETE FROM events WHERE session_id IN ({placeholders})",
+        ids,
+    )
+    await db.execute(
+        f"DELETE FROM sessions WHERE session_id IN ({placeholders})",
+        ids,
+    )
+    await db.commit()
+    return len(ids)
 
 
 # ── Event CRUD ────────────────────────────────────────────────

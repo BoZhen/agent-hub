@@ -12,10 +12,10 @@
     <div class="text-xs text-gray-400 uppercase tracking-wide">Waiting</div>
     <div class="text-2xl font-bold text-yellow-400" id="stat-waiting">{{ stats.waiting_sessions }}</div>
   </div>
-  <div class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30">
+  <a href="/idle" class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30 hover:bg-surface-lighter transition block">
     <div class="text-xs text-gray-400 uppercase tracking-wide">Idle</div>
     <div class="text-2xl font-bold status-idle" id="stat-idle">{{ stats.idle_sessions }}</div>
-  </div>
+  </a>
   <a href="/stopped" class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30 hover:bg-surface-lighter transition block">
     <div class="text-xs text-gray-400 uppercase tracking-wide">Stopped</div>
     <div class="text-2xl font-bold status-stopped" id="stat-stopped">{{ stats.stopped_sessions }}</div>
@@ -36,8 +36,7 @@
           {% if s.pending_tool %}
           <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
                 id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
-          {% endif %}
-          {% if s.running_tool %}
+          {% elif s.running_tool %}
           <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
                 id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
           {% endif %}
@@ -99,13 +98,17 @@
               class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
         From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
       </button>
+      <button id="btn-new-claude" type="button"
+              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+        + New
+      </button>
     </div>
     <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
       {% for s in sessions_native %}
         {{ session_card(s, terminal_url) }}
       {% endfor %}
       {% if not sessions_native %}
-      <div class="text-gray-500 text-sm py-8 text-center">No sessions yet. Start a Claude Code session with hooks configured.</div>
+      <div class="text-gray-500 text-sm py-8 text-center">No active sessions. Parked sessions live on the <a href="/idle" class="text-accent-light hover:text-white">Idle</a> page.</div>
       {% endif %}
     </div>
     <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
@@ -135,6 +138,33 @@
       <div class="text-gray-500 text-sm py-4 text-center">No events yet.</div>
       {% endif %}
     </div>
+  </div>
+</div>
+
+<!-- Modal: new Claude session (tmux + claude) -->
+<div id="modal-new-claude" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4">
+  <div class="bg-surface-light rounded-lg p-4 sm:p-6 w-full max-w-lg border border-gray-700/50 max-h-[90vh] overflow-y-auto">
+    <h2 class="text-base sm:text-lg font-bold text-white mb-3">New Claude Session</h2>
+
+    <label class="block text-xs text-gray-400 mb-1">Name (leave empty for auto)</label>
+    <input id="nc-name" type="text" placeholder="auto-generated"
+           class="w-full bg-surface text-gray-200 text-sm rounded px-3 py-2 border border-gray-700/50 focus:border-accent focus:outline-none mb-3">
+
+    <label class="block text-xs text-gray-400 mb-1">Working directory</label>
+    <div id="nc-breadcrumb" class="flex items-center gap-1 flex-wrap text-xs text-gray-400 mb-2"></div>
+    <div id="nc-dir-list" class="bg-surface rounded border border-gray-700/50 max-h-64 overflow-y-auto mb-4"></div>
+
+    <div class="flex items-center justify-end gap-2">
+      <button id="nc-cancel" type="button"
+              class="text-xs px-3 py-1.5 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 transition">
+        Cancel
+      </button>
+      <button id="nc-create" type="button"
+              class="text-xs px-3 py-1.5 rounded bg-accent hover:bg-accent-light text-white font-semibold transition">
+        Create
+      </button>
+    </div>
+    <div id="nc-error" class="text-xs text-red-400 mt-2 hidden"></div>
   </div>
 </div>
 {% endblock %}
@@ -299,6 +329,120 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.getElementById('tab-panel-native').classList.toggle('hidden', name !== 'native');
     document.getElementById('tab-panel-tmux').classList.toggle('hidden', name !== 'tmux');
   });
+});
+
+// ── New Claude session modal ──
+const TERMINAL_URL = "{{ terminal_url }}";
+let ncBrowsePath = null;
+
+function ncShowError(msg) {
+  const el = document.getElementById('nc-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function ncClearError() {
+  document.getElementById('nc-error').classList.add('hidden');
+}
+
+async function ncBrowse(path) {
+  const url = '/api/browse' + (path ? ('?path=' + encodeURIComponent(path)) : '');
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({detail: res.statusText}));
+    throw new Error(err.detail || 'browse failed');
+  }
+  const data = await res.json();
+  ncBrowsePath = data.path;
+  ncRenderCrumb(data.path);
+  ncRenderDirList(data);
+}
+
+function ncRenderCrumb(path) {
+  const parts = path.split('/').filter(Boolean);
+  const crumbs = [{name: '/', path: '/'}];
+  let acc = '';
+  for (const p of parts) {
+    acc += '/' + p;
+    crumbs.push({name: p, path: acc});
+  }
+  const el = document.getElementById('nc-breadcrumb');
+  el.innerHTML = crumbs.map((c, i) => {
+    if (i === crumbs.length - 1) {
+      return `<span class="text-white font-semibold">${escapeHtml(c.name)}</span>`;
+    }
+    return `<a href="#" data-path="${escapeHtml(c.path)}" class="nc-crumb hover:text-white transition">${escapeHtml(c.name)}</a><span class="text-gray-600">/</span>`;
+  }).join('');
+  el.querySelectorAll('.nc-crumb').forEach(a => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ncBrowse(a.dataset.path).catch(e => ncShowError(e.message));
+    });
+  });
+}
+
+function ncRenderDirList(data) {
+  const el = document.getElementById('nc-dir-list');
+  const rows = [];
+  if (data.parent) {
+    rows.push(`<button type="button" data-path="${escapeHtml(data.parent)}" class="nc-entry w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-lighter transition border-b border-gray-700/30">.. (parent)</button>`);
+  }
+  for (const e of (data.entries || [])) {
+    const child = data.path.endsWith('/') ? data.path + e.name : data.path + '/' + e.name;
+    rows.push(`<button type="button" data-path="${escapeHtml(child)}" class="nc-entry w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-surface-lighter transition border-b border-gray-700/30">${escapeHtml(e.name)}/</button>`);
+  }
+  el.innerHTML = rows.length ? rows.join('') : '<div class="text-gray-500 text-xs py-3 text-center">(empty)</div>';
+  el.querySelectorAll('.nc-entry').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ncBrowse(btn.dataset.path).catch(e => ncShowError(e.message));
+    });
+  });
+}
+
+function ncOpen() {
+  ncClearError();
+  document.getElementById('nc-name').value = '';
+  const modal = document.getElementById('modal-new-claude');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  ncBrowse('').catch(e => ncShowError(e.message));
+}
+function ncClose() {
+  const modal = document.getElementById('modal-new-claude');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+async function ncCreate() {
+  ncClearError();
+  if (!ncBrowsePath) {
+    ncShowError('Pick a directory first');
+    return;
+  }
+  const name = document.getElementById('nc-name').value.trim();
+  try {
+    const res = await fetch('/api/tmux/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name || null, cwd: ncBrowsePath, command: 'claude'}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      ncShowError(err.detail || 'create failed');
+      return;
+    }
+    const data = await res.json();
+    ncClose();
+    window.open(`${TERMINAL_URL}/?attach=${encodeURIComponent(data.name)}`, '_blank');
+  } catch (e) {
+    ncShowError(e.message);
+  }
+}
+
+document.getElementById('btn-new-claude').addEventListener('click', ncOpen);
+document.getElementById('nc-cancel').addEventListener('click', ncClose);
+document.getElementById('nc-create').addEventListener('click', ncCreate);
+document.getElementById('modal-new-claude').addEventListener('click', (ev) => {
+  if (ev.target.id === 'modal-new-claude') ncClose();
 });
 </script>
 {% endblock %}
