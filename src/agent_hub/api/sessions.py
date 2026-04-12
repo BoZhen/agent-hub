@@ -114,10 +114,24 @@ async def approve_session(
     session_id: str,
     always: bool = Query(default=False),
 ):
-    """Send approval to the tmux session where this Claude Code is running.
+    """Send approval to the tmux session where the agent is running.
 
-    If always=False (default): select option 1 "Yes" (approve once).
-    If always=True: select option 2 "Yes, allow for this session".
+    Dispatch by tool:
+    - Claude: option 1 via Web Terminal `y\\n`, option 2 via tmux
+      `Down Enter` (tmux send-keys can't send single keys for Claude's
+      approval navigation without Web Terminal mediation).
+    - Codex: `Enter` confirms option 1 (default highlighted); `Down
+      Enter` navigates to option 2 and confirms. We originally tried
+      the single-key shortcuts `(y)` / `(p)` codex advertises, but
+      that left the key char echoing in codex's prompt input after
+      the UI dismissed. `Enter`-based navigation leaves no residue
+      and mirrors the Claude Always path, so both tools share the
+      same key sequence for option 2.
+
+    The `always=True` path is guarded against stale state: if the
+    session has no active `pending_always_label`, we 400. This
+    protects both Claude and Codex from Telegram inline buttons
+    arriving after the user already resolved the prompt manually.
     """
     conn = request.app.state.db
     session = await db.get_session(conn, session_id)
@@ -128,11 +142,37 @@ async def approve_session(
     if not tmux_name:
         raise HTTPException(
             status_code=400,
-            detail="No tmux session associated with this session. Claude Code must be running inside tmux.",
+            detail="No tmux session associated with this session. The agent must be running inside tmux.",
         )
 
+    if always and not session.get("pending_always_label"):
+        raise HTTPException(
+            status_code=400,
+            detail="No active 'always' option on this session",
+        )
+
+    tool = session.get("tool") or "claude"
+
+    if tool == "codex":
+        # Option 1 is highlighted by default; Enter confirms it.
+        # For Always, Down navigates to option 2, then Enter confirms.
+        keys = ("Down", "Enter") if always else ("Enter",)
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "send-keys", "-t", f"{tmux_name}:", *keys,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip() if stderr else "unknown error"
+            raise HTTPException(
+                status_code=400,
+                detail=f"tmux send-keys failed: {err_msg}",
+            )
+        return {"ok": True, "tmux_session": tmux_name, "always": always}
+
     if always:
-        # Select option 2: Down arrow + Enter, via direct tmux send-keys.
+        # Claude option 2: Down arrow + Enter, via direct tmux send-keys.
         # Trailing colon forces session-level target (avoids pane lookup errors).
         proc = await asyncio.create_subprocess_exec(
             "tmux", "send-keys", "-t", f"{tmux_name}:", "Down", "Enter",
@@ -147,7 +187,7 @@ async def approve_session(
                 detail=f"tmux send-keys failed: {err_msg}",
             )
     else:
-        # Select option 1: send 'y' + Enter via Web Terminal API
+        # Claude option 1: send 'y' + Enter via Web Terminal API
         terminal_port = request.app.state.config.terminal_port
         try:
             async with httpx.AsyncClient() as client:

@@ -344,7 +344,16 @@ async def _discover_codex_tmux(
             continue
 
         pane = await _tmux_capture(name)
-        if pane is None or not _is_codex_pane(pane):
+        if pane is None:
+            continue
+
+        # For brand-new tmux (not yet in DB) we need the codex signature
+        # to decide whether this is even a codex session. But once we've
+        # recorded it in DB as a codex session, trust that: the signature
+        # (welcome box / status line `weekly` token) can scroll off in
+        # narrow terminals with a tall approval UI, and we still want to
+        # track pane activity and detect approvals in that state.
+        if existing is None and not _is_codex_pane(pane):
             continue
 
         new_hash = _hash_pane(pane)
@@ -615,6 +624,149 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, str | None] | None
     return ("Tool", detail[:150], always_label)
 
 
+# ── Codex approval parser ───────────────────────────────────────
+#
+# Codex's approval UI is structurally parallel to Claude's but uses
+# different characters and phrasing. Key differences:
+#   - Selector char `›` (U+203A) vs Claude's `❯` (U+276F)
+#   - Question "Would you like to run the following command?"
+#   - Command shown after a `$ ` prefix (may span continuation lines)
+#   - Single-key shortcuts `(y)` / `(p)` / `(esc)` next to each option
+#   - Option 2 (when present) is "Yes, and don't ask again for
+#     commands that start with `<prefix>`" — a command-prefix allowlist
+#
+# We require three signals to match before reporting pending:
+#   1. `› 1. Yes` anchor in the last 12 lines
+#   2. `Press enter to confirm or esc to cancel` footer in same window
+#   3. One of the `_CODEX_QUESTION_PATTERNS` phrases within 15 lines
+#      above the selector
+# The 12-line tail is tighter than Claude's 30 because the codex
+# approval block is small and a stale prompt would otherwise risk
+# matching from a few lines up.
+
+_CODEX_SELECTOR = "\u203a"  # ›
+_CODEX_SELECTOR_OPTION_RE = _re.compile(_CODEX_SELECTOR + r"\s+1\.\s+Yes")
+_CODEX_FOOTER_RE = _re.compile(r"Press enter to confirm or esc to cancel")
+_CODEX_OPTION2_RE = _re.compile(r"^\s*2\.\s+(Yes.*)$")
+_CODEX_OPTION3_RE = _re.compile(r"^\s*3\.\s")
+_CODEX_OPTION_P_HINT_RE = _re.compile(r"\s*\(p\)\s*$")
+
+# (question_phrase, tool_name) — extension point for future codex
+# approval UIs (e.g. apply_patch / file-edit variants). Phase 2 ships
+# with only the bash-run path since that's the only variant captured
+# in the wild so far. The phrase must be short enough to survive
+# narrow-pane word wrap — codex breaks lines at word boundaries,
+# so "Would you like to run" as a 5-word prefix fits on any
+# reasonable terminal width.
+_CODEX_QUESTION_PATTERNS: list[tuple[str, str]] = [
+    ("Would you like to run", "Bash"),
+]
+
+
+def _parse_codex_approval_prompt(
+    pane_text: str,
+) -> tuple[str, str, str | None] | None:
+    """Parse Codex CLI approval prompt from tmux pane text.
+
+    Returns (tool_name, detail, always_label) or None — same shape as
+    `_parse_approval_prompt` so `periodic_pending_check` can dispatch
+    on session tool and treat both the same downstream.
+
+    `always_label` is the verbatim option-2 text ("Yes, and don't
+    ask again for commands that start with `...`") for 3-option
+    variants, or None for 2-option variants (which only have Yes/No).
+    """
+    lines = pane_text.splitlines()
+    # tmux capture-pane returns a fixed-height grid, so panes shorter
+    # than the window have trailing blank rows. Strip them so our
+    # "last N lines" windowing reflects the real UI position.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    total = len(lines)
+    if total == 0:
+        return None
+
+    tail_start = max(0, total - 12)
+
+    # Signal 1: `› 1. Yes` must be in the last 12 lines
+    selector_idx = None
+    for i in range(total - 1, tail_start - 1, -1):
+        if _CODEX_SELECTOR_OPTION_RE.search(lines[i]):
+            selector_idx = i
+            break
+    if selector_idx is None:
+        return None
+
+    # Signal 2: `Press enter to confirm or esc to cancel` footer must
+    # also be in the tail window — this guards against a stale prompt
+    # that hasn't been redrawn away yet.
+    footer_found = False
+    for i in range(tail_start, total):
+        if _CODEX_FOOTER_RE.search(lines[i]):
+            footer_found = True
+            break
+    if not footer_found:
+        return None
+
+    # Signal 3: question phrase within 15 lines above the selector.
+    tool_name: str | None = None
+    question_idx: int | None = None
+    for i in range(max(0, selector_idx - 15), selector_idx):
+        for phrase, t_name in _CODEX_QUESTION_PATTERNS:
+            if phrase in lines[i]:
+                question_idx = i
+                tool_name = t_name
+                break
+        if question_idx is not None:
+            break
+    if question_idx is None or tool_name is None:
+        return None
+
+    # Extract detail: find `$ ` line between question and selector.
+    # Continuation lines (indented, not starting with `$ ` or `›`)
+    # get joined with a space — codex wraps long commands onto
+    # multiple indented rows.
+    detail = ""
+    for i in range(question_idx + 1, selector_idx):
+        stripped = lines[i].strip()
+        if stripped.startswith("$ "):
+            parts = [stripped[2:]]
+            for j in range(i + 1, selector_idx):
+                nxt = lines[j].strip()
+                if not nxt:
+                    continue
+                if nxt.startswith("$ ") or nxt.startswith(_CODEX_SELECTOR):
+                    break
+                parts.append(nxt)
+                if len(parts) >= 4:
+                    break
+            detail = " ".join(parts).strip()
+            break
+    detail = detail[:150]
+
+    # Extract option 2 verbatim text when the 3-option (always) variant
+    # is present. The option-2 line may wrap: the continuation is
+    # indented, often just the `(p)` key hint on its own line.
+    always_label: str | None = None
+    for i in range(selector_idx + 1, min(total, selector_idx + 8)):
+        m = _CODEX_OPTION2_RE.match(lines[i])
+        if m:
+            parts = [m.group(1).strip()]
+            for j in range(i + 1, min(total, i + 4)):
+                nxt = lines[j]
+                if not nxt.strip():
+                    break
+                if _CODEX_OPTION3_RE.match(nxt):
+                    break
+                parts.append(nxt.strip())
+            text = " ".join(parts)
+            text = _CODEX_OPTION_P_HINT_RE.sub("", text).strip()
+            always_label = text[:250]
+            break
+
+    return (tool_name, detail, always_label)
+
+
 async def periodic_pending_check(
     conn: aiosqlite.Connection, hub_id: str
 ) -> None:
@@ -659,7 +811,10 @@ async def periodic_pending_check(
                         })
                     continue
 
-                parsed = _parse_approval_prompt(pane_text)
+                if session.get("tool") == "codex":
+                    parsed = _parse_codex_approval_prompt(pane_text)
+                else:
+                    parsed = _parse_approval_prompt(pane_text)
 
                 if parsed:
                     pending_tool, pending_detail, always_label = parsed
