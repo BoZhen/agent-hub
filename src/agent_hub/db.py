@@ -47,6 +47,8 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN tmux_session TEXT",
     "ALTER TABLE sessions ADD COLUMN pending_detail TEXT",
     "ALTER TABLE sessions ADD COLUMN transferred INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0",
+    "ALTER TABLE sessions ADD COLUMN pending_always_label TEXT",
 ]
 
 
@@ -136,10 +138,11 @@ async def update_session_pending_tool(
     session_id: str,
     pending_tool: str | None,
     pending_detail: str | None = None,
+    pending_always_label: str | None = None,
 ) -> None:
     await db.execute(
-        "UPDATE sessions SET pending_tool = ?, pending_detail = ? WHERE session_id = ?",
-        (pending_tool, pending_detail, session_id),
+        "UPDATE sessions SET pending_tool = ?, pending_detail = ?, pending_always_label = ? WHERE session_id = ?",
+        (pending_tool, pending_detail, pending_always_label, session_id),
     )
     await db.commit()
 
@@ -180,7 +183,7 @@ async def update_session_status(
     if status == "stopped":
         params = (status, _now(), session_id)
         await db.execute(
-            "UPDATE sessions SET status = ?, stopped_at = ? WHERE session_id = ?",
+            "UPDATE sessions SET status = ?, stopped_at = ?, pinned = 0 WHERE session_id = ?",
             params,
         )
     else:
@@ -191,12 +194,23 @@ async def update_session_status(
     await db.commit()
 
 
+async def set_session_pinned(
+    db: aiosqlite.Connection, session_id: str, pinned: bool
+) -> None:
+    await db.execute(
+        "UPDATE sessions SET pinned = ? WHERE session_id = ?",
+        (1 if pinned else 0, session_id),
+    )
+    await db.commit()
+
+
 async def get_sessions(
     db: aiosqlite.Connection,
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
     transferred: int | None = None,
+    pinned: int | None = None,
 ) -> list[dict]:
     conditions: list[str] = []
     params: list = []
@@ -206,6 +220,9 @@ async def get_sessions(
     if transferred is not None:
         conditions.append("COALESCE(transferred, 0) = ?")
         params.append(transferred)
+    if pinned is not None:
+        conditions.append("COALESCE(pinned, 0) = ?")
+        params.append(pinned)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     cursor = await db.execute(
         f"SELECT * FROM sessions {where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",

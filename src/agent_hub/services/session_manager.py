@@ -339,9 +339,10 @@ _SELECTOR = "\u276f"       # ❯
 
 import re as _re
 _SELECTOR_OPTION_RE = _re.compile(_SELECTOR + r"\s+1\.\s+Yes")
+_OPTION2_RE = _re.compile(r"^\s*2\.\s+(Yes.*?)\s*$")
 
 
-def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
+def _parse_approval_prompt(pane_text: str) -> tuple[str, str, str | None] | None:
     """Parse Claude Code approval prompt from tmux pane text.
 
     The approval UI's first option is always "❯ 1. Yes", rendered either
@@ -354,7 +355,12 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     2. The selector is near the bottom of the pane (active UI state).
     3. An approval question pattern within ~15 lines above the selector.
 
-    Returns (tool_name, detail, has_always) or None.
+    Returns (tool_name, detail, always_label) or None. `always_label` is
+    the full text of option 2 ("Yes, ...") if the prompt has three
+    options, else None. Claude Code's option 2 scope varies per tool
+    (path whitelist, command prefix, or session-wide allow) — we store
+    the verbatim text so the UI can show the user what they're actually
+    agreeing to before clicking Always.
     """
     lines = pane_text.splitlines()
     total = len(lines)
@@ -387,11 +393,16 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
     if prompt_idx is None:
         return None
 
-    # Detect if there are 3 options (has "allow" / "3. No") or just 2.
-    after_prompt = " ".join(
-        lines[prompt_idx:min(total, prompt_idx + 10)]
-    )
-    has_always = "3. No" in after_prompt or "allow" in after_prompt.lower()
+    # Extract option 2 verbatim. Starts at selector_idx + 1 (line right
+    # after "❯ 1. Yes"). Two-option prompts have "2. No" which won't
+    # match `r"2\.\s+Yes"`, so always_label stays None for those.
+    always_label: str | None = None
+    for i in range(selector_idx + 1, min(total, selector_idx + 10)):
+        stripped = lines[i].strip().strip(_BOX_VERTICAL).strip()
+        m = _OPTION2_RE.match(stripped)
+        if m:
+            always_label = m.group(1).strip()[:200]
+            break
 
     # Regex match the prompt area (box borders stripped) for tool info.
     import re
@@ -403,19 +414,19 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
 
     m = re.search(r"make this edit to (.+?)\?", prompt_area)
     if m:
-        return ("Edit", m.group(1).strip()[:150], has_always)
+        return ("Edit", m.group(1).strip()[:150], always_label)
 
     m = re.search(r"execute (.+?)\?", prompt_area)
     if m:
-        return ("Bash", m.group(1).strip()[:150], has_always)
+        return ("Bash", m.group(1).strip()[:150], always_label)
 
     m = re.search(r"create (.+?)\?", prompt_area)
     if m:
-        return ("Write", m.group(1).strip()[:150], has_always)
+        return ("Write", m.group(1).strip()[:150], always_label)
 
     m = re.search(r"delete (.+?)\?", prompt_area)
     if m:
-        return ("Delete", m.group(1).strip()[:150], has_always)
+        return ("Delete", m.group(1).strip()[:150], always_label)
 
     # Header-based detection: scan up to 25 lines above prompt for a
     # tool preview box header (e.g. "Bash command", "Edit file"). The
@@ -440,8 +451,8 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
                 continue
             if "evaluates arguments as shell code" in stripped:
                 continue
-            return (header_tool, stripped[:150], has_always)
-        return (header_tool, "", has_always)
+            return (header_tool, stripped[:150], always_label)
+        return (header_tool, "", always_label)
 
     # Scan backwards from prompt for tool info (inside the box — strip
     # box vertical borders before matching).
@@ -451,16 +462,16 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, bool] | None:
         if not stripped or all(c in "\u256c\u2500\u2501\u2550" for c in stripped):
             continue
         if "(MCP)" in stripped:
-            return ("MCP", stripped[:150], has_always)
+            return ("MCP", stripped[:150], always_label)
         if stripped.startswith("$ "):
-            return ("Bash", stripped[2:150], has_always)
+            return ("Bash", stripped[2:150], always_label)
         for t in ("Read", "Write", "Edit", "Glob", "Grep", "Agent", "WebSearch", "WebFetch"):
             if stripped.startswith(t + "(") or stripped.startswith(t + " "):
-                return (t, stripped[:150], has_always)
+                return (t, stripped[:150], always_label)
         if not detail:
             detail = stripped
 
-    return ("Tool", detail[:150], has_always)
+    return ("Tool", detail[:150], always_label)
 
 
 async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
@@ -504,10 +515,16 @@ async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
                 parsed = _parse_approval_prompt(pane_text)
 
                 if parsed:
-                    pending_tool, pending_detail, has_always = parsed
-                    if pending_tool != db_tool or pending_detail != session.get("pending_detail"):
+                    pending_tool, pending_detail, always_label = parsed
+                    has_always = always_label is not None
+                    db_label = session.get("pending_always_label")
+                    if (
+                        pending_tool != db_tool
+                        or pending_detail != session.get("pending_detail")
+                        or always_label != db_label
+                    ):
                         await db.update_session_pending_tool(
-                            conn, sid, pending_tool, pending_detail,
+                            conn, sid, pending_tool, pending_detail, always_label,
                         )
                         stats = await db.get_stats(conn)
                         await broadcaster.broadcast({
@@ -516,13 +533,14 @@ async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
                             "pending_tool": pending_tool,
                             "pending_detail": pending_detail,
                             "has_always": has_always,
+                            "always_label": always_label,
                             "tmux_session": tmux_name,
                             "waiting_count": stats["waiting_sessions"],
                         })
                         # Re-fetch session with updated pending fields
                         updated_session = await db.get_session(conn, sid)
                         await tg_notify_pending(
-                            sid, updated_session or session, has_always
+                            sid, updated_session or session, has_always, always_label,
                         )
                 elif db_tool:
                     # Prompt gone — tool was approved or cancelled

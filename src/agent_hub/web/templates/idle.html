@@ -12,9 +12,22 @@
 
 <div id="sessions-list" class="space-y-2 sm:space-y-3">
   {% for s in sessions %}
-  <div id="card-{{ s.session_id }}" class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition">
-    <a href="/sessions/{{ s.session_id }}" class="block">
-      <div class="flex items-center justify-between mb-1.5 sm:mb-2">
+  <div id="card-{{ s.session_id }}" class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative">
+    <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
+      <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+      <button type="button"
+              onclick="togglePin('{{ s.session_id }}', this)"
+              data-pinned="{{ 1 if s.pinned else 0 }}"
+              data-status="{{ s.status }}"
+              class="pin-btn p-0.5 {% if s.pinned %}text-accent-light hover:text-white{% else %}text-gray-600 hover:text-gray-300{% endif %} transition"
+              title="{% if s.pinned %}Unpin from dashboard{% else %}Pin to dashboard{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
+        </svg>
+      </button>
+    </div>
+    <a href="/sessions/{{ s.session_id }}" class="block pr-8">
+      <div class="flex items-center mb-1.5 sm:mb-2">
         <div class="flex items-center gap-2">
           <span class="dot dot-idle"></span>
           <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
@@ -22,7 +35,6 @@
           <span class="text-xs text-gray-500">{{ s.hostname }}</span>
           {% endif %}
         </div>
-        <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
       </div>
       <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
       {% if s.output_tokens %}
@@ -57,6 +69,36 @@
 
 {% block scripts %}
 <script>
+function togglePin(sessionId, btn) {
+  const wasPinned = btn.dataset.pinned === '1';
+  const newPinned = !wasPinned;
+  btn.disabled = true;
+  fetch(`/api/sessions/${sessionId}/pin`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pinned: newPinned}),
+  })
+    .then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        alert('Pin failed: ' + (err.detail || 'unknown'));
+        btn.disabled = false;
+        return;
+      }
+      btn.dataset.pinned = newPinned ? '1' : '0';
+      btn.title = newPinned ? 'Unpin from dashboard' : 'Pin to dashboard';
+      btn.classList.toggle('text-accent-light', newPinned);
+      btn.classList.toggle('hover:text-white', newPinned);
+      btn.classList.toggle('text-gray-600', !newPinned);
+      btn.classList.toggle('hover:text-gray-300', !newPinned);
+      btn.disabled = false;
+    })
+    .catch(e => {
+      alert('Error: ' + e.message);
+      btn.disabled = false;
+    });
+}
+
 function deleteSession(sessionId, hasTmux, btn) {
   const msg = hasTmux
     ? 'This will kill the tmux session and terminate Claude. Continue?'

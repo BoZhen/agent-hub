@@ -73,29 +73,32 @@ def _terminal_url(request: Request) -> str:
     return f"http://{host}:{port}"
 
 
-async def _fetch_active(conn, transferred: int) -> list[dict]:
-    sessions = await db.get_sessions(
+async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
+    """Sessions visible on the main dashboard: everything active,
+    plus idle sessions the user pinned so they don't fall off into
+    /idle. Actives come first, then pinned idle — both sorted by
+    last_seen_at DESC within their bucket."""
+    actives = await db.get_sessions(
         conn, status="active", limit=100, transferred=transferred,
     )
+    pinned_idle = await db.get_sessions(
+        conn, status="idle", limit=100, transferred=transferred, pinned=1,
+    )
+    sessions = actives + pinned_idle
     for s in sessions:
         await _enrich_running(conn, s)
+        s["recent_events"] = await db.get_session_events_latest(
+            conn, s["session_id"], n=2
+        )
     return sessions
 
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    sessions_native = await _fetch_active(conn, transferred=0)
-    sessions_from_tmux = await _fetch_active(conn, transferred=1)
+    sessions_native = await _fetch_dashboard(conn, transferred=0)
+    sessions_from_tmux = await _fetch_dashboard(conn, transferred=1)
     stats = await db.get_stats(conn)
-
-    # Get recent events across all sessions
-    cursor = await conn.execute(
-        "SELECT id, event_uid, session_id, event_type, tool_name, summary, created_at "
-        "FROM events ORDER BY created_at DESC LIMIT 20"
-    )
-    rows = await cursor.fetchall()
-    recent_events = [dict(r) for r in rows]
 
     terminal_url = _terminal_url(request)
     return templates.TemplateResponse(
@@ -105,7 +108,6 @@ async def dashboard(request: Request):
             "sessions_native": sessions_native,
             "sessions_from_tmux": sessions_from_tmux,
             "stats": stats,
-            "recent_events": recent_events,
             "terminal_url": terminal_url,
             "current_page": "dashboard",
         },

@@ -271,12 +271,17 @@ class TelegramBot:
     async def notify_pending(
         self, session_id: str, session: dict,
         has_always: bool = True,
+        always_label: str | None = None,
     ) -> None:
         """Schedule a delayed notification for a pending tool approval.
 
         Waits NOTIFY_DELAY_SECONDS, re-checks state, then sends. If the
         prompt is approved/cleared in that window the task is cancelled,
         so Telegram only buzzes when the user didn't react at the hub.
+
+        `always_label` is the verbatim text of option 2 (e.g. "Yes,
+        allow reading from .claude/ from this project") so the user can
+        see exactly what they're agreeing to before tapping Always.
         """
         pending_tool = session.get("pending_tool")
         pending_detail = session.get("pending_detail")
@@ -293,12 +298,13 @@ class TelegramBot:
             return  # already sent this exact notification
 
         task = asyncio.create_task(
-            self._delayed_notify(session_id, key, has_always)
+            self._delayed_notify(session_id, key, has_always, always_label)
         )
         self._pending_tasks[session_id] = task
 
     async def _delayed_notify(
         self, session_id: str, key: tuple, has_always: bool,
+        always_label: str | None = None,
     ) -> None:
         """Sleep the delay, re-check state, then send if still pending."""
         try:
@@ -318,12 +324,15 @@ class TelegramBot:
                 return  # approved, cleared, or changed in the window — bail
 
             self._notified[session_id] = key
-            await self._send_pending_message(session_id, session, has_always)
+            await self._send_pending_message(
+                session_id, session, has_always, always_label,
+            )
         except Exception:
             logger.exception("Delayed Telegram notify failed for %s", session_id)
 
     async def _send_pending_message(
         self, session_id: str, session: dict, has_always: bool,
+        always_label: str | None = None,
     ) -> None:
         pending_tool = session.get("pending_tool")
         pending_detail = session.get("pending_detail")
@@ -340,6 +349,9 @@ class TelegramBot:
         if pending_detail:
             safe = _escape_md(pending_detail)
             text += f"\n`{safe}`"
+        if has_always and always_label:
+            safe_label = _escape_md(always_label)
+            text += f"\n_Always →_ {safe_label}"
 
         buttons = [
             InlineKeyboardButton("Approve", callback_data=f"approve:{session_id}"),
@@ -421,10 +433,13 @@ async def stop_bot() -> None:
 
 async def notify_pending(
     session_id: str, session: dict, has_always: bool = True,
+    always_label: str | None = None,
 ) -> None:
     """Called from periodic_pending_check when pending state changes."""
     if _bot_instance:
-        await _bot_instance.notify_pending(session_id, session, has_always)
+        await _bot_instance.notify_pending(
+            session_id, session, has_always, always_label,
+        )
 
 
 async def cancel_pending(session_id: str) -> None:

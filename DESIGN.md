@@ -104,7 +104,7 @@ CREATE INDEX idx_events_hub ON events(hub_id, id);  -- 同步查询用
 CREATE INDEX idx_sessions_status ON sessions(status);
 ```
 
-> **实际 schema 的权威定义见 `src/agent_hub/db.py:init_db`**。运行时已通过自动迁移补充了以下列 (未完整列在上方骨架中): `tmux_session`、`transferred`、`pending_tool`、`pending_detail`、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_create_tokens`、`transcript_path`。
+> **实际 schema 的权威定义见 `src/agent_hub/db.py:init_db`**。运行时已通过自动迁移补充了以下列 (未完整列在上方骨架中): `tmux_session`、`transferred`、`pending_tool`、`pending_detail`、`pending_always_label`、`pinned`、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_create_tokens`、`transcript_path`。
 
 ### 3.2 事件摘要生成规则
 
@@ -251,10 +251,11 @@ Body: Claude Code hook 原始 payload
 
 ```
 GET  /api/sessions                     -- 列出所有会话 (支持 ?status=active|idle|stopped 过滤)
-GET  /api/sessions/:id                 -- 会话详情 (SessionResponse 含 pending_tool / pending_detail)
+GET  /api/sessions/:id                 -- 会话详情 (SessionResponse 含 pending_tool / pending_detail / pending_always_label / pinned)
 GET  /api/sessions/:id/events          -- 会话事件时间线 (分页)
-GET  /api/sessions/:id/events/latest   -- 最近 N 条事件
+GET  /api/sessions/:id/events/latest   -- 最近 N 条事件 (dashboard 卡片的 mini-list 数据源)
 POST /api/sessions/:id/approve?always= -- 远程审批 pending tool (tmux send-keys)
+POST /api/sessions/:id/pin             -- pin/unpin 到主 dashboard (body `{pinned: bool}`, 拒绝 stopped)
 DELETE /api/sessions/:id               -- 删除会话记录 (拒绝 active; idle 会连带 kill tmux; stopped 直接删)
 POST /api/sessions/clear-stopped       -- 一键清空所有 stopped 会话
 GET  /api/stats                        -- 全局统计 (active/idle/stopped/waiting 数量、今日事件数)
@@ -289,7 +290,20 @@ WS /ws
   "hostname": "desktop",
   "cwd": "/home/user/project"
 }
+
+{
+  "type": "pending",
+  "session_id": "abc123",
+  "pending_tool": "Bash",
+  "pending_detail": "find ~/.claude -type f -name '*.jsonl'",
+  "has_always": true,
+  "always_label": "Yes, allow reading from .claude/ from this project",
+  "tmux_session": "claude-proj-a",
+  "waiting_count": 2
+}
 ```
+
+`event` 消息会被 dashboard 前端按 `session_id` 路由到对应卡片的 mini-list (`#events-{session_id}`), 不再有全局事件面板; `pending` 消息驱动 waiting 徽章、Always label 行以及 Approve/Always 按钮的增删和 `title` 属性更新。
 
 ## 6. MCP Server
 
@@ -368,10 +382,12 @@ sync_status:
 {
   "hooks": {
     // SessionStart 必须用 command hook — HTTP hook 被 Claude Code 阻止
+    // 抓 tmux 名前必须先检查 $TMUX,否则 tmux server 上有别的 session 时命令会返回
+    // 错误的 session 名 (见踩坑 #18)
     "SessionStart": [
       {
         "type": "command",
-        "command": "bash -c 'cat | curl -s -X POST \"http://127.0.0.1:7800/api/events?host=$(hostname)\" -H \"Content-Type: application/json\" -d @-'"
+        "command": "bash -c 'TS=\"\"; [ -n \"$TMUX\" ] && TS=$(tmux display-message -p \"#{session_name}\" 2>/dev/null); cat | curl -s -X POST \"http://127.0.0.1:7800/api/events?host=$(hostname)&tmux_session=$TS\" -H \"Content-Type: application/json\" -d @-'"
       }
     ],
     // 其余事件类型使用 HTTP hook
@@ -421,22 +437,29 @@ Hook payload 中不包含 hostname。Hub 通过以下方式获取：
 ### 8.1 页面结构
 
 ```
-/                          -- 主 Dashboard: 只展示活跃和 waiting 的 session
+/                          -- 主 Dashboard: active + pinned idle + waiting 的 session
   ├── 顶部 stats 卡片: Active | Waiting | Idle (→/idle) | Stopped (→/stopped)
   ├── + New 按钮: 弹出目录选择器 → POST /api/tmux/new command=claude → 新标签页打开 Web Terminal
-  ├── 活跃会话卡片列表 (Sessions / From Tmux 双 tab)
-  │     每张卡片显示:
-  │     - hostname + cwd (项目名)
-  │     - 当前状态 (active, 可能带 waiting/running 徽章)
-  │     - 最后活动时间
-  │     - 最近一条事件摘要
-  │     - 使用的模型
-  │     - [Terminal] [Approve? (waiting 时)]
-  ├── 实时事件流 (WebSocket)
-  └── 统计摘要
+  └── 活跃会话卡片列表 (Sessions / From Tmux 双 tab)
+        每张卡片是响应式分栏 (宽屏 `md:flex-row` 左右, 窄屏上下):
+        左/上 — 主体 (flex-1):
+          - ● 状态点 + tmux 名 + hostname + waiting/running 胶囊
+          - pending 时: command 摘要 (黄) + `Always → <option 2 原文>` (绿)
+          - cwd / token 用量 / model / last_seen 时间
+        右/下 — `#events-{session_id}` mini-list:
+          - 最近 2 条事件 (类型 + 时间 + summary), 从 `/api/sessions/:id/events/latest?n=2` 加载
+          - 新事件通过 WS 按 session_id 路由到这里 prepend, trim 到 2
+        右上角 — 📌 pin 按钮 (灰 outline / 紫 filled 切换) + session_id 短码
+        底部 (actions 行):
+          - [Terminal] 跳 Web Terminal 对应 tmux
+          - [Approve] (waiting 时) — POST /api/sessions/:id/approve → tmux send-keys 'y'
+          - [Always] (有 option 2 时) — POST /api/sessions/:id/approve?always=true → tmux send-keys Down Enter
+                     `title` 属性带 option 2 原文, hover 可见完整放行范围
 
 /idle                       -- Idle session 列表 (点 Idle 卡片进入)
-  └── 每张卡片: [Terminal] [Delete] — Delete 会 kill tmux 并清除 DB 行
+  └── 每张卡片: 📌 pin + [Terminal] [Delete]
+        - pin 打开后该 session 同时出现在主 Dashboard (状态仍是 idle)
+        - Delete 会 kill tmux 并清除 DB 行
 
 /stopped                    -- Stopped session 列表 (点 Stopped 卡片进入)
   ├── 右上角 [Clear All] — 一键清空所有 stopped
@@ -658,6 +681,13 @@ uv run agent-hub sync
 - [x] Running/Waiting 互斥 — `_enrich_running` 发现有 `pending_tool` 时 early-return,避免出现"Running Bash"和"waiting: Bash"同时显示
 - [x] Tmux 名字复用自动退休 — `ensure_session` 在创建新 session row 前,把同名 `tmux_session` 的旧 active/idle 行批量标 stopped。防止 tmux 名字复用导致的孤儿行累积
 
+**Dashboard v2 + Pin + Always 透明化 ✅**
+
+- [x] **Per-session live events** — 去掉全局 Live Events 面板, 每张卡片内嵌 `#events-{id}` mini-list, 服务端渲染最近 2 条 (`/api/sessions/:id/events/latest?n=2`), WS 事件按 `session_id` 路由到对应卡片而不是追加到全局流; 响应式 `md:flex-row` 布局, 宽屏事件在右, 窄屏事件在下。"哪个 session 在干什么"一眼可见, 不再是流水账
+- [x] **Session pinning** — DB 新列 `pinned INTEGER DEFAULT 0`, API `POST /api/sessions/:id/pin` body `{pinned: bool}`; pinned idle session 同时出现在主 Dashboard 和 `/idle` 页面, 主页查询从 `status='active'` 扩成 `active + (idle AND pinned=1)`; tmux 死进入 stopped 时自动清 pin (避免误导); 卡片右上角 📌 按钮 (灰 outline / 紫 filled) 常驻可见; 在主页 unpin idle session 时卡片立即消失 (JS 检测 status+pathname)。典型用途: 跑后台任务的 session 或暂停思考的 session 不想被卷进 /idle
+- [x] **Always 按钮原文透明化** — 之前 `has_always: bool` 只知道"有第二项", 不知道第二项说什么。新增 `_OPTION2_RE` 在 `❯ 1. Yes` 之后扫 9 行提取 option 2 verbatim text, 返回改成 `tuple[tool, detail, always_label: str | None]`; DB 新列 `pending_always_label TEXT`, WS `pending` 消息带 `always_label` 字段; dashboard 卡片在 pending_detail 下面多一行绿色 `Always → <原文>`, Always 按钮 `title` 也带原文; Telegram 通知追加 `_Always →_ <原文>` 一行。用户 hover/瞟一眼就知道点下去会放行到哪个范围 (命令前缀 / 路径 / 真 session-wide), 不再踩 option 2 语义陷阱
+- [x] **SessionStart hook `$TMUX` 守卫** — 之前的 `TS=$(tmux display-message ... || echo "")` 在 tmux 外运行时会蹭别的 session 名 (见踩坑 18), 修成 `TS=""; [ -n "$TMUX" ] && TS=$(tmux display-message ...)`。README/DESIGN/SETUP 的示例全部同步
+
 **新增的踩坑 (接续 Phase 2 的 12 条)：**
 
 13. **Running 与 Waiting 语义冲突** — 当 `_enrich_running` 只看 `last_event == PreToolUse` + elapsed > 30s,会把等审批的会话(PreToolUse 已触发,用户没批)误标为 Running。修复:把 pending_tool 作为 early-return 条件,两者互斥。
@@ -669,6 +699,10 @@ uv run agent-hub sync
 16. **Hub-launched claude 会被 `_detect_transferred` 误判** — `tmux new-session -d claude` 到 SessionStart 中间有 claude 的 workspace trust prompt 卡住,实际延迟可能远超 5s 阈值。加一个 `_HUB_LAUNCHED_TMUX` TTL set (120s),`_detect_transferred` 开头查一次就直接 return 0。
 
 17. **idle→stopped 不应由时间驱动** — 30 分钟 cutoff 本质上是 "最近没动就判死",但一个用户睡一觉醒来想继续的 idle session 根本没死,只是没动。正确的语义是:idle 只要 tmux 还活着就保留,stopped 只由 tmux 死亡触发。这是对 Phase 1 状态机的根本性修正。
+
+18. **`tmux display-message` 在终端外会蹭其他 session 名** — SessionStart hook 之前用 `TS=$(tmux display-message -p "#{session_name}" 2>/dev/null || echo "")` 抓 tmux 名, 但这命令在 tmux 外运行时, 如果 tmux server 上有**任何**活着的 session, **不会失败**而是返回 server 上某个 session 名, exit 0。结果:在普通终端直接启动 claude 的用户会被 hook 错抓一个无关 tmux 名, `_detect_transferred` 看到这个 tmux 是很久以前创建的 → 判 transferred=1 → 错误分到 From Tmux tab, 而且卡片挂在别人的 tmux 名下。**修复**: hook 先检查 `$TMUX` 环境变量 — 这是"我真在 tmux pane 里"的唯一可靠标记。`TS=""; [ -n "$TMUX" ] && TS=$(tmux display-message -p "#{session_name}" 2>/dev/null)` 。`|| echo ""` 是个 trap:只在命令失败时生效, 而本 bug 的症结是命令**根本不失败**。
+
+19. **Always 按钮的 option 2 不是 session-wide 放行** — 原设计按 `Down + Enter` 机械地选第二项, 以为这就是"始终允许"。实测 Claude Code 的 option 2 语义随工具动: Bash `git status` → `Yes, and don't ask again for git status commands` (命令前缀白名单), Read `.claude/x` → `Yes, allow reading from .claude/ from this project` (路径白名单), Edit → `Yes, allow all edits during this session` (真 session-wide)。用户点 Always 以为全放行, 下一条稍不同的命令又弹出来。**修复**: parser 新增 `_OPTION2_RE`, 在 `❯ 1. Yes` 后扫 9 行提取 option 2 原文, 返回 `tuple[str, str, str | None]` 代替之前的 `(tool, detail, has_always: bool)`。新增 DB 列 `pending_always_label`, WS `pending` 消息带 `always_label`, dashboard 卡片在 pending_detail 下面多一行绿色 `Always → <原文>`, Always 按钮的 `title` 属性也带原文; Telegram 通知文本里追加 `_Always →_ <原文>` 一行。用户点之前就能看清放行范围, 不再踩坑。
 
 **Web Terminal 集成 — tmux 持久化 + Dashboard 联动**
 

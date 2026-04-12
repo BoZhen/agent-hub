@@ -19,7 +19,9 @@ class SessionResponse(BaseModel):
     cache_create_tokens: int = 0
     pending_tool: str | None = None
     pending_detail: str | None = None
+    pending_always_label: str | None = None
     tmux_session: str | None = None
+    pinned: bool = False
 
 class EventResponse(BaseModel):
     id: int

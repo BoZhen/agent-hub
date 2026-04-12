@@ -23,42 +23,81 @@
 </div>
 
 {% macro session_card(s, terminal_url) %}
-  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition"
+  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative"
        id="card-{{ s.session_id }}">
-    <a href="/sessions/{{ s.session_id }}" class="block">
-      <div class="flex items-center justify-between mb-1.5 sm:mb-2">
-        <div class="flex items-center gap-2">
-          <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
-          <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
-          {% if s.tmux_session %}
-          <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+    <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
+      <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+      <button type="button"
+              onclick="togglePin('{{ s.session_id }}', this)"
+              data-pinned="{{ 1 if s.pinned else 0 }}"
+              data-status="{{ s.status }}"
+              class="pin-btn p-0.5 {% if s.pinned %}text-accent-light hover:text-white{% else %}text-gray-600 hover:text-gray-300{% endif %} transition"
+              title="{% if s.pinned %}Unpin from dashboard{% else %}Pin to dashboard{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex flex-col md:flex-row md:gap-4 pr-8">
+      <div class="flex-1 min-w-0">
+        <a href="/sessions/{{ s.session_id }}" class="block">
+          <div class="flex items-center mb-1.5 sm:mb-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
+              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+              {% if s.tmux_session %}
+              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+              {% endif %}
+              {% if s.pending_tool %}
+              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
+                    id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
+              {% elif s.running_tool %}
+              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
+                    id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if s.pending_detail %}
+          <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
+               id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
           {% endif %}
-          {% if s.pending_tool %}
-          <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
-                id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
-          {% elif s.running_tool %}
-          <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
-                id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
+          {% if s.pending_always_label %}
+          <div class="text-xs text-emerald-300/60 truncate mb-1 pl-4"
+               id="always-label-{{ s.session_id }}"
+               title="{{ s.pending_always_label }}">
+            <span class="text-gray-500">Always →</span> {{ s.pending_always_label }}
+          </div>
+          {% endif %}
+          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+          {% if s.output_tokens %}
+          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+          </div>
+          {% endif %}
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+            <span>{{ s.last_seen_at[11:19] }}</span>
+          </div>
+        </a>
+      </div>
+      <div class="md:w-56 md:shrink-0 mt-2 pt-2 border-t border-gray-700/30 md:mt-0 md:pt-0 md:border-t-0 md:pl-3 md:border-l md:border-gray-700/30">
+        <div id="events-{{ s.session_id }}" class="space-y-1.5">
+          {% for e in s.recent_events or [] %}
+          <div class="text-xs leading-tight">
+            <div class="flex items-center gap-2">
+              <span class="text-accent-light">{{ e.event_type }}</span>
+              <span class="text-gray-500">{{ e.created_at[11:19] }}</span>
+            </div>
+            <div class="text-gray-400 truncate">{{ e.summary or '—' }}</div>
+          </div>
+          {% endfor %}
+          {% if not s.recent_events %}
+          <div class="events-empty text-xs text-gray-600">no events yet</div>
           {% endif %}
         </div>
-        <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
       </div>
-      {% if s.pending_detail %}
-      <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
-           id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
-      {% endif %}
-      <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-      {% if s.output_tokens %}
-      <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-        <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-        <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-      </div>
-      {% endif %}
-      <div class="flex items-center justify-between text-xs text-gray-500">
-        <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
-        <span>{{ s.last_seen_at[11:19] }}</span>
-      </div>
-    </a>
+    </div>
     <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
          id="actions-{{ s.session_id }}"
          data-tmux="{{ s.tmux_session or '' }}"
@@ -74,6 +113,13 @@
          class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
         Approve
       </button>
+          {% if s.pending_always_label %}
+      <button onclick="approveSession('{{ s.session_id }}', true, this)"
+         class="always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse"
+         title="{{ s.pending_always_label }}">
+        Always
+      </button>
+          {% endif %}
         {% else %}
       <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
          target="_blank"
@@ -86,58 +132,36 @@
   </div>
 {% endmacro %}
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-  <!-- Sessions list -->
-  <div class="lg:col-span-2">
-    <div class="flex items-center gap-4 mb-3 border-b border-gray-700/30">
-      <button type="button" data-tab="native"
-              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white transition">
-        Sessions <span class="text-gray-500 font-normal">({{ sessions_native | length }})</span>
-      </button>
-      <button type="button" data-tab="tmux"
-              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
-        From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
-      </button>
-      <button id="btn-new-claude" type="button"
-              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
-        + New
-      </button>
-    </div>
-    <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
-      {% for s in sessions_native %}
-        {{ session_card(s, terminal_url) }}
-      {% endfor %}
-      {% if not sessions_native %}
-      <div class="text-gray-500 text-sm py-8 text-center">No active sessions. Parked sessions live on the <a href="/idle" class="text-accent-light hover:text-white">Idle</a> page.</div>
-      {% endif %}
-    </div>
-    <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
-      {% for s in sessions_from_tmux %}
-        {{ session_card(s, terminal_url) }}
-      {% endfor %}
-      {% if not sessions_from_tmux %}
-      <div class="text-gray-500 text-sm py-8 text-center">No transferred sessions. A session appears here when you run Claude inside a pre-existing tmux.</div>
-      {% endif %}
-    </div>
+<div>
+  <div class="flex items-center gap-4 mb-3 border-b border-gray-700/30">
+    <button type="button" data-tab="native"
+            class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white transition">
+      Sessions <span class="text-gray-500 font-normal">({{ sessions_native | length }})</span>
+    </button>
+    <button type="button" data-tab="tmux"
+            class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
+      From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
+    </button>
+    <button id="btn-new-claude" type="button"
+            class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+      + New
+    </button>
   </div>
-
-  <!-- Live event feed -->
-  <div>
-    <h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Live Events</h2>
-    <div id="event-feed" class="space-y-2 max-h-[600px] overflow-y-auto">
-      {% for e in recent_events %}
-      <div class="bg-surface-light rounded p-2 sm:p-3 border border-gray-700/20 text-sm">
-        <div class="flex items-center justify-between mb-1">
-          <span class="text-accent-light text-xs">{{ e.event_type }}</span>
-          <span class="text-gray-500 text-xs">{{ e.created_at[11:19] }}</span>
-        </div>
-        <div class="text-gray-300 text-xs sm:text-sm truncate">{{ e.summary or '—' }}</div>
-      </div>
-      {% endfor %}
-      {% if not recent_events %}
-      <div class="text-gray-500 text-sm py-4 text-center">No events yet.</div>
-      {% endif %}
-    </div>
+  <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
+    {% for s in sessions_native %}
+      {{ session_card(s, terminal_url) }}
+    {% endfor %}
+    {% if not sessions_native %}
+    <div class="text-gray-500 text-sm py-8 text-center">No active sessions. Parked sessions live on the <a href="/idle" class="text-accent-light hover:text-white">Idle</a> page.</div>
+    {% endif %}
+  </div>
+  <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
+    {% for s in sessions_from_tmux %}
+      {{ session_card(s, terminal_url) }}
+    {% endfor %}
+    {% if not sessions_from_tmux %}
+    <div class="text-gray-500 text-sm py-8 text-center">No transferred sessions. A session appears here when you run Claude inside a pre-existing tmux.</div>
+    {% endif %}
   </div>
 </div>
 
@@ -209,7 +233,36 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
   }
 }
 
-function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways) {
+function updateAlwaysLabel(sessionId, alwaysLabel) {
+  const card = document.getElementById('card-' + sessionId);
+  if (!card) return;
+  const existing = document.getElementById('always-label-' + sessionId);
+  if (alwaysLabel) {
+    if (existing) {
+      existing.title = alwaysLabel;
+      existing.querySelector('.always-label-text').textContent = alwaysLabel;
+    } else {
+      const el = document.createElement('div');
+      el.id = 'always-label-' + sessionId;
+      el.className = 'text-xs text-emerald-300/60 truncate mb-1 pl-4';
+      el.title = alwaysLabel;
+      el.innerHTML = '<span class="text-gray-500">Always →</span> <span class="always-label-text"></span>';
+      el.querySelector('.always-label-text').textContent = alwaysLabel;
+      // Insert right after detail line (or at top of card body if none)
+      const detail = document.getElementById('detail-' + sessionId);
+      if (detail && detail.parentNode) {
+        detail.parentNode.insertBefore(el, detail.nextSibling);
+      } else {
+        const link = card.querySelector('a.block');
+        if (link) link.insertBefore(el, link.children[1]);
+      }
+    }
+  } else if (existing) {
+    existing.remove();
+  }
+}
+
+function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways, alwaysLabel) {
   const actions = document.getElementById('actions-' + sessionId);
   if (!actions) return;
   if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
@@ -230,6 +283,7 @@ function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways) {
       const alwaysBtn = document.createElement('button');
       alwaysBtn.className = 'always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
       alwaysBtn.textContent = 'Always';
+      if (alwaysLabel) alwaysBtn.title = alwaysLabel;
       alwaysBtn.onclick = function() { approveSession(sessionId, true, this); };
       actions.appendChild(alwaysBtn);
     }
@@ -249,7 +303,8 @@ function onWsMessage(data) {
   // Handle pending tool updates from background task
   if (data.type === 'pending') {
     updateWaitingBadge(data.session_id, data.pending_tool, data.pending_detail);
-    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session, data.has_always);
+    updateAlwaysLabel(data.session_id, data.pending_tool ? data.always_label : null);
+    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session, data.has_always, data.always_label);
     const el = document.getElementById('stat-waiting');
     if (el) el.textContent = data.waiting_count;
     return;
@@ -257,23 +312,25 @@ function onWsMessage(data) {
 
   if (data.type !== 'event') return;
 
-  // Prepend to live event feed
-  const feed = document.getElementById('event-feed');
-  const el = document.createElement('div');
-  el.className = 'bg-surface-light rounded p-2 sm:p-3 border border-gray-700/20 text-sm fade-in';
-  const time = new Date().toTimeString().slice(0, 8);
-  el.innerHTML = `
-    <div class="flex items-center justify-between mb-1">
-      <span class="text-accent-light text-xs">${data.event_type}</span>
-      <span class="text-gray-500 text-xs">${time}</span>
-    </div>
-    <div class="text-gray-300 text-xs sm:text-sm truncate">${escapeHtml(data.summary || '—')}</div>
-  `;
-  const placeholder = feed.querySelector('.text-center');
-  if (placeholder) placeholder.remove();
+  // Route event into its session card's mini-list (if the card is visible)
+  const eventsEl = document.getElementById('events-' + data.session_id);
+  if (eventsEl) {
+    const empty = eventsEl.querySelector('.events-empty');
+    if (empty) empty.remove();
 
-  feed.prepend(el);
-  while (feed.children.length > 50) feed.lastChild.remove();
+    const el = document.createElement('div');
+    el.className = 'text-xs leading-tight fade-in';
+    const time = new Date().toTimeString().slice(0, 8);
+    el.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="text-accent-light">${escapeHtml(data.event_type)}</span>
+        <span class="text-gray-500">${time}</span>
+      </div>
+      <div class="text-gray-400 truncate">${escapeHtml(data.summary || '—')}</div>
+    `;
+    eventsEl.prepend(el);
+    while (eventsEl.children.length > 2) eventsEl.lastChild.remove();
+  }
 
   // Update session card dot
   const card = document.getElementById('card-' + data.session_id);
@@ -289,6 +346,42 @@ function onWsMessage(data) {
     document.getElementById('stat-idle').textContent = s.idle_sessions;
     document.getElementById('stat-stopped').textContent = s.stopped_sessions;
   }).catch(() => {});
+}
+
+function togglePin(sessionId, btn) {
+  const wasPinned = btn.dataset.pinned === '1';
+  const newPinned = !wasPinned;
+  btn.disabled = true;
+  fetch(`/api/sessions/${sessionId}/pin`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pinned: newPinned}),
+  })
+    .then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        alert('Pin failed: ' + (err.detail || 'unknown'));
+        btn.disabled = false;
+        return;
+      }
+      btn.dataset.pinned = newPinned ? '1' : '0';
+      btn.title = newPinned ? 'Unpin from dashboard' : 'Pin to dashboard';
+      btn.classList.toggle('text-accent-light', newPinned);
+      btn.classList.toggle('hover:text-white', newPinned);
+      btn.classList.toggle('text-gray-600', !newPinned);
+      btn.classList.toggle('hover:text-gray-300', !newPinned);
+      btn.disabled = false;
+      // If we just unpinned an idle session on the main dashboard,
+      // it no longer belongs here — drop the card for visual honesty.
+      if (!newPinned && btn.dataset.status === 'idle' && location.pathname === '/') {
+        const card = document.getElementById('card-' + sessionId);
+        if (card) card.remove();
+      }
+    })
+    .catch(e => {
+      alert('Error: ' + e.message);
+      btn.disabled = false;
+    });
 }
 
 function approveSession(sessionId, always, btn) {

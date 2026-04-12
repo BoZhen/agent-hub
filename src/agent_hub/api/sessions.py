@@ -168,6 +168,32 @@ async def approve_session(
     return {"ok": True, "tmux_session": tmux_name, "always": always}
 
 
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+@router.post("/sessions/{session_id}/pin")
+async def pin_session(request: Request, session_id: str, body: PinRequest):
+    """Pin or unpin a session to the main dashboard.
+
+    Pinned idle sessions stay visible on `/` instead of only
+    showing up on `/idle`. Stopped sessions cannot be pinned —
+    a dead tmux means Claude is gone and the pin would be meaningless.
+    Going stopped also auto-unpins (handled in update_session_status).
+    """
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] == "stopped":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot pin a stopped session",
+        )
+    await db.set_session_pinned(conn, session_id, body.pinned)
+    return {"ok": True, "pinned": body.pinned}
+
+
 class NotifyRequest(BaseModel):
     message: str
 
