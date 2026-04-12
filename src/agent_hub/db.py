@@ -46,6 +46,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN pending_tool TEXT",
     "ALTER TABLE sessions ADD COLUMN tmux_session TEXT",
     "ALTER TABLE sessions ADD COLUMN pending_detail TEXT",
+    "ALTER TABLE sessions ADD COLUMN transferred INTEGER DEFAULT 0",
 ]
 
 
@@ -81,12 +82,13 @@ async def upsert_session(
     model: str | None = None,
     status: str = "active",
     transcript_path: str | None = None,
+    transferred: int = 0,
 ) -> None:
     now = _now()
     await db.execute(
         """
-        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at, transcript_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at, transcript_path, transferred)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             status = excluded.status,
             last_seen_at = excluded.last_seen_at,
@@ -94,7 +96,7 @@ async def upsert_session(
             cwd = excluded.cwd,
             transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)
         """,
-        (session_id, hub_id, hostname, cwd, model, status, now, now, transcript_path),
+        (session_id, hub_id, hostname, cwd, model, status, now, now, transcript_path, transferred),
     )
     await db.commit()
 
@@ -160,6 +162,17 @@ async def update_session_activity(db: aiosqlite.Connection, session_id: str) -> 
     await db.commit()
 
 
+async def touch_session(db: aiosqlite.Connection, session_id: str) -> None:
+    """Refresh last_seen_at without changing status — used by sweep
+    to keep a session out of the stopped bucket without promoting
+    an idle session back to active."""
+    await db.execute(
+        "UPDATE sessions SET last_seen_at = ? WHERE session_id = ?",
+        (_now(), session_id),
+    )
+    await db.commit()
+
+
 async def update_session_status(
     db: aiosqlite.Connection, session_id: str, status: str
 ) -> None:
@@ -194,17 +207,21 @@ async def get_sessions(
     status: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    transferred: int | None = None,
 ) -> list[dict]:
+    conditions: list[str] = []
+    params: list = []
     if status and status != "all":
-        cursor = await db.execute(
-            "SELECT * FROM sessions WHERE status = ? ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
-            (status, limit, offset),
-        )
-    else:
-        cursor = await db.execute(
-            "SELECT * FROM sessions ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        )
+        conditions.append("status = ?")
+        params.append(status)
+    if transferred is not None:
+        conditions.append("COALESCE(transferred, 0) = ?")
+        params.append(transferred)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    cursor = await db.execute(
+        f"SELECT * FROM sessions {where} ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    )
     rows = await cursor.fetchall()
     return [dict(r) for r in rows]
 

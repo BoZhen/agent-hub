@@ -22,77 +22,98 @@
   </a>
 </div>
 
+{% macro session_card(s, terminal_url) %}
+  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition"
+       id="card-{{ s.session_id }}">
+    <a href="/sessions/{{ s.session_id }}" class="block">
+      <div class="flex items-center justify-between mb-1.5 sm:mb-2">
+        <div class="flex items-center gap-2">
+          <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
+          <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+          {% if s.tmux_session %}
+          <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+          {% endif %}
+          {% if s.pending_tool %}
+          <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
+                id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
+          {% endif %}
+          {% if s.running_tool %}
+          <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
+                id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
+          {% endif %}
+        </div>
+        <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+      </div>
+      {% if s.pending_detail %}
+      <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
+           id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
+      {% endif %}
+      <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+      {% if s.output_tokens %}
+      <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+        <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+        <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+      </div>
+      {% endif %}
+      <div class="flex items-center justify-between text-xs text-gray-500">
+        <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+        <span>{{ s.last_seen_at[11:19] }}</span>
+      </div>
+    </a>
+    <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
+         id="actions-{{ s.session_id }}"
+         data-tmux="{{ s.tmux_session or '' }}"
+         data-cwd="{{ s.cwd }}">
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
+         target="_blank"
+         class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
+        Terminal
+      </a>
+      {% if s.pending_tool %}
+        {% if s.tmux_session %}
+      <button onclick="approveSession('{{ s.session_id }}', false, this)"
+         class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+        Approve
+      </button>
+        {% else %}
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
+         target="_blank"
+         class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+        Approve &rarr;
+      </a>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
   <!-- Sessions list -->
   <div class="lg:col-span-2">
-    <h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Sessions</h2>
-    <div id="sessions-list" class="space-y-2 sm:space-y-3">
-      {% for s in sessions %}
-      <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition"
-           id="card-{{ s.session_id }}">
-        <a href="/sessions/{{ s.session_id }}" class="block">
-          <div class="flex items-center justify-between mb-1.5 sm:mb-2">
-            <div class="flex items-center gap-2">
-              <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
-              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
-              {% if s.tmux_session %}
-              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
-              {% endif %}
-              {% if s.pending_tool %}
-              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
-                    id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
-              {% endif %}
-            </div>
-            <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
-          </div>
-          {% if s.pending_detail %}
-          <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
-               id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
-          {% endif %}
-          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-          {% if s.output_tokens %}
-          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-          </div>
-          {% endif %}
-          <div class="flex items-center justify-between text-xs text-gray-500">
-            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
-            <span>{{ s.last_seen_at[11:19] }}</span>
-          </div>
-        </a>
-        <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
-             id="actions-{{ s.session_id }}"
-             data-tmux="{{ s.tmux_session or '' }}"
-             data-cwd="{{ s.cwd }}">
-          <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
-             target="_blank"
-             class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
-            Terminal
-          </a>
-          {% if s.pending_tool %}
-            {% if s.tmux_session %}
-          <button onclick="approveSession('{{ s.session_id }}', false, this)"
-             class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-            Approve
-          </button>
-          <button onclick="approveSession('{{ s.session_id }}', true, this)"
-             class="always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse">
-            Always
-          </button>
-            {% else %}
-          <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
-             target="_blank"
-             class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-            Approve &rarr;
-          </a>
-            {% endif %}
-          {% endif %}
-        </div>
-      </div>
+    <div class="flex items-center gap-4 mb-3 border-b border-gray-700/30">
+      <button type="button" data-tab="native"
+              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white transition">
+        Sessions <span class="text-gray-500 font-normal">({{ sessions_native | length }})</span>
+      </button>
+      <button type="button" data-tab="tmux"
+              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
+        From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
+      </button>
+    </div>
+    <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
+      {% for s in sessions_native %}
+        {{ session_card(s, terminal_url) }}
       {% endfor %}
-      {% if not sessions %}
+      {% if not sessions_native %}
       <div class="text-gray-500 text-sm py-8 text-center">No sessions yet. Start a Claude Code session with hooks configured.</div>
+      {% endif %}
+    </div>
+    <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
+      {% for s in sessions_from_tmux %}
+        {{ session_card(s, terminal_url) }}
+      {% endfor %}
+      {% if not sessions_from_tmux %}
+      <div class="text-gray-500 text-sm py-8 text-center">No transferred sessions. A session appears here when you run Claude inside a pre-existing tmux.</div>
       {% endif %}
     </div>
   </div>
@@ -158,14 +179,12 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
   }
 }
 
-function updateApproveButtons(sessionId, pendingTool, tmuxSession) {
+function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways) {
   const actions = document.getElementById('actions-' + sessionId);
   if (!actions) return;
-  // Update tmux data if provided
   if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
   const tmux = actions.dataset.tmux;
 
-  // Remove old approve/always buttons
   actions.querySelectorAll('.approve-btn, .always-btn, .approve-link').forEach(el => el.remove());
 
   if (!pendingTool) return;
@@ -177,11 +196,13 @@ function updateApproveButtons(sessionId, pendingTool, tmuxSession) {
     approveBtn.onclick = function() { approveSession(sessionId, false, this); };
     actions.appendChild(approveBtn);
 
-    const alwaysBtn = document.createElement('button');
-    alwaysBtn.className = 'always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
-    alwaysBtn.textContent = 'Always';
-    alwaysBtn.onclick = function() { approveSession(sessionId, true, this); };
-    actions.appendChild(alwaysBtn);
+    if (hasAlways !== false) {
+      const alwaysBtn = document.createElement('button');
+      alwaysBtn.className = 'always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
+      alwaysBtn.textContent = 'Always';
+      alwaysBtn.onclick = function() { approveSession(sessionId, true, this); };
+      actions.appendChild(alwaysBtn);
+    }
   } else {
     const cwd = actions.dataset.cwd || '';
     const prefix = sessionId.substring(0, 8);
@@ -198,7 +219,7 @@ function onWsMessage(data) {
   // Handle pending tool updates from background task
   if (data.type === 'pending') {
     updateWaitingBadge(data.session_id, data.pending_tool, data.pending_detail);
-    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session);
+    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session, data.has_always);
     const el = document.getElementById('stat-waiting');
     if (el) el.textContent = data.waiting_count;
     return;
@@ -263,5 +284,21 @@ function escapeHtml(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const name = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      const active = b.dataset.tab === name;
+      b.classList.toggle('border-accent-light', active);
+      b.classList.toggle('text-white', active);
+      b.classList.toggle('border-transparent', !active);
+      b.classList.toggle('text-gray-400', !active);
+    });
+    document.getElementById('tab-panel-native').classList.toggle('hidden', name !== 'native');
+    document.getElementById('tab-panel-tmux').classList.toggle('hidden', name !== 'tmux');
+  });
+});
 </script>
 {% endblock %}

@@ -10,7 +10,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from agent_hub import db
-from agent_hub.api import events, sessions, ws
+from agent_hub.api import events, sessions, tmux, ws
 from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
@@ -56,6 +56,7 @@ def create_app(config: HubConfig) -> FastAPI:
     app = FastAPI(title="Agent Hub", version="0.1.0", lifespan=lifespan)
     app.include_router(events.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
+    app.include_router(tmux.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(web_routes.router)
 

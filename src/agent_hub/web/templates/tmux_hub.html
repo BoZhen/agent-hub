@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}Tmux Hub — Agent Hub{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-end mb-4 sm:mb-6">
+  <button id="btn-new" type="button"
+          class="text-xs sm:text-sm px-3 py-1.5 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+    + New
+  </button>
+</div>
+
+<div id="tmux-list" class="space-y-2 sm:space-y-3">
+  <div class="text-gray-500 text-sm py-8 text-center">Loading…</div>
+</div>
+
+<!-- Modal: create new tmux -->
+<div id="modal-new" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4">
+  <div class="bg-surface-light rounded-lg p-4 sm:p-6 w-full max-w-lg border border-gray-700/50 max-h-[90vh] overflow-y-auto">
+    <h2 class="text-base sm:text-lg font-bold text-white mb-3">New Tmux Session</h2>
+
+    <label class="block text-xs text-gray-400 mb-1">Name (leave empty for auto)</label>
+    <input id="new-name" type="text" placeholder="auto-generated"
+           class="w-full bg-surface text-gray-200 text-sm rounded px-3 py-2 border border-gray-700/50 focus:border-accent focus:outline-none mb-3">
+
+    <label class="block text-xs text-gray-400 mb-1">Working directory</label>
+    <div id="breadcrumb" class="flex items-center gap-1 flex-wrap text-xs text-gray-400 mb-2"></div>
+    <div id="dir-list" class="bg-surface rounded border border-gray-700/50 max-h-64 overflow-y-auto mb-4"></div>
+
+    <div class="flex items-center justify-end gap-2">
+      <button id="btn-cancel" type="button"
+              class="text-xs px-3 py-1.5 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 transition">
+        Cancel
+      </button>
+      <button id="btn-create" type="button"
+              class="text-xs px-3 py-1.5 rounded bg-accent hover:bg-accent-light text-white font-semibold transition">
+        Create
+      </button>
+    </div>
+    <div id="modal-error" class="text-xs text-red-400 mt-2 hidden"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TERMINAL_URL = "{{ terminal_url }}";
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Tmux list ──
+async function loadTmuxList() {
+  const listEl = document.getElementById('tmux-list');
+  try {
+    const res = await fetch('/api/tmux/list');
+    const data = await res.json();
+    const sessions = data.sessions || [];
+    if (sessions.length === 0) {
+      listEl.innerHTML = '<div class="text-gray-500 text-sm py-8 text-center">No bare tmux sessions. Click + New to create one.</div>';
+      return;
+    }
+    listEl.innerHTML = sessions.map(s => {
+      const cwd = s.cwd || (s.dead ? '(pane dead)' : '—');
+      const dot = s.dead ? 'dot-stopped' : (s.attached ? 'dot-active' : 'dot-idle');
+      const badge = s.dead
+        ? '<span class="text-xs px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-400">dead</span>'
+        : (s.attached ? '<span class="text-xs text-green-400">attached</span>' : '');
+      const terminalBtn = s.dead ? '' : `
+        <a href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.name)}" target="_blank"
+           class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
+          Terminal
+        </a>`;
+      const killBtn = s.dead ? `
+        <button type="button" data-kill="${escapeHtml(s.name)}"
+           class="kill-btn text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
+          Kill
+        </button>` : '';
+      return `
+      <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition">
+        <div class="flex items-center justify-between mb-1.5 sm:mb-2">
+          <div class="flex items-center gap-2">
+            <span class="dot ${dot}"></span>
+            <span class="font-semibold text-white text-sm sm:text-base">${escapeHtml(s.name)}</span>
+            <span class="text-xs text-gray-500">tmux</span>
+            ${badge}
+          </div>
+        </div>
+        <div class="text-xs sm:text-sm text-gray-300 truncate mb-2">${escapeHtml(cwd)}</div>
+        <div class="flex items-center gap-2 pt-2 border-t border-gray-700/20">
+          ${terminalBtn}${killBtn}
+        </div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('.kill-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.kill;
+        if (!confirm(`Kill dead tmux session "${name}"?`)) return;
+        btn.textContent = 'Killing…';
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/tmux/kill', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name}),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({detail: res.statusText}));
+            alert('Kill failed: ' + (err.detail || 'unknown'));
+            btn.textContent = 'Kill';
+            btn.disabled = false;
+            return;
+          }
+          loadTmuxList();
+        } catch (e) {
+          alert('Error: ' + e.message);
+          btn.textContent = 'Kill';
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (e) {
+    listEl.innerHTML = `<div class="text-red-400 text-sm py-8 text-center">Failed to load: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// ── New tmux modal ──
+let currentBrowsePath = null;
+
+function showModalError(msg) {
+  const el = document.getElementById('modal-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function clearModalError() {
+  document.getElementById('modal-error').classList.add('hidden');
+}
+
+async function browseDir(path) {
+  const url = '/api/browse' + (path ? ('?path=' + encodeURIComponent(path)) : '');
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({detail: res.statusText}));
+    throw new Error(err.detail || 'browse failed');
+  }
+  const data = await res.json();
+  currentBrowsePath = data.path;
+  renderBreadcrumb(data.path);
+  renderDirList(data);
+}
+
+function renderBreadcrumb(path) {
+  const parts = path.split('/').filter(Boolean);
+  const crumbs = [{name: '/', path: '/'}];
+  let acc = '';
+  for (const p of parts) {
+    acc += '/' + p;
+    crumbs.push({name: p, path: acc});
+  }
+  const el = document.getElementById('breadcrumb');
+  el.innerHTML = crumbs.map((c, i) => {
+    const isLast = i === crumbs.length - 1;
+    if (isLast) {
+      return `<span class="text-white font-semibold">${escapeHtml(c.name)}</span>`;
+    }
+    return `<a href="#" data-path="${escapeHtml(c.path)}" class="crumb hover:text-white transition">${escapeHtml(c.name)}</a><span class="text-gray-600">/</span>`;
+  }).join('');
+  el.querySelectorAll('.crumb').forEach(a => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      browseDir(a.dataset.path).catch(e => showModalError(e.message));
+    });
+  });
+}
+
+function renderDirList(data) {
+  const el = document.getElementById('dir-list');
+  const rows = [];
+  if (data.parent) {
+    rows.push(`<button type="button" data-path="${escapeHtml(data.parent)}" class="dir-entry w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-lighter transition border-b border-gray-700/30">.. (parent)</button>`);
+  }
+  for (const e of (data.entries || [])) {
+    const child = data.path.endsWith('/') ? data.path + e.name : data.path + '/' + e.name;
+    rows.push(`<button type="button" data-path="${escapeHtml(child)}" class="dir-entry w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-surface-lighter transition border-b border-gray-700/30">${escapeHtml(e.name)}/</button>`);
+  }
+  if (rows.length === 0) {
+    el.innerHTML = '<div class="text-gray-500 text-xs py-3 text-center">(empty)</div>';
+  } else {
+    el.innerHTML = rows.join('');
+  }
+  el.querySelectorAll('.dir-entry').forEach(btn => {
+    btn.addEventListener('click', () => {
+      browseDir(btn.dataset.path).catch(e => showModalError(e.message));
+    });
+  });
+}
+
+function openModal() {
+  clearModalError();
+  document.getElementById('new-name').value = '';
+  document.getElementById('modal-new').classList.remove('hidden');
+  document.getElementById('modal-new').classList.add('flex');
+  browseDir('').catch(e => showModalError(e.message));
+}
+
+function closeModal() {
+  document.getElementById('modal-new').classList.add('hidden');
+  document.getElementById('modal-new').classList.remove('flex');
+}
+
+async function createTmux() {
+  clearModalError();
+  if (!currentBrowsePath) {
+    showModalError('Pick a directory first');
+    return;
+  }
+  const name = document.getElementById('new-name').value.trim();
+  try {
+    const res = await fetch('/api/tmux/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name || null, cwd: currentBrowsePath}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      showModalError(err.detail || 'create failed');
+      return;
+    }
+    closeModal();
+    loadTmuxList();
+  } catch (e) {
+    showModalError(e.message);
+  }
+}
+
+document.getElementById('btn-new').addEventListener('click', openModal);
+document.getElementById('btn-cancel').addEventListener('click', closeModal);
+document.getElementById('btn-create').addEventListener('click', createTmux);
+document.getElementById('modal-new').addEventListener('click', (ev) => {
+  if (ev.target.id === 'modal-new') closeModal();
+});
+
+loadTmuxList();
+setInterval(loadTmuxList, 10000);
+
+function onWsMessage(data) {
+  // Refresh list when a session is created/closed on the backend
+  if (data.type === 'event' && data.event_type === 'SessionStart') {
+    loadTmuxList();
+  }
+}
+</script>
+{% endblock %}

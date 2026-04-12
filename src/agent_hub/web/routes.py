@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -8,6 +9,45 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from agent_hub import db
+
+RUNNING_THRESHOLD_SECONDS = 30
+
+
+def _format_elapsed(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m"
+
+
+async def _enrich_running(conn, session: dict) -> dict:
+    """If this session is an active Claude session currently running a
+    tool for more than RUNNING_THRESHOLD_SECONDS, annotate it with
+    `running_tool` (tool name) and `running_elapsed_label` (e.g. \"2m 15s\").
+    """
+    if session.get("status") != "active":
+        return session
+    last = await db.get_last_event(conn, session["session_id"])
+    if not last or last.get("event_type") != "PreToolUse":
+        return session
+    created_raw = last.get("created_at")
+    if not created_raw:
+        return session
+    try:
+        created = datetime.fromisoformat(created_raw)
+    except ValueError:
+        return session
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - created).total_seconds()
+    if elapsed < RUNNING_THRESHOLD_SECONDS:
+        return session
+    session["running_tool"] = last.get("tool_name") or "Tool"
+    session["running_elapsed_label"] = _format_elapsed(int(elapsed))
+    return session
 
 router = APIRouter()
 
@@ -31,11 +71,24 @@ def _terminal_url(request: Request) -> str:
     return f"http://{host}:{port}"
 
 
+async def _fetch_active_idle(conn, transferred: int) -> list[dict]:
+    active = await db.get_sessions(
+        conn, status="active", limit=100, transferred=transferred,
+    )
+    idle = await db.get_sessions(
+        conn, status="idle", limit=100, transferred=transferred,
+    )
+    sessions = active + idle
+    for s in sessions:
+        await _enrich_running(conn, s)
+    return sessions
+
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    sessions = await db.get_sessions(conn, status="active", limit=100)
-    sessions += await db.get_sessions(conn, status="idle", limit=100)
+    sessions_native = await _fetch_active_idle(conn, transferred=0)
+    sessions_from_tmux = await _fetch_active_idle(conn, transferred=1)
     stats = await db.get_stats(conn)
 
     # Get recent events across all sessions
@@ -51,10 +104,12 @@ async def dashboard(request: Request):
         request=request,
         name="dashboard.html",
         context={
-            "sessions": sessions,
+            "sessions_native": sessions_native,
+            "sessions_from_tmux": sessions_from_tmux,
             "stats": stats,
             "recent_events": recent_events,
             "terminal_url": terminal_url,
+            "current_page": "dashboard",
         },
     )
 
@@ -70,6 +125,20 @@ async def stopped_sessions(request: Request):
         context={
             "sessions": sessions,
             "terminal_url": terminal_url,
+            "current_page": "stopped",
+        },
+    )
+
+
+@router.get("/tmux", response_class=HTMLResponse)
+async def tmux_hub(request: Request):
+    terminal_url = _terminal_url(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="tmux_hub.html",
+        context={
+            "terminal_url": terminal_url,
+            "current_page": "tmux",
         },
     )
 
@@ -85,6 +154,7 @@ async def session_detail(
     session = await db.get_session(conn, session_id)
     if not session:
         return HTMLResponse("<h1>Session not found</h1>", status_code=404)
+    await _enrich_running(conn, session)
 
     events = await db.get_session_events(conn, session_id, limit=limit, offset=offset)
 
@@ -98,5 +168,6 @@ async def session_detail(
             "limit": limit,
             "offset": offset,
             "terminal_url": terminal_url,
+            "current_page": "dashboard",
         },
     )

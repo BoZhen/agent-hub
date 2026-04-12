@@ -6,18 +6,12 @@ from typing import Any
 
 import aiosqlite
 
-from time import monotonic as _monotonic
-
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.services import session_manager
 from agent_hub.services.transcript_reader import read_usage
 
 logger = logging.getLogger(__name__)
-
-# PreToolUse candidates: session_id -> (tool_name, detail, monotonic_time)
-# Promoted to DB pending by periodic_pending_check after confirmation delay.
-_pending_candidates: dict[str, tuple[str, str, float]] = {}
 
 
 async def process_event(
@@ -30,6 +24,7 @@ async def process_event(
     event_type = payload["hook_event_name"]
     tool_name = payload.get("tool_name")
     cwd = payload.get("cwd", "")
+    tmux_session = payload.get("_tmux_session")
 
     # Ensure session exists (auto-create on first event)
     await session_manager.ensure_session(
@@ -39,6 +34,7 @@ async def process_event(
         hostname=hostname,
         cwd=cwd,
         transcript_path=payload.get("transcript_path"),
+        tmux_session=tmux_session,
         payload=payload,
     )
 
@@ -62,32 +58,11 @@ async def process_event(
     )
 
     # Store tmux session name if provided (from SessionStart hook)
-    tmux_session = payload.get("_tmux_session")
     if tmux_session:
         await db.update_session_tmux(conn, session_id, tmux_session)
 
-    # Pending state management:
-    # - PreToolUse: record as candidate (not in DB yet — may be auto-approved)
-    # - PostToolUse/Failure: clear pending from DB and clear candidate
-    # The periodic_pending_check promotes candidates to DB after 5s confirmation.
-    if event_type == "PreToolUse" and tool_name:
-        tool_input = payload.get("tool_input") or {}
-        detail = _extract_pending_detail(tool_name, tool_input)
-        _pending_candidates[session_id] = (tool_name, detail, _monotonic())
-    elif event_type in ("PostToolUse", "PostToolUseFailure"):
-        _pending_candidates.pop(session_id, None)
-        if (await db.get_session(conn, session_id) or {}).get("pending_tool"):
-            await db.update_session_pending_tool(conn, session_id, None, None)
-            stats = await db.get_stats(conn)
-            session_data = await db.get_session(conn, session_id)
-            await broadcaster.broadcast({
-                "type": "pending",
-                "session_id": session_id,
-                "pending_tool": None,
-                "pending_detail": None,
-                "tmux_session": session_data.get("tmux_session") if session_data else None,
-                "waiting_count": stats["waiting_sessions"],
-            })
+    # Pending state is now managed entirely by periodic_pending_check
+    # via tmux capture-pane (ground truth). No event-driven pending here.
 
     if event_type == "Stop":
         await session_manager.mark_session_idle(conn, session_id)

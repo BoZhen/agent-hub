@@ -33,6 +33,12 @@ _bot_instance: TelegramBot | None = None
 
 
 class TelegramBot:
+    # Delay before pushing a pending notification. If the prompt is
+    # approved/cleared within this window (e.g. user is already at the
+    # hub), the Telegram push is cancelled — avoids duplicate phone
+    # buzzing when the user is at the computer.
+    NOTIFY_DELAY_SECONDS = 10
+
     def __init__(self, config: HubConfig, db_conn: aiosqlite.Connection) -> None:
         self.config = config
         self.conn = db_conn
@@ -40,6 +46,8 @@ class TelegramBot:
         # Track notified pending tools to avoid duplicate notifications.
         # key: session_id, value: (pending_tool, pending_detail) that was last notified.
         self._notified: dict[str, tuple] = {}
+        # Scheduled delayed notification tasks, keyed by session_id.
+        self._pending_tasks: dict[str, asyncio.Task] = {}
 
         self.app = (
             Application.builder()
@@ -261,24 +269,64 @@ class TelegramBot:
     # ── Notifications ───────────────────────────────────────────────
 
     async def notify_pending(
-        self, session_id: str, pending: object | None, session: dict,
+        self, session_id: str, session: dict,
+        has_always: bool = True,
     ) -> None:
-        """Send or clear notification for a pending tool change.
+        """Schedule a delayed notification for a pending tool approval.
 
-        pending is a PendingTool instance or None.
+        Waits NOTIFY_DELAY_SECONDS, re-checks state, then sends. If the
+        prompt is approved/cleared in that window the task is cancelled,
+        so Telegram only buzzes when the user didn't react at the hub.
         """
-        from agent_hub.services.transcript_reader import PendingTool
-
-        pending_tool = pending.name if isinstance(pending, PendingTool) else None
-        pending_detail = pending.detail if isinstance(pending, PendingTool) else None
+        pending_tool = session.get("pending_tool")
+        pending_detail = session.get("pending_detail")
         key = (pending_tool, pending_detail)
-        prev = self._notified.get(session_id)
-        if key == prev:
-            return  # already notified (or already cleared)
-        self._notified[session_id] = key
+
+        existing = self._pending_tasks.pop(session_id, None)
+        if existing and not existing.done():
+            existing.cancel()
 
         if not pending_tool or not self.chat_id:
             return
+
+        if key == self._notified.get(session_id):
+            return  # already sent this exact notification
+
+        task = asyncio.create_task(
+            self._delayed_notify(session_id, key, has_always)
+        )
+        self._pending_tasks[session_id] = task
+
+    async def _delayed_notify(
+        self, session_id: str, key: tuple, has_always: bool,
+    ) -> None:
+        """Sleep the delay, re-check state, then send if still pending."""
+        try:
+            await asyncio.sleep(self.NOTIFY_DELAY_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+        try:
+            from agent_hub import db
+
+            session = await db.get_session(self.conn, session_id)
+            if not session:
+                return
+
+            current_key = (session.get("pending_tool"), session.get("pending_detail"))
+            if current_key != key or not session.get("pending_tool"):
+                return  # approved, cleared, or changed in the window — bail
+
+            self._notified[session_id] = key
+            await self._send_pending_message(session_id, session, has_always)
+        except Exception:
+            logger.exception("Delayed Telegram notify failed for %s", session_id)
+
+    async def _send_pending_message(
+        self, session_id: str, session: dict, has_always: bool,
+    ) -> None:
+        pending_tool = session.get("pending_tool")
+        pending_detail = session.get("pending_detail")
 
         sid_short = session_id[:8]
         tmux = session.get("tmux_session") or session.get("hostname", "?")
@@ -289,27 +337,18 @@ class TelegramBot:
             f"`{sid_short}` *{tmux}* {cwd}\n"
             f"Tool: *{pending_tool}*"
         )
-
-        # Add assistant reasoning (why this tool is being called)
-        if isinstance(pending, PendingTool) and pending.reasoning:
-            safe_reason = _escape_md(pending.reasoning)
-            text += f"\n\n_{safe_reason}_"
-
-        # Add the command/detail
         if pending_detail:
             safe = _escape_md(pending_detail)
-            text += f"\n\n`{safe}`"
+            text += f"\n`{safe}`"
 
-        # Add last user prompt for context
-        if isinstance(pending, PendingTool) and pending.user_prompt:
-            safe_prompt = _escape_md(pending.user_prompt)
-            text += f"\n\nUser: _{safe_prompt}_"
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Approve", callback_data=f"approve:{session_id}"),
+        buttons = [
+            InlineKeyboardButton("Approve", callback_data=f"approve:{session_id}"),
+        ]
+        if has_always:
+            buttons.append(
                 InlineKeyboardButton("Always", callback_data=f"always:{session_id}"),
-            ]
-        ])
+            )
+        keyboard = InlineKeyboardMarkup([buttons])
         try:
             await self.app.bot.send_message(
                 chat_id=self.chat_id,
@@ -319,6 +358,13 @@ class TelegramBot:
             )
         except Exception:
             logger.exception("Failed to send Telegram notification")
+
+    async def cancel_pending(self, session_id: str) -> None:
+        """Cancel a scheduled (not yet sent) notification and clear dedupe."""
+        task = self._pending_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+        self._notified.pop(session_id, None)
 
     # ── Helpers ──────────────────────────────────────────────────────
 
@@ -341,6 +387,10 @@ class TelegramBot:
         logger.info("Telegram bot started (chat_id=%s)", self.chat_id)
 
     async def stop(self) -> None:
+        for task in self._pending_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._pending_tasks.clear()
         await self.app.updater.stop()
         await self.app.stop()
         await self.app.shutdown()
@@ -370,8 +420,15 @@ async def stop_bot() -> None:
 
 
 async def notify_pending(
-    session_id: str, pending: object | None, session: dict,
+    session_id: str, session: dict, has_always: bool = True,
 ) -> None:
     """Called from periodic_pending_check when pending state changes."""
     if _bot_instance:
-        await _bot_instance.notify_pending(session_id, pending, session)
+        await _bot_instance.notify_pending(session_id, session, has_always)
+
+
+async def cancel_pending(session_id: str) -> None:
+    """Called when a pending prompt is approved/cleared — cancels any
+    scheduled Telegram notification for that session."""
+    if _bot_instance:
+        await _bot_instance.cancel_pending(session_id)

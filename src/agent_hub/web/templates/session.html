@@ -17,6 +17,9 @@
     {% if session.pending_tool %}
     <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0 bg-yellow-900/40 text-yellow-400 animate-pulse"
           id="waiting-{{ session.session_id }}">waiting: {{ session.pending_tool }}</span>
+    {% elif session.running_tool %}
+    <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0 bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
+          id="running-{{ session.session_id }}">⚡ Running {{ session.running_tool }} ({{ session.running_elapsed_label }})</span>
     {% else %}
     <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0
       {% if session.status == 'active' %}bg-green-900/40 text-green-400
@@ -93,10 +96,6 @@
        class="approve-btn text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
       Approve
     </button>
-    <button onclick="approveSession('{{ session.session_id }}', true, this)"
-       class="always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse">
-      Always
-    </button>
       {% else %}
     <a href="{{ terminal_url }}/?{% if session.tmux_session %}attach={{ session.tmux_session }}{% else %}name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}{% endif %}"
        target="_blank"
@@ -156,7 +155,7 @@
 <script>
 const sessionId = "{{ session.session_id }}";
 
-function updateApproveButtons(sid, pendingTool, tmuxSession) {
+function updateApproveButtons(sid, pendingTool, tmuxSession, hasAlways) {
   const actions = document.getElementById('actions-' + sid);
   if (!actions) return;
   if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
@@ -173,11 +172,13 @@ function updateApproveButtons(sid, pendingTool, tmuxSession) {
     approveBtn.onclick = function() { approveSession(sid, false, this); };
     actions.appendChild(approveBtn);
 
-    const alwaysBtn = document.createElement('button');
-    alwaysBtn.className = 'always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
-    alwaysBtn.textContent = 'Always';
-    alwaysBtn.onclick = function() { approveSession(sid, true, this); };
-    actions.appendChild(alwaysBtn);
+    if (hasAlways !== false) {
+      const alwaysBtn = document.createElement('button');
+      alwaysBtn.className = 'always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
+      alwaysBtn.textContent = 'Always';
+      alwaysBtn.onclick = function() { approveSession(sid, true, this); };
+      actions.appendChild(alwaysBtn);
+    }
   } else {
     const cwd = actions.dataset.cwd || '';
     const prefix = sid.substring(0, 8);
@@ -192,7 +193,7 @@ function updateApproveButtons(sid, pendingTool, tmuxSession) {
 
 function onWsMessage(data) {
   if (data.type === 'pending' && data.session_id === sessionId) {
-    updateApproveButtons(sessionId, data.pending_tool, data.tmux_session);
+    updateApproveButtons(sessionId, data.pending_tool, data.tmux_session, data.has_always);
     return;
   }
 
