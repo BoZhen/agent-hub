@@ -22,6 +22,7 @@ class SessionResponse(BaseModel):
     pending_always_label: str | None = None
     tmux_session: str | None = None
     pinned: bool = False
+    tool: str = "claude"
 
 class EventResponse(BaseModel):
     id: int

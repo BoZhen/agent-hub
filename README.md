@@ -1,10 +1,11 @@
 # Agent Hub
 
-Claude Code session management hub -- real-time monitoring, remote approval, and tmux workflow integration for multiple CLI sessions across Tailscale-connected machines.
+AI CLI session management hub -- real-time monitoring, remote approval, and tmux workflow integration for multiple Claude Code and Codex CLI sessions across Tailscale-connected machines.
 
 ## Features
 
-- **Session discovery** -- auto-registers sessions via Claude Code hooks, no polling
+- **Multi-tool support** -- Claude Code and Codex sessions live on the same dashboard, each with its own brand icon on the card's left rail. Claude discovery is push-based (hook events); Codex has no hook system, so Hub discovers it by scanning tmux panes for the Codex TUI signature every ~3s and tracks activity via pane-content hashing
+- **Session discovery** -- Claude auto-registers via Claude Code hooks; Codex auto-registers via tmux-pane scan (no configuration needed — just run `codex` inside tmux)
 - **Per-session event feed** -- each card carries its own mini-list of the latest 2 events (type + time + summary); WebSocket events are routed to the card they belong to, not piled into a global stream. Responsive `md:flex-row` layout — events on the right on wide screens, below the card on narrow ones
 - **Token usage tracking** -- per-session input/output/cache token counts parsed from transcripts
 - **Web dashboard** -- dark-themed UI with mobile-friendly responsive layout, split into `Sessions` / `From Tmux` tabs; shows active sessions + pinned idle + anything waiting, so noisy history never clutters the main view
@@ -14,7 +15,7 @@ Claude Code session management hub -- real-time monitoring, remote approval, and
 - **Model detection** -- tracks which model each session is using, updates on model switch
 - **Remote approval with scope transparency** -- approve pending tool calls from the web UI or Telegram bot. Ground-truth detection via `tmux capture-pane`, with a 10s delay before Telegram push so you won't get buzzed if you react at the hub; parser handles both boxed and unboxed approval prompts and recognizes tool headers (`Bash command`, `Edit file`, ...). The `Always` button now also extracts and shows the verbatim option 2 text (e.g. `Yes, allow reading from .claude/ from this project`) inline on the card, in its tooltip, and in the Telegram notification — so you can see exactly what scope you're granting (command prefix / path whitelist / real session-wide) before clicking, instead of assuming "Always" means "allow everything"
 - **Tmux Hub** (`/tmux`) -- list, create, and kill plain tmux sessions; create with a click-through directory picker; starting Claude inside a pre-existing tmux auto-transfers it to the `From Tmux` tab
-- **State awareness** -- `active` / `idle` / `Running` (long tool in flight) / `Waiting` (pending approval) / `stopped`. Idle is permanent until the underlying tmux dies — sessions you parked yesterday stay idle and resumable. The only path to `stopped` is tmux death, detected within ~60s by a background sweep. `Running` and `Waiting` are mutually exclusive (no more "Running Bash" labels on sessions waiting for approval). Tmux name reuse auto-retires the prior session so a given tmux name never has duplicate live rows.
+- **State awareness** -- `active` / `idle` / `Running` (long tool in flight) / `Waiting` (pending approval) / `stopped`. Idle is permanent until the underlying tmux dies — sessions you parked yesterday stay idle and resumable. The only path to `stopped` is tmux death, detected within ~60s by a background sweep. `Running` and `Waiting` are mutually exclusive (no more "Running Bash" labels on sessions waiting for approval). Tmux name reuse auto-retires the prior session so a given tmux name never has duplicate live rows. Codex sessions reuse the same `active` / `idle` / `stopped` machinery: pane-hash diff refreshes `last_seen_at` on any pane change, so a codex session only soft-idles after 10 min of truly still pane, and reactivates from idle as soon as the next pane change is seen.
 
 ## Quick start
 
@@ -89,18 +90,22 @@ Web pages: `/` (active sessions), `/idle` (parked sessions), `/stopped` (dead se
 ## Architecture
 
 ```
-Claude Code CLI  --[HTTP/command hooks]-->  Agent Hub (FastAPI + SQLite)
-                                               |   |   |
-                                               |   |   +-- Telegram bot (async polling)
-                                               |   +------ Web Terminal (port 7700, tmux gateway)
-                                               +---------- Web Dashboard
-                                                          (Jinja2 + Tailwind + WebSocket)
+Claude Code CLI  --[HTTP/command hooks]----+
+                                           |
+Codex CLI        <-[tmux capture-pane]--+  |
+                                        |  v
+                                      Agent Hub (FastAPI + SQLite)
+                                        |   |   |
+                                        |   |   +-- Telegram bot (async polling)
+                                        |   +------ Web Terminal (port 7700, tmux gateway)
+                                        +---------- Web Dashboard
+                                                    (Jinja2 + Tailwind + WebSocket)
 ```
 
-- **Push model** -- Claude Code pushes events via native hooks, zero polling
+- **Hybrid push + pull** -- Claude pushes events via native hooks (zero polling). Codex has no hook mechanism, so Hub scans alive tmux sessions every ~3s, fingerprints Codex panes via the `OpenAI Codex` welcome box or the `weekly` token in the status line, and tracks activity through pane-content SHA1 hashing. Both paths land in the same sessions table, distinguished by a `tool` column.
 - **Single process** -- API, WebSocket, web UI, MCP server, and Telegram bot in one FastAPI app
 - **SQLite + WAL** -- lightweight, no external DB needed
-- **Session state machine** -- `active` → `idle` (Stop event, or soft-idle after 10min with no PreToolUse in flight and no pane activity). Idle is permanent; the **only** path to `stopped` is the underlying tmux dying, caught within ~60s by a background `_sweep_dead_tmux` pass. `Running` and `Waiting` are derived states overlaid on `active` and are mutually exclusive.
-- **Ground truth** -- pending approval detection uses `tmux capture-pane` to read the live terminal, so auto-approved tools never produce ghost prompts and transcript write lag doesn't matter. The parser handles both boxed and unboxed approval UIs by anchoring on the `❯ 1. Yes` option structure.
+- **Session state machine** -- `active` → `idle` (Claude: Stop event or 10-min soft-idle with no PreToolUse in flight and no pane activity; Codex: 10-min soft-idle with unchanged pane content). Idle is permanent; the **only** path to `stopped` is the underlying tmux dying, caught within ~60s by a background `_sweep_dead_tmux` pass. `Running` and `Waiting` are derived states overlaid on `active` and are mutually exclusive.
+- **Ground truth** -- pending approval detection uses `tmux capture-pane` to read the live terminal, so auto-approved tools never produce ghost prompts and transcript write lag doesn't matter. The parser handles both boxed and unboxed approval UIs by anchoring on the `❯ 1. Yes` option structure. (Codex approval detection via the `› 1. Yes` anchor lands in Phase 2.)
 
 See [DESIGN.md](DESIGN.md) for the full technical design.

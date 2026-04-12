@@ -49,6 +49,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN transferred INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN pending_always_label TEXT",
+    "ALTER TABLE sessions ADD COLUMN tool TEXT DEFAULT 'claude'",
 ]
 
 
@@ -85,20 +86,23 @@ async def upsert_session(
     status: str = "active",
     transcript_path: str | None = None,
     transferred: int = 0,
+    tmux_session: str | None = None,
+    tool: str = "claude",
 ) -> None:
     now = _now()
     await db.execute(
         """
-        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at, transcript_path, transferred)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (session_id, hub_id, hostname, cwd, model, status, started_at, last_seen_at, transcript_path, transferred, tmux_session, tool)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             status = excluded.status,
             last_seen_at = excluded.last_seen_at,
             model = COALESCE(excluded.model, sessions.model),
             cwd = excluded.cwd,
-            transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path)
+            transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
+            tmux_session = COALESCE(excluded.tmux_session, sessions.tmux_session)
         """,
-        (session_id, hub_id, hostname, cwd, model, status, now, now, transcript_path, transferred),
+        (session_id, hub_id, hostname, cwd, model, status, now, now, transcript_path, transferred, tmux_session, tool),
     )
     await db.commit()
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as icons %}
 {% block title %}Dashboard — Agent Hub{% endblock %}
 
 {% block content %}
@@ -38,7 +39,11 @@
         </svg>
       </button>
     </div>
-    <div class="flex flex-col md:flex-row md:gap-4 pr-8">
+    <div class="flex gap-3 pr-8">
+      <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5">
+        {{ icons.tool_icon(s.tool) }}
+      </div>
+      <div class="flex-1 min-w-0 flex flex-col md:flex-row md:gap-4">
       <div class="flex-1 min-w-0">
         <a href="/sessions/{{ s.session_id }}" class="block">
           <div class="flex items-center mb-1.5 sm:mb-2">
@@ -69,7 +74,7 @@
           </div>
           {% endif %}
           <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-          {% if s.output_tokens %}
+          {% if s.output_tokens and s.tool == 'claude' %}
           <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
             <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
             <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
@@ -93,9 +98,12 @@
           </div>
           {% endfor %}
           {% if not s.recent_events %}
-          <div class="events-empty text-xs text-gray-600">no events yet</div>
+          <div class="events-empty text-xs text-gray-600">
+            {% if s.tool == 'codex' %}codex — no event stream{% else %}no events yet{% endif %}
+          </div>
           {% endif %}
         </div>
+      </div>
       </div>
     </div>
     <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"

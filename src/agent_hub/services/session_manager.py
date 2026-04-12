@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re as _re
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -15,6 +17,8 @@ from agent_hub.services.telegram_bot import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_HOSTNAME = socket.gethostname()
 
 
 # Tmux sessions launched by Hub's `/api/tmux/new` with `command=claude`
@@ -165,29 +169,32 @@ async def mark_session_idle(
     await db.update_session_pending_tool(conn, session_id, None, None)
 
 
-_INTERRUPT_RE = None  # lazy-compiled regex (see _is_claude_thinking)
+_INTERRUPT_RE = None  # lazy-compiled regex (see _pane_shows_working)
 
 
-async def _is_claude_thinking(tmux_name: str) -> bool:
-    """Return True if Claude's status line shows it is actively
-    processing (thinking / streaming / running a tool).
+def _pane_shows_working(pane_text: str) -> bool:
+    """Return True if a TUI status line near the pane bottom shows the
+    agent is actively running a tool / thinking / streaming.
 
-    Detected by the parenthesised \"(... esc to interrupt ...)\" hint
-    that appears in the status line at the bottom of the pane. The
-    parentheses requirement makes this robust against free text that
-    happens to mention the phrase without the full TUI structure.
+    Both Claude and Codex emit a parenthesised \"(... esc to interrupt ...)\"
+    hint in their status line (Claude: \"(3s esc to interrupt)\", Codex:
+    \"(11s · esc to interrupt)\"). The parentheses requirement makes this
+    robust against free text that merely mentions the phrase.
     """
     global _INTERRUPT_RE
     if _INTERRUPT_RE is None:
         import re
         _INTERRUPT_RE = re.compile(r"\([^)]*esc to interrupt[^)]*\)")
+    lines = pane_text.splitlines()
+    tail = "\n".join(lines[-10:])
+    return bool(_INTERRUPT_RE.search(tail))
 
+
+async def _is_claude_thinking(tmux_name: str) -> bool:
     pane_text = await _tmux_capture(tmux_name)
     if pane_text is None:
         return False
-    lines = pane_text.splitlines()
-    tail = "\n".join(lines[-8:])
-    return bool(_INTERRUPT_RE.search(tail))
+    return _pane_shows_working(pane_text)
 
 
 async def _soft_idle_pass(
@@ -242,6 +249,141 @@ async def _list_alive_tmux_names() -> set[str]:
         for line in stdout.decode("utf-8", errors="replace").splitlines()
         if line.strip()
     }
+
+
+# ── Codex discovery ─────────────────────────────────────────────
+#
+# Codex has no hook system like Claude. We discover codex sessions by
+# scanning tmux panes for its TUI signature. Activity is measured by
+# pane-content hash diff — if the pane has changed since the last tick,
+# we touch last_seen_at and reactivate any idle session. Claude uses
+# hook events for the same purpose; codex gets the same effect via
+# periodic pane snapshots. _soft_idle_pass (tool-agnostic) handles the
+# reverse when a codex pane truly sits still for 10 min.
+
+_CODEX_MODEL_RE = _re.compile(r"(gpt-[\w.-]+codex(?:\s+\w+)?)")
+_CODEX_PANE_HASH: dict[str, str] = {}
+
+
+def _hash_pane(text: str) -> str:
+    import hashlib
+    return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _is_codex_pane(pane_text: str) -> bool:
+    """Detect if a tmux pane is running Codex TUI.
+
+    Two independent signals; either is sufficient. The welcome box
+    (`>_ OpenAI Codex (vX.Y.Z)`) is visible while the pane hasn't
+    scrolled past it. The status line — `gpt-X-codex ... · weekly N%`
+    — is always anchored at the bottom. Claude panes don't carry a
+    `weekly` token, so its presence in the tail plus any mention of
+    `codex` is a reliable fingerprint.
+    """
+    if "OpenAI Codex" in pane_text:
+        return True
+    lines = pane_text.splitlines()
+    tail = "\n".join(lines[-8:])
+    return "weekly" in tail and "codex" in tail.lower()
+
+
+def _extract_codex_model(pane_text: str) -> str | None:
+    m = _CODEX_MODEL_RE.search(pane_text)
+    return m.group(1).strip()[:80] if m else None
+
+
+async def _tmux_session_info(name: str) -> tuple[str | None, int | None]:
+    """Return (cwd, created_unix_ts) for a tmux session."""
+    proc = await asyncio.create_subprocess_exec(
+        "tmux", "display-message", "-t", f"{name}:",
+        "-p", "#{session_path}\t#{session_created}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return (None, None)
+    parts = stdout.decode().strip().split("\t")
+    if len(parts) != 2:
+        return (None, None)
+    try:
+        return (parts[0] or None, int(parts[1]))
+    except ValueError:
+        return (parts[0] or None, None)
+
+
+async def _discover_codex_tmux(
+    conn: aiosqlite.Connection, hub_id: str, hostname: str
+) -> int:
+    """Scan alive tmux panes for Codex and sync DB state.
+
+    Transitions (all driven off pane capture):
+    - Unclaimed tmux + codex signature     → upsert new session
+    - Existing session + pane changed      → touch + reactivate if idle
+    - Existing session + pane unchanged    → leave it; _soft_idle_pass
+      will eventually demote if no change for 10 min
+    """
+    alive = await _list_alive_tmux_names()
+    if not alive:
+        return 0
+
+    cursor = await conn.execute(
+        "SELECT tmux_session, session_id, status, tool FROM sessions "
+        "WHERE tmux_session IS NOT NULL AND status IN ('active', 'idle')"
+    )
+    rows = await cursor.fetchall()
+    claimed: dict[str, dict[str, Any]] = {
+        r["tmux_session"]: dict(r) for r in rows if r["tmux_session"]
+    }
+
+    created = 0
+    for name in alive:
+        existing = claimed.get(name)
+        if existing and existing.get("tool") != "codex":
+            # This tmux belongs to a Claude session — skip.
+            continue
+
+        pane = await _tmux_capture(name)
+        if pane is None or not _is_codex_pane(pane):
+            continue
+
+        new_hash = _hash_pane(pane)
+
+        if existing is None:
+            cwd, created_ts = await _tmux_session_info(name)
+            if not cwd or not created_ts:
+                continue
+            session_id = f"codex-{name}-{created_ts}"
+            model = _extract_codex_model(pane)
+            await db.upsert_session(
+                conn,
+                session_id=session_id,
+                hub_id=hub_id,
+                hostname=hostname,
+                cwd=cwd,
+                model=model,
+                status="active",
+                tmux_session=name,
+                tool="codex",
+            )
+            _CODEX_PANE_HASH[session_id] = new_hash
+            created += 1
+            logger.info(
+                "Discovered codex session: tmux=%s → %s (model=%s)",
+                name, session_id, model,
+            )
+            continue
+
+        sid = existing["session_id"]
+        old_hash = _CODEX_PANE_HASH.get(sid)
+        if new_hash != old_hash:
+            _CODEX_PANE_HASH[sid] = new_hash
+            if existing["status"] == "idle":
+                await db.update_session_status(conn, sid, "active")
+                logger.info("Reactivated codex session %s (pane changed)", sid)
+            await db.touch_session(conn, sid)
+
+    return created
 
 
 async def _sweep_dead_tmux(conn: aiosqlite.Connection) -> int:
@@ -337,7 +479,6 @@ _APPROVAL_HEADERS = {
 _BOX_VERTICAL = "\u2502"   # │
 _SELECTOR = "\u276f"       # ❯
 
-import re as _re
 _SELECTOR_OPTION_RE = _re.compile(_SELECTOR + r"\s+1\.\s+Yes")
 _OPTION2_RE = _re.compile(r"^\s*2\.\s+(Yes.*?)\s*$")
 
@@ -474,16 +615,22 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, str | None] | None
     return ("Tool", detail[:150], always_label)
 
 
-async def periodic_pending_check(conn: aiosqlite.Connection) -> None:
+async def periodic_pending_check(
+    conn: aiosqlite.Connection, hub_id: str
+) -> None:
     """Background task: check active sessions for pending tool approval every 3s.
 
     Uses tmux capture-pane as ground truth — if the terminal shows
     "Do you want to proceed?", the session is waiting for approval.
     No delay, no false positives.
+
+    Also runs the Codex discovery sweep at the top of each tick so
+    newly-started codex TUIs appear on the dashboard within ~3s.
     """
     while True:
         try:
             await asyncio.sleep(3)
+            await _discover_codex_tmux(conn, hub_id, _LOCAL_HOSTNAME)
             sessions = await db.get_sessions(conn, status="active")
 
             for session in sessions:

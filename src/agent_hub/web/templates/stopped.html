@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as icons %}
 {% block title %}Stopped Sessions — Agent Hub{% endblock %}
 
 {% block content %}
@@ -22,29 +23,36 @@
 <div id="sessions-list" class="space-y-2 sm:space-y-3">
   {% for s in sessions %}
   <div id="card-{{ s.session_id }}" class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition">
-    <a href="/sessions/{{ s.session_id }}" class="block">
-      <div class="flex items-center justify-between mb-1.5 sm:mb-2">
-        <div class="flex items-center gap-2">
-          <span class="dot dot-stopped"></span>
-          <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
-          {% if s.tmux_session %}
-          <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+    <div class="flex gap-3">
+      <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5 opacity-60">
+        {{ icons.tool_icon(s.tool) }}
+      </div>
+      <div class="flex-1 min-w-0">
+        <a href="/sessions/{{ s.session_id }}" class="block">
+          <div class="flex items-center justify-between mb-1.5 sm:mb-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="dot dot-stopped"></span>
+              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+              {% if s.tmux_session %}
+              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+              {% endif %}
+            </div>
+            <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+          </div>
+          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+          {% if s.output_tokens and s.tool == 'claude' %}
+          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+          </div>
           {% endif %}
-        </div>
-        <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+            <span>{{ s.last_seen_at[:16] }}</span>
+          </div>
+        </a>
       </div>
-      <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-      {% if s.output_tokens %}
-      <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-        <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-        <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-      </div>
-      {% endif %}
-      <div class="flex items-center justify-between text-xs text-gray-500">
-        <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
-        <span>{{ s.last_seen_at[:16] }}</span>
-      </div>
-    </a>
+    </div>
     <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20">
       <button onclick="deleteSession('{{ s.session_id }}', 'stopped', false, this)"
          class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
