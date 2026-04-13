@@ -1,0 +1,62 @@
+"""Regression tests for the Codex approval parser.
+
+Run with:
+    uv run python tests/test_codex_parser.py
+
+No pytest dependency — each fixture is a tmux pane capture saved
+under `tests/fixtures/`, and the test asserts the expected parse
+output. Add new fixtures when a real-world pane triggers a parser
+edge case the current fixture set doesn't cover.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from agent_hub.services.session_manager import _parse_codex_approval_prompt
+
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+# (fixture_filename, expected_parse_output)
+# expected is None for an idle pane (no approval), otherwise a
+# (tool_name, detail, always_label) tuple.
+CASES: list[tuple[str, tuple[str, str, str | None] | None]] = [
+    # Narrow-terminal MCP approval where the title wraps across two
+    # lines ("Allow the omx_memory MCP server to run" / "tool ..."),
+    # breaking the original single-line question-phrase match. Also
+    # guards against the detail extractor's multi-space join bug
+    # that used to drop the server name.
+    (
+        "codex-mcp-approval-wrapped.txt",
+        ("MCP", "omx_memory: project_memory_read", "Always allow"),
+    ),
+]
+
+
+def _run() -> int:
+    failures = 0
+    for filename, expected in CASES:
+        path = _FIXTURES_DIR / filename
+        if not path.exists():
+            print(f"FAIL {filename}: fixture missing at {path}")
+            failures += 1
+            continue
+        pane = path.read_text()
+        got = _parse_codex_approval_prompt(pane)
+        if got != expected:
+            print(f"FAIL {filename}")
+            print(f"  expected: {expected}")
+            print(f"  got:      {got}")
+            failures += 1
+        else:
+            print(f"OK   {filename}: {got}")
+    if failures:
+        print(f"\n{failures} failure(s)")
+        return 1
+    print(f"\n{len(CASES)} fixture(s) passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_run())

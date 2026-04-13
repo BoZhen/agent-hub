@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from agent_hub import db
+from agent_hub.api.ws import broadcaster
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
 from agent_hub.services.session_manager import mark_approved_suppress
 
@@ -200,6 +201,21 @@ async def approve_session(
             )
         mark_approved_suppress(session_id, *approval_sig)
         await db.update_session_pending_tool(conn, session_id, None, None)
+        # Broadcast cleared state immediately so the dashboard
+        # clears its badge / always label / dot / waiting counter
+        # without waiting for the next periodic tick — which
+        # wouldn't fire a clear broadcast anyway since db_tool is
+        # already None. Also fixes Telegram-initiated approvals,
+        # which have no optimistic JS running on the dashboard.
+        stats = await db.get_stats(conn)
+        await broadcaster.broadcast({
+            "type": "pending",
+            "session_id": session_id,
+            "pending_tool": None,
+            "pending_detail": None,
+            "tmux_session": tmux_name,
+            "waiting_count": stats["waiting_sessions"],
+        })
         return {"ok": True, "tmux_session": tmux_name, "always": always}
 
     if always:
@@ -238,6 +254,19 @@ async def approve_session(
 
     mark_approved_suppress(session_id, *approval_sig)
     await db.update_session_pending_tool(conn, session_id, None, None)
+    # Mirror the codex-branch broadcast: emit a cleared pending
+    # event so the dashboard + Telegram bot + any other WebSocket
+    # subscriber updates immediately instead of waiting on a
+    # periodic-tick clear (which no longer fires — see codex branch).
+    stats = await db.get_stats(conn)
+    await broadcaster.broadcast({
+        "type": "pending",
+        "session_id": session_id,
+        "pending_tool": None,
+        "pending_detail": None,
+        "tmux_session": tmux_name,
+        "waiting_count": stats["waiting_sessions"],
+    })
     return {"ok": True, "tmux_session": tmux_name, "always": always}
 
 

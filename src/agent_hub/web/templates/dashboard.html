@@ -62,11 +62,16 @@
     <h2 class="text-base sm:text-lg font-bold text-white mb-3">New Session</h2>
 
     <label class="block text-xs text-gray-400 mb-1">Tool</label>
-    <div class="grid grid-cols-2 gap-2 mb-2">
-      <button id="nc-tool-claude" type="button"
-              title="claude"
+    <div class="grid grid-cols-3 gap-2 mb-2">
+      <button id="nc-tool-claude-sonnet" type="button"
+              title="claude --model sonnet"
               class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        Claude
+        Sonnet
+      </button>
+      <button id="nc-tool-claude-opus" type="button"
+              title="claude --model opus"
+              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
+        Opus
       </button>
       <button id="nc-tool-codex" type="button"
               title="codex (inherits omx hooks + MCP + xhigh from ~/.codex/config.toml)"
@@ -145,6 +150,7 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
       }
     }
   } else {
+    if (dot) dot.className = 'dot dot-active';
     if (existing) existing.remove();
     if (existingDetail) existingDetail.remove();
   }
@@ -347,8 +353,12 @@ function approveSession(sessionId, always, btn) {
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
-        // Optimistic UI: clear badge and buttons immediately
+        // Optimistic UI: clear badge, always label, and buttons
+        // immediately. The server also broadcasts {pending_tool:null}
+        // via WebSocket, which is idempotent with these calls and
+        // also updates the stat-waiting counter.
         updateWaitingBadge(sessionId, null);
+        updateAlwaysLabel(sessionId, null);
         updateApproveButtons(sessionId, null);
       } else {
         alert(data.detail || 'Approve failed');
@@ -379,16 +389,16 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
-// ── New session modal (Claude / Codex) ──
+// ── New session modal (Claude Sonnet / Claude Opus / Codex / YOLO variants) ──
 const TERMINAL_URL = "{{ terminal_url }}";
 let ncBrowsePath = null;
-let ncTool = 'claude';
+let ncTool = 'claude-opus';
 
 function ncSetTool(tool) {
   ncTool = tool;
   const active = 'nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition bg-accent text-white';
   const inactive = 'nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition bg-surface text-gray-400 hover:text-white border border-gray-700/50';
-  for (const t of ['claude', 'codex', 'claude-yolo', 'omx-yolo']) {
+  for (const t of ['claude-sonnet', 'claude-opus', 'codex', 'claude-yolo', 'omx-yolo']) {
     const el = document.getElementById('nc-tool-' + t);
     if (el) el.className = (tool === t) ? active : inactive;
   }
@@ -460,7 +470,7 @@ function ncRenderDirList(data) {
 function ncOpen() {
   ncClearError();
   document.getElementById('nc-name').value = '';
-  ncSetTool('claude');
+  ncSetTool('claude-opus');
   const modal = document.getElementById('modal-new-claude');
   modal.classList.remove('hidden');
   modal.classList.add('flex');
@@ -501,7 +511,8 @@ async function ncCreate() {
 document.getElementById('btn-new-claude').addEventListener('click', ncOpen);
 document.getElementById('nc-cancel').addEventListener('click', ncClose);
 document.getElementById('nc-create').addEventListener('click', ncCreate);
-document.getElementById('nc-tool-claude').addEventListener('click', () => ncSetTool('claude'));
+document.getElementById('nc-tool-claude-sonnet').addEventListener('click', () => ncSetTool('claude-sonnet'));
+document.getElementById('nc-tool-claude-opus').addEventListener('click', () => ncSetTool('claude-opus'));
 document.getElementById('nc-tool-codex').addEventListener('click', () => ncSetTool('codex'));
 document.getElementById('nc-tool-claude-yolo').addEventListener('click', () => ncSetTool('claude-yolo'));
 document.getElementById('nc-tool-omx-yolo').addEventListener('click', () => ncSetTool('omx-yolo'));

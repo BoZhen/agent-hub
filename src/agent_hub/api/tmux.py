@@ -11,20 +11,40 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-_ALLOWED_COMMANDS = {"claude", "claude-yolo", "codex", "omx-yolo"}
+_ALLOWED_COMMANDS = {
+    "claude-sonnet",
+    "claude-opus",
+    "claude-yolo",
+    "codex",
+    "omx-yolo",
+}
 
 # Maps a virtual command key → the actual binary name that gets resolved
 # via shutil.which. Keys not listed here are resolved as-is.
 _COMMAND_BIN: dict[str, str] = {
+    "claude-sonnet": "claude",
+    "claude-opus": "claude",
     "claude-yolo": "claude",
     "omx-yolo": "omx",
 }
 
 # Extra args appended after the resolved command path. Lets virtual command
-# keys inject dangerous-mode / preset flags while keeping a flat allowlist.
+# keys inject model selectors / dangerous-mode flags while keeping a flat
+# allowlist.
 _COMMAND_ARGS: dict[str, list[str]] = {
+    "claude-sonnet": ["--model", "sonnet"],
+    "claude-opus": ["--model", "opus"],
     "claude-yolo": ["--dangerously-skip-permissions"],
     "omx-yolo": ["--madmax", "--xhigh"],
+}
+
+# Auto-name prefix override for virtual command keys. Commands not
+# listed here fall back to the key itself. Used to shorten the auto-
+# generated tmux name: "claude-sonnet-<workdir>-N" is too long, but
+# "sonnet-<workdir>-N" / "opus-<workdir>-N" still disambiguate.
+_NAME_PREFIX: dict[str, str] = {
+    "claude-sonnet": "sonnet",
+    "claude-opus": "opus",
 }
 
 logger = logging.getLogger(__name__)
@@ -148,8 +168,10 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
         if name in existing_names:
             raise HTTPException(409, f"tmux session '{name}' already exists")
     else:
+        cmd_key = req.command or ""
         name = _auto_name(
-            str(resolved), existing_names, prefix=req.command or "",
+            str(resolved), existing_names,
+            prefix=_NAME_PREFIX.get(cmd_key, cmd_key),
         )
 
     tmux_args = [

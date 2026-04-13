@@ -785,10 +785,14 @@ def _extract_codex_mcp_detail(
         Allow the <server> MCP server to run tool "<tool>"?
     Codex may word-wrap the title across 2-3 lines on narrow panes,
     so we scan a 4-line window from `question_idx` and run the
-    regexes over the concatenated text.
+    regexes over the concatenated text. Each line is stripped
+    before joining so leading indentation from word-wrap
+    continuation rows doesn't insert extra spaces between words
+    ("...to run" + "  tool..." would otherwise yield "to run   tool"
+    with three spaces, breaking the single-space regex anchor).
     """
     end = min(len(lines), question_idx + 4, selector_idx)
-    combined = " ".join(lines[question_idx:end])
+    combined = " ".join(line.strip() for line in lines[question_idx:end])
     server_match = _re.search(r"Allow the (\S+) MCP server to run tool", combined)
     tool_match = _re.search(r'tool "([^"]+)"', combined)
     server = server_match.group(1) if server_match else ""
@@ -905,12 +909,22 @@ def _parse_codex_approval_prompt(
 
     # Signal 3: question phrase within 15 lines above the selector.
     # The first matching pattern wins, so the table order matters
-    # (Bash is listed first as the common case).
+    # (Bash is listed first as the common case). We check each line
+    # individually AND each line joined with the next — codex word-
+    # wraps titles on narrow panes, so a 5-word phrase like
+    # "MCP server to run tool" can span two lines ("... MCP server
+    # to run" / "tool ...") and no single line contains the full
+    # phrase. The 2-line join keeps `question_idx` pointing at the
+    # first line, which is what the detail extractors expect.
     tool_name: str | None = None
     question_idx: int | None = None
-    for i in range(max(0, selector_idx - 15), selector_idx):
+    search_start = max(0, selector_idx - 15)
+    for i in range(search_start, selector_idx):
+        candidates = [lines[i]]
+        if i + 1 < selector_idx:
+            candidates.append(lines[i].strip() + " " + lines[i + 1].strip())
         for phrase, t_name in _CODEX_QUESTION_PATTERNS:
-            if phrase in lines[i]:
+            if any(phrase in c for c in candidates):
                 question_idx = i
                 tool_name = t_name
                 break
