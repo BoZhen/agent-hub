@@ -69,31 +69,44 @@ async def ensure_session(
     if existing is None:
         transferred = 0
         if tmux_session:
-            # Claude's workspace-trust prompt delay heuristic only
-            # applies to Claude sessions — codex has no such prompt,
-            # so treat codex hook arrivals as first-class (not "from
-            # tmux") regardless of tmux creation age.
-            if tool != "codex":
-                transferred = await _detect_transferred(tmux_session)
-            # Retire earlier sessions that shared this tmux name — the
-            # name has been reused for a new CLI instance (possibly a
-            # different tool), so any prior session_id bound to it is
-            # definitively dead. Without this, tmux-name reuse leaves
-            # stale idle rows forever.
+            # Look for an in-flight predecessor in this tmux BEFORE
+            # running the timing heuristic. An active/idle row with
+            # the same tmux_session means this SessionStart is a
+            # `/clear` (new session_id, same tmux) or a resume — in
+            # either case we want to inherit the predecessor's
+            # `transferred` flag instead of re-running the 5s
+            # heuristic, which would spuriously flip a first-class
+            # session into "From Tmux" just because tmux is now
+            # hours old.
             cursor = await conn.execute(
-                "SELECT session_id FROM sessions "
+                "SELECT session_id, transferred FROM sessions "
                 "WHERE tmux_session = ? AND session_id != ? "
                 "AND status IN ('active', 'idle')",
                 (tmux_session, session_id),
             )
-            orphans = [r["session_id"] for r in await cursor.fetchall()]
-            for orphan_id in orphans:
+            orphan_rows = list(await cursor.fetchall())
+
+            if orphan_rows:
+                # /clear or resume: inherit the predecessor's flag.
+                transferred = int(orphan_rows[0]["transferred"] or 0)
+            elif tool != "codex":
+                # Fresh tmux (no same-tmux predecessor) — run the
+                # Claude workspace-trust prompt delay heuristic.
+                # Codex has no such prompt, so codex hook arrivals
+                # stay first-class regardless of tmux age.
+                transferred = await _detect_transferred(tmux_session)
+
+            # Retire the orphans. This covers both /clear (new
+            # session inside same tmux) and genuine tmux-name reuse
+            # by a different CLI instance.
+            for row in orphan_rows:
+                orphan_id = row["session_id"]
                 await db.update_session_status(conn, orphan_id, "stopped")
                 await db.update_session_pending_tool(conn, orphan_id, None, None)
-            if orphans:
+            if orphan_rows:
                 logger.info(
                     "Retired %d older session(s) bound to reused tmux %s",
-                    len(orphans), tmux_session,
+                    len(orphan_rows), tmux_session,
                 )
         await db.upsert_session(
             conn,
