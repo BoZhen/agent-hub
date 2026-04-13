@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from agent_hub import db
+from agent_hub.services.session_manager import _pane_shows_working, _tmux_capture
 
 RUNNING_THRESHOLD_SECONDS = 30
 
@@ -24,9 +25,16 @@ def _format_elapsed(seconds: int) -> str:
 
 
 async def _enrich_running(conn, session: dict) -> dict:
-    """If this session is an active Claude session currently running a
-    tool for more than RUNNING_THRESHOLD_SECONDS, annotate it with
-    `running_tool` (tool name) and `running_elapsed_label` (e.g. \"2m 15s\").
+    """If this session is an active session currently running a tool
+    for more than RUNNING_THRESHOLD_SECONDS *and* the tmux pane still
+    shows the agent's "(N s · esc to interrupt)" marker, annotate with
+    `running_tool` and `running_elapsed_label`.
+
+    The pane-state check is the ground-truth guard: without it, a
+    user interrupt (Esc / Ctrl-C) during tool execution leaves the
+    last event stuck at PreToolUse forever — no PostToolUse ever
+    follows — and elapsed would grow unbounded, pinning the card in
+    a fake "Running Bash (7m 33s)" state indefinitely.
     """
     if session.get("status") != "active":
         return session
@@ -47,6 +55,19 @@ async def _enrich_running(conn, session: dict) -> dict:
     elapsed = (datetime.now(timezone.utc) - created).total_seconds()
     if elapsed < RUNNING_THRESHOLD_SECONDS:
         return session
+
+    # Ground-truth guard against stale "running" labels: if the tmux
+    # pane no longer shows the "(... esc to interrupt ...)" status
+    # line, the tool has stopped running (user interrupted, or the
+    # agent completed its turn but never emitted a PostToolUse due
+    # to how the hook is delivered in that flow). Claude and Codex
+    # both emit this marker, so one check covers both tools.
+    tmux_name = session.get("tmux_session")
+    if tmux_name:
+        pane = await _tmux_capture(tmux_name)
+        if pane is None or not _pane_shows_working(pane):
+            return session
+
     session["running_tool"] = last.get("tool_name") or "Tool"
     session["running_elapsed_label"] = _format_elapsed(int(elapsed))
     return session
