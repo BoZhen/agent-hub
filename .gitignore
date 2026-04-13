@@ -11,3 +11,4 @@ build/
 .python-version
 uv.lock
 certs/
+.omx/

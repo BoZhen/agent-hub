@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re as _re
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -31,11 +32,38 @@ _HUB_LAUNCHED_TTL = 120.0
 
 
 def mark_hub_launched(tmux_name: str) -> None:
-    import time
     now = time.time()
     for k in [k for k, ts in _HUB_LAUNCHED_TMUX.items() if now - ts > _HUB_LAUNCHED_TTL]:
         _HUB_LAUNCHED_TMUX.pop(k, None)
     _HUB_LAUNCHED_TMUX[tmux_name] = now
+
+
+# Suppression table for Hub-initiated approvals: when the user clicks
+# Approve/Always, `approve_session` sends keys to tmux and records the
+# approved signature here. The periodic pending-check then skips
+# broadcasting if the pane still shows this exact signature within the
+# grace window — covers the gap between "Hub sent keys" and "claude/codex
+# actually dismissed the approval UI on the pane". Populated by approve
+# handler, consumed (and popped) by `periodic_pending_check`.
+#
+# sid -> ((pending_tool, pending_detail, pending_always_label), until_ts)
+_APPROVED_SUPPRESS: dict[str, tuple[tuple[Any, Any, Any], float]] = {}
+_APPROVED_SUPPRESS_GRACE_S = 3.0
+
+
+def mark_approved_suppress(
+    session_id: str,
+    pending_tool: Any,
+    pending_detail: Any,
+    pending_always_label: Any,
+) -> None:
+    """Record that the Hub just approved the given signature. Used by
+    `periodic_pending_check` to avoid re-broadcasting the same approval
+    before claude/codex has dismissed it from the pane."""
+    _APPROVED_SUPPRESS[session_id] = (
+        (pending_tool, pending_detail, pending_always_label),
+        time.time() + _APPROVED_SUPPRESS_GRACE_S,
+    )
 
 
 async def ensure_session(
@@ -958,6 +986,24 @@ async def periodic_pending_check(
 
                 if parsed:
                     pending_tool, pending_detail, always_label = parsed
+                    sig = (pending_tool, pending_detail, always_label)
+
+                    # Suppression window: the user just clicked Approve in
+                    # the Hub, and claude/codex hasn't dismissed the pane
+                    # UI yet. If the parsed signature still matches what
+                    # we approved and we're within the grace window, skip
+                    # this tick — avoids re-broadcasting the already-
+                    # resolved approval as a "new" pending. When the
+                    # signature changes (new approval came up) or the
+                    # grace window expires, fall through to normal
+                    # compare+broadcast so we don't miss anything.
+                    suppress = _APPROVED_SUPPRESS.get(sid)
+                    if suppress is not None:
+                        suppress_sig, until_ts = suppress
+                        if time.time() < until_ts and sig == suppress_sig:
+                            continue
+                        _APPROVED_SUPPRESS.pop(sid, None)
+
                     has_always = always_label is not None
                     db_label = session.get("pending_always_label")
                     if (
@@ -986,6 +1032,7 @@ async def periodic_pending_check(
                         )
                 elif db_tool:
                     # Prompt gone — tool was approved or cancelled
+                    _APPROVED_SUPPRESS.pop(sid, None)
                     await db.update_session_pending_tool(conn, sid, None, None)
                     await tg_cancel_pending(sid)
                     stats = await db.get_stats(conn)

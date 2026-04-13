@@ -1,0 +1,118 @@
+{% import "_macros.html" as icons %}
+
+{% macro session_card(s, terminal_url) %}
+  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative"
+       id="card-{{ s.session_id }}">
+    <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
+      <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
+      <button type="button"
+              onclick="togglePin('{{ s.session_id }}', this)"
+              data-pinned="{{ 1 if s.pinned else 0 }}"
+              data-status="{{ s.status }}"
+              class="pin-btn p-0.5 {% if s.pinned %}text-accent-light hover:text-white{% else %}text-gray-600 hover:text-gray-300{% endif %} transition"
+              title="{% if s.pinned %}Unpin from dashboard{% else %}Pin to dashboard{% endif %}">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex gap-3 pr-8">
+      <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5">
+        {{ icons.tool_icon(s.tool) }}
+      </div>
+      <div class="flex-1 min-w-0 flex flex-col md:flex-row md:gap-4">
+      <div class="flex-1 min-w-0">
+        <a href="/sessions/{{ s.session_id }}" class="block">
+          <div class="flex items-center mb-1.5 sm:mb-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
+              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+              {% if s.tmux_session %}
+              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
+              {% endif %}
+              {% if s.pending_tool %}
+              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
+                    id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
+              {% elif s.running_tool %}
+              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
+                    id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if s.pending_detail %}
+          <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
+               id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
+          {% endif %}
+          {% if s.pending_always_label %}
+          <div class="text-xs text-emerald-300/60 truncate mb-1 pl-4"
+               id="always-label-{{ s.session_id }}"
+               title="{{ s.pending_always_label }}">
+            <span class="text-gray-500">Always →</span> {{ s.pending_always_label }}
+          </div>
+          {% endif %}
+          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
+          {% if s.output_tokens and s.tool == 'claude' %}
+          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
+            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
+            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
+          </div>
+          {% endif %}
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+            <span>{{ s.last_seen_at[11:19] }}</span>
+          </div>
+        </a>
+      </div>
+      <div class="md:w-56 md:shrink-0 mt-2 pt-2 border-t border-gray-700/30 md:mt-0 md:pt-0 md:border-t-0 md:pl-3 md:border-l md:border-gray-700/30">
+        <div id="events-{{ s.session_id }}" class="space-y-1.5">
+          {% for e in s.recent_events or [] %}
+          <div class="text-xs leading-tight">
+            <div class="flex items-center gap-2">
+              <span class="text-accent-light">{{ e.event_type }}</span>
+              <span class="text-gray-500">{{ e.created_at[11:19] }}</span>
+            </div>
+            <div class="text-gray-400 truncate">{{ e.summary or '—' }}</div>
+          </div>
+          {% endfor %}
+          {% if not s.recent_events %}
+          <div class="events-empty text-xs text-gray-600">
+            {% if s.tool == 'codex' %}codex — no event stream{% else %}no events yet{% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
+         id="actions-{{ s.session_id }}"
+         data-tmux="{{ s.tmux_session or '' }}"
+         data-cwd="{{ s.cwd }}">
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
+         target="_blank"
+         class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
+        Terminal
+      </a>
+      {% if s.pending_tool %}
+        {% if s.tmux_session %}
+      <button onclick="approveSession('{{ s.session_id }}', false, this)"
+         class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+        Approve
+      </button>
+          {% if s.pending_always_label %}
+      <button onclick="approveSession('{{ s.session_id }}', true, this)"
+         class="always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse"
+         title="{{ s.pending_always_label }}">
+        Always
+      </button>
+          {% endif %}
+        {% else %}
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
+         target="_blank"
+         class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
+        Approve &rarr;
+      </a>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}

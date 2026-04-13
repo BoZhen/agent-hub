@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from agent_hub import db
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
+from agent_hub.services.session_manager import mark_approved_suppress
 
 router = APIRouter()
 
@@ -151,6 +152,19 @@ async def approve_session(
             detail="No active 'always' option on this session",
         )
 
+    # Capture the signature BEFORE sending keys so the periodic
+    # pending-check can suppress re-broadcasting this exact approval
+    # while claude/codex hasn't dismissed the pane UI yet. Without
+    # this, a back-to-back same-signature approval (e.g., two Bash
+    # `ls` in a row) looks identical to the stale DB cache and
+    # never broadcasts — the badge stays cleared until the user
+    # manually refreshes.
+    approval_sig = (
+        session.get("pending_tool"),
+        session.get("pending_detail"),
+        session.get("pending_always_label"),
+    )
+
     tool = session.get("tool") or "claude"
 
     if tool == "codex":
@@ -184,6 +198,8 @@ async def approve_session(
                 status_code=400,
                 detail=f"tmux send-keys failed: {err_msg}",
             )
+        mark_approved_suppress(session_id, *approval_sig)
+        await db.update_session_pending_tool(conn, session_id, None, None)
         return {"ok": True, "tmux_session": tmux_name, "always": always}
 
     if always:
@@ -220,6 +236,8 @@ async def approve_session(
         except httpx.HTTPError as e:
             raise HTTPException(status_code=502, detail=f"Terminal server error: {e}")
 
+    mark_approved_suppress(session_id, *approval_sig)
+    await db.update_session_pending_tool(conn, session_id, None, None)
     return {"ok": True, "tmux_session": tmux_name, "always": always}
 
 

@@ -11,7 +11,21 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-_ALLOWED_COMMANDS = {"claude", "codex"}
+_ALLOWED_COMMANDS = {"claude", "claude-yolo", "codex", "omx-yolo"}
+
+# Maps a virtual command key → the actual binary name that gets resolved
+# via shutil.which. Keys not listed here are resolved as-is.
+_COMMAND_BIN: dict[str, str] = {
+    "claude-yolo": "claude",
+    "omx-yolo": "omx",
+}
+
+# Extra args appended after the resolved command path. Lets virtual command
+# keys inject dangerous-mode / preset flags while keeping a flat allowlist.
+_COMMAND_ARGS: dict[str, list[str]] = {
+    "claude-yolo": ["--dangerously-skip-permissions"],
+    "omx-yolo": ["--madmax", "--xhigh"],
+}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -116,9 +130,10 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
                 400,
                 f"command must be one of {sorted(_ALLOWED_COMMANDS)}",
             )
-        cmd_path = shutil.which(req.command)
+        bin_name = _COMMAND_BIN.get(req.command, req.command)
+        cmd_path = shutil.which(bin_name)
         if not cmd_path:
-            raise HTTPException(400, f"command not found in PATH: {req.command}")
+            raise HTTPException(400, f"command not found in PATH: {bin_name}")
 
     existing_sessions = await _tmux_ls()
     existing_names = {s["name"] for s in existing_sessions}
@@ -142,6 +157,7 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
     ]
     if cmd_path:
         tmux_args.append(cmd_path)
+        tmux_args.extend(_COMMAND_ARGS.get(req.command or "", []))
 
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,

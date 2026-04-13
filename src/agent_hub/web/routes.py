@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -208,3 +208,30 @@ async def session_detail(
             "current_page": "dashboard",
         },
     )
+
+
+@router.get("/partials/session-card/{session_id}")
+async def session_card_partial(request: Request, session_id: str) -> dict:
+    """Render a single session card as an HTML fragment.
+
+    Used by the dashboard's WebSocket handler to insert a card for a
+    session that wasn't present in the initial server-side render.
+    """
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    await _enrich_running(conn, session)
+    session["recent_events"] = await db.get_session_events_latest(
+        conn, session_id, n=2,
+    )
+    terminal_url = _terminal_url(request)
+    html = templates.env.get_template("_card_fragment.html").render(
+        s=session,
+        terminal_url=terminal_url,
+    )
+    return {
+        "html": html,
+        "transferred": int(session.get("transferred", 0) or 0),
+        "status": session.get("status", "active"),
+    }

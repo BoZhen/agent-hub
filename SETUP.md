@@ -374,6 +374,8 @@ export AGENT_HUB_URL="http://100.64.0.1:7800"   # 替换为 Hub 主机的 Tailsc
 | codex MCP 审批无 waiting 徽章 | codex 卡住等 MCP tool，dashboard 无反应 | MCP 调用不走 hook，只靠 pane-scan 3s tick —— 等一个 tick;检查 API 返回的 `pending_tool=MCP` 字段是否出现 |
 | `/clear` 后卡片跳到 From Tmux | 原 Sessions 标签里的会话在 `/clear` 后错误地变成 "From Tmux" | `ensure_session` 顺序反了 —— `_detect_transferred`(5s 启发式)先跑,看到 tmux 已老就返回 1。修复 `acd87b6`:orphan 查询提前,有 orphan 就继承它的 `transferred`,没有再跑启发式 |
 | 打断工具后 Running 状态卡死 | Esc/Ctrl-C 中断工具后 dashboard 一直显示 `Running Bash (7m 33s)`,永不清除 | `_enrich_running` 只看 "last event=PreToolUse + elapsed>30s",中断后没 PostToolUse 收尾,elapsed 无界。修复 `2f163d1`:在条件满足后加 `_pane_shows_working` ground truth 校验,pane 不再显示 `(N s · esc to interrupt)` 就不标 running |
+| 连续审批 dashboard 不显示新 pending | 点击 Approve 后马上出现的第二个 pending(尤其是同签名,如两次 `Bash ls`)在 dashboard 不显示,必须刷新页面才看到 | `approve_session` 原本只发 tmux key,不清 DB 的 `pending_tool/detail/always_label`,`periodic_pending_check` 的 diff 比较是对 DB 缓存的 → 下一次 tick parse 出完全相同的签名时被"无变化"过滤掉。**两个协作修复**:(1) `approve_session` 成功发 key 后清 DB + 调用 `mark_approved_suppress(sid, *sig)` 记录 3s 内存宽限;(2) `periodic_pending_check` 在 `if parsed:` 分支检查 `_APPROVED_SUPPRESS`,sig 匹配且在窗口内则 `continue` 跳过(防止 Claude/Codex 还没 dismiss 导致徽章闪回),超时或 sig 变了则 `pop` 并正常广播。最坏延迟 6s(同签名 + 刚好赶在宽限末尾) |
+| 新启动的会话要刷新才出现在 dashboard | active 计数 +1 了但没卡片,需要手动刷新 | `onWsMessage` 只在找得到 `#card-<sid>` 时才更新 DOM,新 session 压根没渲染过卡片就跳过了。修复:抽 `session_card` macro 到 `_session_card.html`,新增 `/partials/session-card/{id}` 端点返回 JSON `{html, transferred, status}`,JS 在收到 event 但找不到卡片时调 `ensureCardExists(sid)` 异步 fetch 并 prepend 到对应 panel(`tab-panel-native` 或 `tab-panel-tmux`)。`_cardFetches` Set 防止同一 session 并发 fetch |
 
 ---
 
