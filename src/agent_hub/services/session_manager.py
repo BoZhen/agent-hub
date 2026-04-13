@@ -674,88 +674,50 @@ def _parse_approval_prompt(pane_text: str) -> tuple[str, str, str | None] | None
 # matching from a few lines up.
 
 _CODEX_SELECTOR = "\u203a"  # ›
-_CODEX_SELECTOR_OPTION_RE = _re.compile(_CODEX_SELECTOR + r"\s+1\.\s+Yes")
-_CODEX_FOOTER_RE = _re.compile(r"Press enter to confirm or esc to cancel")
-_CODEX_OPTION2_RE = _re.compile(r"^\s*2\.\s+(Yes.*)$")
+# Selector anchor: "› 1. Yes" (Bash approval) or "› 1. Allow" (MCP
+# tool approval). Both codex approval UIs use the same selector glyph
+# but different first-option labels — Phase 3 loosens to cover both.
+_CODEX_SELECTOR_OPTION_RE = _re.compile(_CODEX_SELECTOR + r"\s+1\.\s+(Yes|Allow)")
+# Footer alternation: Bash uses "Press enter to confirm or esc to
+# cancel", MCP uses "enter to submit | esc to cancel".
+_CODEX_FOOTER_RE = _re.compile(
+    r"(Press enter to confirm or esc to cancel|enter to submit \| esc to cancel)"
+)
+# Option 2 (Bash Always variant, "Yes, and don't ask again..." /
+# MCP "Allow for this session"). Loosened for MCP first word.
+_CODEX_OPTION2_RE = _re.compile(r"^\s*2\.\s+((?:Yes|Allow).*)$")
+# Option 3 and 4 boundary markers, used to stop wrap-join when
+# building up a multi-line option label.
 _CODEX_OPTION3_RE = _re.compile(r"^\s*3\.\s")
+_CODEX_OPTION4_RE = _re.compile(r"^\s*4\.\s")
+# MCP 4-option UI: option 3 is "Always allow", which is the MCP
+# analog of Bash's option-2 Always variant.
+_CODEX_OPTION3_ALWAYS_RE = _re.compile(r"^\s*3\.\s+(Always.*)$")
 _CODEX_OPTION_P_HINT_RE = _re.compile(r"\s*\(p\)\s*$")
+_CODEX_COL_SPLIT_RE = _re.compile(r"\s{2,}")
 
 # (question_phrase, tool_name) — extension point for future codex
-# approval UIs (e.g. apply_patch / file-edit variants). Phase 2 ships
-# with only the bash-run path since that's the only variant captured
-# in the wild so far. The phrase must be short enough to survive
-# narrow-pane word wrap — codex breaks lines at word boundaries,
-# so "Would you like to run" as a 5-word prefix fits on any
-# reasonable terminal width.
+# approval UIs (e.g. apply_patch / file-edit variants). The phrase
+# must be short enough to survive narrow-pane word wrap — codex
+# breaks lines at word boundaries, so a 5-word prefix fits on any
+# reasonable terminal width. Phase 3 adds the MCP tool approval
+# path; Bash stays as the first entry because it's the dominant
+# case and matching is sequential.
 _CODEX_QUESTION_PATTERNS: list[tuple[str, str]] = [
     ("Would you like to run", "Bash"),
+    ("MCP server to run tool", "MCP"),
 ]
 
 
-def _parse_codex_approval_prompt(
-    pane_text: str,
-) -> tuple[str, str, str | None] | None:
-    """Parse Codex CLI approval prompt from tmux pane text.
+def _extract_codex_bash_detail(
+    lines: list[str], question_idx: int, selector_idx: int
+) -> str:
+    """Extract the `$ command` line from a Bash approval block.
 
-    Returns (tool_name, detail, always_label) or None — same shape as
-    `_parse_approval_prompt` so `periodic_pending_check` can dispatch
-    on session tool and treat both the same downstream.
-
-    `always_label` is the verbatim option-2 text ("Yes, and don't
-    ask again for commands that start with `...`") for 3-option
-    variants, or None for 2-option variants (which only have Yes/No).
+    Codex wraps long commands onto multiple indented rows, so we
+    join up to 4 continuation lines together with a space. The join
+    stops at a new `$ ` prefix or the `›` selector glyph.
     """
-    lines = pane_text.splitlines()
-    # tmux capture-pane returns a fixed-height grid, so panes shorter
-    # than the window have trailing blank rows. Strip them so our
-    # "last N lines" windowing reflects the real UI position.
-    while lines and not lines[-1].strip():
-        lines.pop()
-    total = len(lines)
-    if total == 0:
-        return None
-
-    tail_start = max(0, total - 12)
-
-    # Signal 1: `› 1. Yes` must be in the last 12 lines
-    selector_idx = None
-    for i in range(total - 1, tail_start - 1, -1):
-        if _CODEX_SELECTOR_OPTION_RE.search(lines[i]):
-            selector_idx = i
-            break
-    if selector_idx is None:
-        return None
-
-    # Signal 2: `Press enter to confirm or esc to cancel` footer must
-    # also be in the tail window — this guards against a stale prompt
-    # that hasn't been redrawn away yet.
-    footer_found = False
-    for i in range(tail_start, total):
-        if _CODEX_FOOTER_RE.search(lines[i]):
-            footer_found = True
-            break
-    if not footer_found:
-        return None
-
-    # Signal 3: question phrase within 15 lines above the selector.
-    tool_name: str | None = None
-    question_idx: int | None = None
-    for i in range(max(0, selector_idx - 15), selector_idx):
-        for phrase, t_name in _CODEX_QUESTION_PATTERNS:
-            if phrase in lines[i]:
-                question_idx = i
-                tool_name = t_name
-                break
-        if question_idx is not None:
-            break
-    if question_idx is None or tool_name is None:
-        return None
-
-    # Extract detail: find `$ ` line between question and selector.
-    # Continuation lines (indented, not starting with `$ ` or `›`)
-    # get joined with a space — codex wraps long commands onto
-    # multiple indented rows.
-    detail = ""
     for i in range(question_idx + 1, selector_idx):
         stripped = lines[i].strip()
         if stripped.startswith("$ "):
@@ -769,29 +731,165 @@ def _parse_codex_approval_prompt(
                 parts.append(nxt)
                 if len(parts) >= 4:
                     break
-            detail = " ".join(parts).strip()
-            break
-    detail = detail[:150]
+            return " ".join(parts).strip()[:150]
+    return ""
 
-    # Extract option 2 verbatim text when the 3-option (always) variant
-    # is present. The option-2 line may wrap: the continuation is
-    # indented, often just the `(p)` key hint on its own line.
-    always_label: str | None = None
-    for i in range(selector_idx + 1, min(total, selector_idx + 8)):
-        m = _CODEX_OPTION2_RE.match(lines[i])
-        if m:
-            parts = [m.group(1).strip()]
-            for j in range(i + 1, min(total, i + 4)):
-                nxt = lines[j]
-                if not nxt.strip():
-                    break
-                if _CODEX_OPTION3_RE.match(nxt):
-                    break
-                parts.append(nxt.strip())
-            text = " ".join(parts)
-            text = _CODEX_OPTION_P_HINT_RE.sub("", text).strip()
-            always_label = text[:250]
+
+def _extract_codex_mcp_detail(
+    lines: list[str], question_idx: int, selector_idx: int
+) -> str:
+    """Extract "<server>: <tool>" from an MCP tool approval block.
+
+    The title line reads:
+        Allow the <server> MCP server to run tool "<tool>"?
+    Codex may word-wrap the title across 2-3 lines on narrow panes,
+    so we scan a 4-line window from `question_idx` and run the
+    regexes over the concatenated text.
+    """
+    end = min(len(lines), question_idx + 4, selector_idx)
+    combined = " ".join(lines[question_idx:end])
+    server_match = _re.search(r"Allow the (\S+) MCP server to run tool", combined)
+    tool_match = _re.search(r'tool "([^"]+)"', combined)
+    server = server_match.group(1) if server_match else ""
+    tool = tool_match.group(1) if tool_match else ""
+    if server and tool:
+        return f"{server}: {tool}"[:150]
+    if tool:
+        return tool[:150]
+    return ""
+
+
+def _extract_codex_always_label(
+    lines: list[str],
+    selector_idx: int,
+    total: int,
+    tool_name: str,
+) -> str | None:
+    """Extract the verbatim "Always" option label for the given UI.
+
+    - Bash: option 2 text ("Yes, and don't ask again for commands
+      that start with `...`"). `None` if only the 2-option variant
+      is displayed (no Always).
+    - MCP:  option 3 text ("Always allow"). `None` if option 3
+      isn't present (e.g. a compact variant).
+
+    Description columns (codex aligns descriptions via 2+ spaces on
+    the same line for the MCP UI) are stripped so we only keep the
+    option label proper.
+    """
+    if tool_name == "Bash":
+        target_re = _CODEX_OPTION2_RE
+        stop_re = _CODEX_OPTION3_RE
+    elif tool_name == "MCP":
+        target_re = _CODEX_OPTION3_ALWAYS_RE
+        stop_re = _CODEX_OPTION4_RE
+    else:
+        return None
+
+    for i in range(selector_idx + 1, min(total, selector_idx + 12)):
+        m = target_re.match(lines[i])
+        if not m:
+            continue
+        parts = [m.group(1).strip()]
+        for j in range(i + 1, min(total, i + 6)):
+            nxt = lines[j]
+            if not nxt.strip():
+                break
+            if stop_re.match(nxt):
+                break
+            parts.append(nxt.strip())
+        text = " ".join(parts)
+        # Strip the description column that codex renders after 2+
+        # spaces ("Always allow            Run the tool and remember
+        # ...") so only the label itself remains.
+        text = _CODEX_COL_SPLIT_RE.split(text, 1)[0].strip()
+        # Drop the legacy `(p)` single-key hint from Bash option 2.
+        text = _CODEX_OPTION_P_HINT_RE.sub("", text).strip()
+        return text[:250] if text else None
+    return None
+
+
+def _parse_codex_approval_prompt(
+    pane_text: str,
+) -> tuple[str, str, str | None] | None:
+    """Parse Codex CLI approval prompt from tmux pane text.
+
+    Returns (tool_name, detail, always_label) or None — same shape as
+    `_parse_approval_prompt` so `periodic_pending_check` can dispatch
+    on session tool and treat both the same downstream.
+
+    Supported UI variants (Phase 3):
+    - **Bash** — "Would you like to run the following command?" with
+      2 or 3 options. `always_label` is option 2 text ("Yes, and
+      don't ask again...") for 3-option variants, None for 2.
+    - **MCP** — "Allow the <server> MCP server to run tool <x>?"
+      with 4 options. `always_label` is option 3 text ("Always
+      allow"); Approve = Enter (option 1 default), Always = Down
+      Down Enter (navigate to option 3).
+    """
+    lines = pane_text.splitlines()
+    # tmux capture-pane returns a fixed-height grid, so panes shorter
+    # than the window have trailing blank rows. Strip them so our
+    # "last N lines" windowing reflects the real UI position.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    total = len(lines)
+    if total == 0:
+        return None
+
+    # 16-line tail (up from Phase 2's 12) to accommodate the MCP UI,
+    # which renders 4 options plus a workingDirectory line and may
+    # push the selector + footer further up on tall terminals.
+    tail_start = max(0, total - 16)
+
+    # Signal 1: `› 1. (Yes|Allow)` must be in the tail window.
+    selector_idx = None
+    for i in range(total - 1, tail_start - 1, -1):
+        if _CODEX_SELECTOR_OPTION_RE.search(lines[i]):
+            selector_idx = i
             break
+    if selector_idx is None:
+        return None
+
+    # Signal 2: the approval footer must also be in the tail window,
+    # guarding against a stale prompt that hasn't been redrawn away
+    # yet. Both Bash and MCP footers are matched by the alternation.
+    footer_found = False
+    for i in range(tail_start, total):
+        if _CODEX_FOOTER_RE.search(lines[i]):
+            footer_found = True
+            break
+    if not footer_found:
+        return None
+
+    # Signal 3: question phrase within 15 lines above the selector.
+    # The first matching pattern wins, so the table order matters
+    # (Bash is listed first as the common case).
+    tool_name: str | None = None
+    question_idx: int | None = None
+    for i in range(max(0, selector_idx - 15), selector_idx):
+        for phrase, t_name in _CODEX_QUESTION_PATTERNS:
+            if phrase in lines[i]:
+                question_idx = i
+                tool_name = t_name
+                break
+        if question_idx is not None:
+            break
+    if question_idx is None or tool_name is None:
+        return None
+
+    # Dispatch detail extraction by UI type. Each helper returns a
+    # 150-char-truncated string suitable for the dashboard badge.
+    if tool_name == "Bash":
+        detail = _extract_codex_bash_detail(lines, question_idx, selector_idx)
+    elif tool_name == "MCP":
+        detail = _extract_codex_mcp_detail(lines, question_idx, selector_idx)
+    else:
+        detail = ""
+
+    always_label = _extract_codex_always_label(
+        lines, selector_idx, total, tool_name,
+    )
 
     return (tool_name, detail, always_label)
 
