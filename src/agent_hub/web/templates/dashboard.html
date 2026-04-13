@@ -545,7 +545,9 @@ async function ncCreate() {
     ncShowError('Pick a directory first');
     return;
   }
-  const name = document.getElementById('nc-name').value.trim();
+  const name = document.getElementById('nc-name').value
+    .trim()
+    .replace(/[\u2013\u2014]/g, '-');
   try {
     const res = await fetch('/api/tmux/new', {
       method: 'POST',

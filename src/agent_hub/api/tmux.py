@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -112,10 +113,21 @@ class NewTmuxRequest(BaseModel):
     command: str | None = None  # e.g. "claude" — launched inside the new tmux
 
 
+# Matches the web-terminal server's accepted name regex so every name
+# agent-hub hands out can be attached to from the browser.
+_VALID_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
 def _auto_name(cwd: str, existing: set[str], prefix: str = "") -> str:
     base = os.path.basename(cwd.rstrip("/")) or "tmux"
+    # Collapse any non-ASCII-safe runs to a single hyphen so Chinese
+    # directory names / spaces still produce an attachable name.
+    base = re.sub(r"[^a-zA-Z0-9_-]+", "-", base).strip("-") or "tmux"
     if prefix:
         base = f"{prefix}-{base}"
+    # Leave room for a "-NNN" suffix within the 64-char cap.
+    if len(base) > 60:
+        base = base[:60].rstrip("-") or "tmux"
     i = 1
     while f"{base}-{i}" in existing:
         i += 1
@@ -123,10 +135,7 @@ def _auto_name(cwd: str, existing: set[str], prefix: str = "") -> str:
 
 
 def _valid_tmux_name(name: str) -> bool:
-    if not name or len(name) > 80:
-        return False
-    bad = set(".: \t\n\r/")
-    return not any(c in bad for c in name)
+    return bool(_VALID_NAME_RE.match(name))
 
 
 @router.post("/tmux/new")
@@ -160,10 +169,14 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
 
     name = req.name.strip() if req.name else ""
     if name:
+        # Fold Chinese-IME smart punctuation back to ASCII so a user
+        # typing "codex-a" with "智能标点" on doesn't silently create a
+        # session the web-terminal will refuse to attach to.
+        name = name.replace("\u2013", "-").replace("\u2014", "-")
         if not _valid_tmux_name(name):
             raise HTTPException(
                 400,
-                "tmux name must be 1-80 chars without . : / whitespace",
+                "tmux name must be 1-64 ASCII letters/digits/underscore/hyphen",
             )
         if name in existing_names:
             raise HTTPException(409, f"tmux session '{name}' already exists")

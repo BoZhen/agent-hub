@@ -217,7 +217,9 @@ async function createTmux() {
     showModalError('Pick a directory first');
     return;
   }
-  const name = document.getElementById('new-name').value.trim();
+  const name = document.getElementById('new-name').value
+    .trim()
+    .replace(/[\u2013\u2014]/g, '-');
   try {
     const res = await fetch('/api/tmux/new', {
       method: 'POST',
