@@ -20,7 +20,7 @@
       <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5">
         {{ icons.tool_icon(s.tool) }}
       </div>
-      <div class="flex-1 min-w-0 flex flex-col md:flex-row md:gap-4">
+      <div class="flex-1 min-w-0 flex flex-col">
       <div class="flex-1 min-w-0">
         <a href="/sessions/{{ s.session_id }}" class="block">
           <div class="flex items-center mb-1.5 sm:mb-2">
@@ -51,19 +51,12 @@
           </div>
           {% endif %}
           <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-          {% if s.output_tokens and s.tool == 'claude' %}
-          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-          </div>
-          {% endif %}
-          <div class="flex items-center justify-between text-xs text-gray-500">
-            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
+          <div class="text-xs text-gray-500 text-right">
             <span>{{ s.last_seen_at[11:19] }}</span>
           </div>
         </a>
       </div>
-      <div class="md:w-56 md:shrink-0 mt-2 pt-2 border-t border-gray-700/30 md:mt-0 md:pt-0 md:border-t-0 md:pl-3 md:border-l md:border-gray-700/30">
+      <div class="mt-2 pt-2 border-t border-gray-700/30">
         <div id="events-{{ s.session_id }}" class="space-y-1.5">
           {% for e in s.recent_events or [] %}
           <div class="text-xs leading-tight">
@@ -86,7 +79,17 @@
     <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/20"
          id="actions-{{ s.session_id }}"
          data-tmux="{{ s.tmux_session or '' }}"
-         data-cwd="{{ s.cwd }}">
+         data-cwd="{{ s.cwd }}"
+         data-name="{{ s.tmux_session or s.hostname }}"
+         data-model="{{ s.model or '' }}"
+         data-sid="{{ s.session_id }}">
+      {% if s.tmux_session %}
+      <button type="button"
+              onclick="previewSession(this)"
+              class="preview-btn hidden lg:inline-block text-xs px-2 py-1 rounded bg-accent/30 text-accent-light hover:bg-accent/50 hover:text-white transition">
+        Preview
+      </button>
+      {% endif %}
       <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
          target="_blank"
          class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">

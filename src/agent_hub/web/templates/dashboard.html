@@ -1,59 +1,98 @@
 {% extends "base.html" %}
 {% from "_session_card.html" import session_card %}
 {% block title %}Dashboard — Agent Hub{% endblock %}
+{% block main_width %}max-w-[1800px]{% endblock %}
 
 {% block content %}
-<!-- Stats bar -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
-  <div class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30">
-    <div class="text-xs text-gray-400 uppercase tracking-wide">Active</div>
-    <div class="text-2xl font-bold status-active" id="stat-active">{{ stats.active_sessions }}</div>
-  </div>
-  <div class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30">
-    <div class="text-xs text-gray-400 uppercase tracking-wide">Waiting</div>
-    <div class="text-2xl font-bold text-yellow-400" id="stat-waiting">{{ stats.waiting_sessions }}</div>
-  </div>
-  <a href="/idle" class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30 hover:bg-surface-lighter transition block">
-    <div class="text-xs text-gray-400 uppercase tracking-wide">Idle</div>
-    <div class="text-2xl font-bold status-idle" id="stat-idle">{{ stats.idle_sessions }}</div>
-  </a>
-  <a href="/stopped" class="bg-surface-light rounded-lg p-3 sm:p-4 border border-gray-700/30 hover:bg-surface-lighter transition block">
-    <div class="text-xs text-gray-400 uppercase tracking-wide">Stopped</div>
-    <div class="text-2xl font-bold status-stopped" id="stat-stopped">{{ stats.stopped_sessions }}</div>
-  </a>
-</div>
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-3 sm:gap-4">
 
-<div>
-  <div class="flex items-center gap-4 mb-3 border-b border-gray-700/30">
-    <button type="button" data-tab="native"
-            class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white transition">
-      Sessions <span class="text-gray-500 font-normal">({{ sessions_native | length }})</span>
-    </button>
-    <button type="button" data-tab="tmux"
-            class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
-      From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
-    </button>
-    <button id="btn-new-claude" type="button"
-            class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
-      + New
-    </button>
+  <!-- LEFT: compact stats row + session list -->
+  <div id="sessions-pane" class="min-w-0">
+    <!-- Compact stats row (inline, one row, all widths) -->
+    <div class="grid grid-cols-4 gap-1.5 sm:gap-2 mb-3 sm:mb-4 text-xs">
+      <div class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Active</span>
+        <span class="font-bold status-active ml-1" id="stat-active">{{ stats.active_sessions }}</span>
+      </div>
+      <div class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Waiting</span>
+        <span class="font-bold text-yellow-400 ml-1" id="stat-waiting">{{ stats.waiting_sessions }}</span>
+      </div>
+      <a href="/idle" class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 hover:bg-surface-lighter transition flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Idle</span>
+        <span class="font-bold status-idle ml-1" id="stat-idle">{{ stats.idle_sessions }}</span>
+      </a>
+      <a href="/stopped" class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 hover:bg-surface-lighter transition flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Stopped</span>
+        <span class="font-bold status-stopped ml-1" id="stat-stopped">{{ stats.stopped_sessions }}</span>
+      </a>
+    </div>
+    <div class="flex items-center gap-4 mb-3 border-b border-gray-700/30">
+      <button type="button" data-tab="native"
+              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white transition">
+        Sessions <span class="text-gray-500 font-normal">({{ sessions_native | length }})</span>
+      </button>
+      <button type="button" data-tab="tmux"
+              class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
+        From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
+      </button>
+      <button id="btn-new-claude" type="button"
+              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+        + New
+      </button>
+    </div>
+    <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
+      {% for s in sessions_native %}
+        {{ session_card(s, terminal_url) }}
+      {% endfor %}
+      {% if not sessions_native %}
+      <div class="text-gray-500 text-sm py-8 text-center">No active sessions. Parked sessions live on the <a href="/idle" class="text-accent-light hover:text-white">Idle</a> page.</div>
+      {% endif %}
+    </div>
+    <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
+      {% for s in sessions_from_tmux %}
+        {{ session_card(s, terminal_url) }}
+      {% endfor %}
+      {% if not sessions_from_tmux %}
+      <div class="text-gray-500 text-sm py-8 text-center">No transferred sessions. A session appears here when you run Claude inside a pre-existing tmux.</div>
+      {% endif %}
+    </div>
   </div>
-  <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
-    {% for s in sessions_native %}
-      {{ session_card(s, terminal_url) }}
-    {% endfor %}
-    {% if not sessions_native %}
-    <div class="text-gray-500 text-sm py-8 text-center">No active sessions. Parked sessions live on the <a href="/idle" class="text-accent-light hover:text-white">Idle</a> page.</div>
-    {% endif %}
+
+  <!-- RIGHT: embedded preview pane (lg+ only) -->
+  <div id="preview-pane"
+       class="hidden lg:flex lg:flex-col lg:sticky lg:top-4 lg:self-start
+              lg:h-[calc(100vh-5rem)] bg-surface-light rounded-lg
+              border border-gray-700/30 overflow-hidden">
+    <div id="preview-header"
+         class="shrink-0 px-3 py-2 border-b border-gray-700/30 bg-surface-lighter/40
+                flex items-center gap-3 text-xs min-w-0">
+      <span id="preview-name" class="font-semibold text-white truncate shrink-0">—</span>
+      <span id="preview-model" class="text-accent-light truncate hidden shrink-0">—</span>
+      <span id="preview-cwd" class="text-gray-400 font-mono truncate flex-1 text-right">
+        Click Preview on a session
+      </span>
+      <button id="preview-close" type="button"
+              class="hidden text-gray-500 hover:text-white transition px-1 text-base leading-none shrink-0"
+              title="Close preview">&times;</button>
+    </div>
+    <div id="preview-body" class="flex-1 min-h-0 relative">
+      <div id="preview-empty"
+           class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm text-center px-4">
+        <div>
+          <div class="text-3xl mb-2 opacity-40">▢</div>
+          <div>Click <span class="text-accent-light font-semibold">Preview</span>
+               on any session to embed its terminal here</div>
+        </div>
+      </div>
+      <iframe id="preview-iframe"
+              class="absolute inset-0 w-full h-full hidden"
+              title="Session terminal preview"
+              loading="lazy"
+              referrerpolicy="no-referrer"></iframe>
+    </div>
   </div>
-  <div id="tab-panel-tmux" class="space-y-2 sm:space-y-3 hidden">
-    {% for s in sessions_from_tmux %}
-      {{ session_card(s, terminal_url) }}
-    {% endfor %}
-    {% if not sessions_from_tmux %}
-    <div class="text-gray-500 text-sm py-8 text-center">No transferred sessions. A session appears here when you run Claude inside a pre-existing tmux.</div>
-    {% endif %}
-  </div>
+
 </div>
 
 <!-- Modal: new agent session (tmux + claude|codex) -->
@@ -335,6 +374,7 @@ function togglePin(sessionId, btn) {
       // If we just unpinned an idle session on the main dashboard,
       // it no longer belongs here — drop the card for visual honesty.
       if (!newPinned && btn.dataset.status === 'idle' && location.pathname === '/') {
+        if (previewState.sid === sessionId) closePreview();
         const card = document.getElementById('card-' + sessionId);
         if (card) card.remove();
       }
@@ -519,5 +559,71 @@ document.getElementById('nc-tool-omx-yolo').addEventListener('click', () => ncSe
 document.getElementById('modal-new-claude').addEventListener('click', (ev) => {
   if (ev.target.id === 'modal-new-claude') ncClose();
 });
+
+// ── Preview pane (embedded terminal on the right at lg+) ──────────
+const previewState = { sid: null };
+
+function previewSession(btn) {
+  const footer = btn.closest('[id^="actions-"]');
+  if (!footer) return;
+  const sid = footer.dataset.sid;
+  const tmux = footer.dataset.tmux;
+  if (!tmux) return;
+  const name = footer.dataset.name || sid.slice(0, 8);
+  const cwd = footer.dataset.cwd || '';
+  const model = footer.dataset.model || '';
+
+  const iframe = document.getElementById('preview-iframe');
+  const empty = document.getElementById('preview-empty');
+
+  if (previewState.sid !== sid) {
+    iframe.src = `${TERMINAL_URL}/?attach=${encodeURIComponent(tmux)}`;
+    previewState.sid = sid;
+  }
+  iframe.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  document.getElementById('preview-name').textContent = name;
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = cwd || '—';
+  cwdEl.classList.remove('text-right');
+  const modelEl = document.getElementById('preview-model');
+  if (model) {
+    modelEl.textContent = model;
+    modelEl.classList.remove('hidden');
+  } else {
+    modelEl.classList.add('hidden');
+  }
+  document.getElementById('preview-close').classList.remove('hidden');
+
+  highlightPreviewCard(sid);
+}
+
+function highlightPreviewCard(sid) {
+  document.querySelectorAll('.preview-active').forEach(el => {
+    el.classList.remove('preview-active', 'ring-2', 'ring-accent-light');
+  });
+  if (sid) {
+    const card = document.getElementById('card-' + sid);
+    if (card) card.classList.add('preview-active', 'ring-2', 'ring-accent-light');
+  }
+}
+
+function closePreview() {
+  const iframe = document.getElementById('preview-iframe');
+  iframe.src = 'about:blank';
+  iframe.classList.add('hidden');
+  document.getElementById('preview-empty').classList.remove('hidden');
+  document.getElementById('preview-name').textContent = '—';
+  document.getElementById('preview-model').classList.add('hidden');
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = 'Click Preview on a session';
+  cwdEl.classList.add('text-right');
+  document.getElementById('preview-close').classList.add('hidden');
+  previewState.sid = null;
+  highlightPreviewCard(null);
+}
+
+document.getElementById('preview-close').addEventListener('click', closePreview);
 </script>
 {% endblock %}

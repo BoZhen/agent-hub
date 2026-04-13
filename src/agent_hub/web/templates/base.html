@@ -54,7 +54,7 @@
       <a href="/api/docs" class="hidden sm:inline hover:text-white transition">API</a>
     </div>
   </nav>
-  <main class="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6">
+  <main class="{% block main_width %}max-w-7xl{% endblock %} mx-auto px-3 sm:px-6 py-4 sm:py-6">
     {% block content %}{% endblock %}
   </main>
   <script>

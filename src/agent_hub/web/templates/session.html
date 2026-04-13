@@ -64,28 +64,6 @@
       <span class="text-gray-200">{{ session.hub_id }}</span>
     </div>
   </div>
-  {% if session.output_tokens and session.tool == 'claude' %}
-  <div class="mt-3 sm:mt-4 pt-2 sm:pt-3 border-t border-gray-700/30">
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-xs sm:text-sm">
-      <div>
-        <span class="text-gray-500">In:</span>
-        <span class="text-gray-200">{{ "{:,}".format(session.input_tokens) }}</span>
-      </div>
-      <div>
-        <span class="text-gray-500">Out:</span>
-        <span class="text-gray-200">{{ "{:,}".format(session.output_tokens) }}</span>
-      </div>
-      <div>
-        <span class="text-gray-500">Cache R:</span>
-        <span class="text-gray-200">{{ "{:,}".format(session.cache_read_tokens) }}</span>
-      </div>
-      <div>
-        <span class="text-gray-500">Cache W:</span>
-        <span class="text-gray-200">{{ "{:,}".format(session.cache_create_tokens) }}</span>
-      </div>
-    </div>
-  </div>
-  {% endif %}
   <!-- Action buttons -->
   <div class="mt-3 pt-2 border-t border-gray-700/20 flex items-center gap-2"
        id="actions-{{ session.session_id }}"
