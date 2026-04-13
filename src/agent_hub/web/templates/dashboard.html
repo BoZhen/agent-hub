@@ -184,7 +184,7 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
         detail.id = 'detail-' + sessionId;
         detail.className = 'text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4';
         detail.textContent = pendingDetail;
-        const link = card.querySelector('a.block');
+        const link = card.querySelector('.block');
         if (link) link.insertBefore(detail, link.children[1]);
       }
     }
@@ -215,7 +215,7 @@ function updateAlwaysLabel(sessionId, alwaysLabel) {
       if (detail && detail.parentNode) {
         detail.parentNode.insertBefore(el, detail.nextSibling);
       } else {
-        const link = card.querySelector('a.block');
+        const link = card.querySelector('.block');
         if (link) link.insertBefore(el, link.children[1]);
       }
     }
@@ -238,7 +238,7 @@ function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways, al
     const approveBtn = document.createElement('button');
     approveBtn.className = 'approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
     approveBtn.textContent = 'Approve';
-    approveBtn.onclick = function() { approveSession(sessionId, false, this); };
+    approveBtn.onclick = function(ev) { ev.stopPropagation(); approveSession(sessionId, false, this); };
     actions.appendChild(approveBtn);
 
     if (hasAlways !== false) {
@@ -246,7 +246,7 @@ function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways, al
       alwaysBtn.className = 'always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
       alwaysBtn.textContent = 'Always';
       if (alwaysLabel) alwaysBtn.title = alwaysLabel;
-      alwaysBtn.onclick = function() { approveSession(sessionId, true, this); };
+      alwaysBtn.onclick = function(ev) { ev.stopPropagation(); approveSession(sessionId, true, this); };
       actions.appendChild(alwaysBtn);
     }
   } else {
@@ -257,6 +257,7 @@ function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways, al
     link.target = '_blank';
     link.className = 'approve-link text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
     link.innerHTML = 'Approve &rarr;';
+    link.onclick = function(ev) { ev.stopPropagation(); };
     actions.appendChild(link);
   }
 }
@@ -563,8 +564,13 @@ document.getElementById('modal-new-claude').addEventListener('click', (ev) => {
 // ── Preview pane (embedded terminal on the right at lg+) ──────────
 const previewState = { sid: null };
 
-function previewSession(btn) {
-  const footer = btn.closest('[id^="actions-"]');
+function previewSession(el) {
+  // Accept either the card itself (body click) or any descendant.
+  // Walk up to the card, then look down for the actions footer
+  // with the data-* attributes we need.
+  const card = el.closest('[id^="card-"]');
+  if (!card) return;
+  const footer = card.querySelector('[id^="actions-"]');
   if (!footer) return;
   const sid = footer.dataset.sid;
   const tmux = footer.dataset.tmux;
