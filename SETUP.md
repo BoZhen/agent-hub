@@ -5,10 +5,15 @@
 ```
 每台计算机需要配置:              Hub 主机额外需要:
 ├── Claude Code hooks            ├── agent-hub server (systemd)
-├── MCP server 注册              ├── web-terminal server (systemd)
-├── ai-tmux wrapper              └── SQLite 数据库
+├── Codex + omx hooks [可选]     ├── web-terminal server (systemd)
+├── MCP server 注册              └── SQLite 数据库
+├── ai-tmux wrapper
 └── fish/bash function
 ```
+
+**角色定义**:
+- **服务端(Hub 主机 / main machine)** —— 跑 `agent-hub` systemd 服务 + web terminal + SQLite DB。通常只有一台。
+- **客户端(辅助计算机 / auxiliary machines)** —— 跑 Claude Code 或 Codex,把 hook 事件通过 Tailscale 推到服务端。每台机器都按 Part 2 配置一遍,包括 Hub 主机本身(因为主机上一般也直接用 Claude/Codex)。
 
 ---
 
@@ -231,6 +236,122 @@ claude mcp list
 # 应看到 agent-hub: ✓ Connected
 ```
 
+### 2.6 Codex hook 配置（via omx,可选）
+
+如果这台机器跑 Codex CLI(不只是 Claude Code),可以通过 [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) 让 codex 事件也推送到 Hub,享受和 Claude 一致的 event feed、running state、以及 MCP 和 Bash 审批推送。
+
+**不装 omx 也能工作**:Hub 会 fall back 到 pane-scan 轮询(每 3 秒扫 tmux 找 codex TUI),session discovery + 远程审批仍然可用,只是 dashboard 上 codex 卡片的 "latest 2 events" 会一直空着 —— 因为 pull 路径不生成 events 表行。
+
+#### 2.6.1 服务端(Hub 主机)
+
+Hub 本身**不需要**任何 codex 特定配置。`scripts/codex-hub-hook.sh` 作为 bridge 脚本已经跟着 repo 一起 —— `/api/events` endpoint 在 Commit `2fcf1c4` 之后就接受 `?tool=codex` query param,`session_manager` 会自动给 codex payload 打标签。
+
+服务端唯一需要关心的是:**当 Hub 主机自己也跑 codex 时,按 2.6.2 客户端流程配置一遍**(和 Claude hook 一样,Hub 机既是服务端又是客户端)。
+
+#### 2.6.2 客户端(每台跑 codex 的机器)
+
+**前置**:机器上已经 clone `~/Git/agent-home`(Part 2.4 的 ai-tmux wrapper 就依赖这个)。
+
+**Step 1 —— 安装 omx**:
+
+```bash
+npm install -g oh-my-codex
+omx setup           # 会生成 ~/.codex/hooks.json 和 ~/.codex/config.toml
+# 确认 ~/.codex/config.toml 里有:
+#   [features]
+#   codex_hooks = true
+```
+
+**Step 2 —— 追加 agent-hub bridge hook** 到 `~/.codex/hooks.json`。`omx setup` 生成的版本每个 event 下只有 omx 自己的 hook group,需要追加一个**第二个** hook group 指向 repo 的 bridge 脚本(不要动 omx 原有的 entry):
+
+```jsonc
+{
+  "hooks": {
+    "SessionStart": [
+      { /* existing omx entry with matcher "startup|resume" — don't touch */ },
+      {
+        "hooks": [
+          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh SessionStart" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      { /* existing omx entry */ },
+      {
+        "hooks": [
+          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh UserPromptSubmit" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      { /* existing omx entry with matcher "Bash" */ },
+      {
+        "hooks": [
+          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PreToolUse" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      { /* existing omx entry */ },
+      {
+        "hooks": [
+          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PostToolUse" }
+        ]
+      }
+    ],
+    "Stop": [
+      { /* existing omx entry with timeout 30 */ },
+      {
+        "hooks": [
+          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh Stop" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+替换 `USER` 为你的实际用户名。`codex-hub-hook.sh` 必须 `chmod +x`(repo 里已经是)。
+
+**Step 3 —— 指定 Hub 地址(仅辅助机)**:通过环境变量 `AGENT_HUB_URL` 告诉 wrapper hook 要 POST 到哪台机器:
+
+```bash
+# Hub 主机:默认 http://127.0.0.1:7800,无需任何配置
+# 辅助机 (.bashrc / .zshrc / fish config.fish):
+export AGENT_HUB_URL="http://100.64.0.1:7800"   # 替换为 Hub 主机的 Tailscale IP
+```
+
+**关键区别**:和 Claude Code 的 HTTP hook 不同,codex hook **全部是 command 类型**(bash + curl),所以**没有 loopback 127.0.0.1 限制** —— 辅助机可以直接让 wrapper curl 到 Tailscale IP,不需要像 Claude 辅助机那样额外搭一套全 command-type 的 hook。
+
+**Step 4 —— 验证**:
+
+1. 重启 codex session(hooks.json 在 codex 启动时加载一次):
+   ```bash
+   tmux new-session -d -s codex-test -c ~
+   tmux send-keys -t codex-test: "omx --tmux" Enter
+   ```
+
+2. **发一条 prompt**(重要,见 2.6.3 第一条),然后查 session 列表:
+   ```bash
+   curl -s "$AGENT_HUB_URL/api/sessions?status=active" | \
+     python3 -c "import sys,json; [print(s['session_id'], s['tool']) for s in json.load(sys.stdin) if s['tool']=='codex']"
+   ```
+   期望:`session_id` 是 UUID 格式(如 `019d85a5-7035-...`),`tool=codex`。如果看到 `codex-<tmux>-<ts>` 格式那是 pane-scan 的 placeholder,说明 hook 没 fire 到 Hub(检查 `AGENT_HUB_URL` 和 hooks.json)。
+
+3. 查看 event feed:
+   ```bash
+   curl -s "$AGENT_HUB_URL/api/sessions/<uuid>/events" | python3 -m json.tool
+   ```
+   期望至少看到 `SessionStart` 和 `UserPromptSubmit` 两个事件。
+
+#### 2.6.3 已知行为(不是 bug,但得心里有数)
+
+- **codex 0.120.0 把 SessionStart hook 延迟到第一个 turn 开始**,不是进程启动。所以你刚起 `omx --tmux` 时 dashboard 卡片可能先是 pane-scan 创建的 placeholder;发第一条 prompt 后 hook 接管,placeholder 被自动 retire 掉,真 UUID session 显示出来。两条路径的 hybrid push + pull 就是为这种情况设计的。
+
+- **MCP tool 调用不触发 PreToolUse hook**(验证过 `omx_state.*`、`omx_memory.*` 等)。Codex 给 MCP 工具配了独立的 4 选项审批 UI(`› 1. Allow`),Hub 的 pane-scan parser 识别这个 UI,dashboard 仍然显示 waiting 徽章 + Approve/Always 按钮,但这条路径靠 pane-scan 而不是 hook push。MCP 审批的 detail 格式是 `<server>: <tool>`(如 `omx_state: state_get_status`)。
+
+- **PreToolUse 每次 tool call 可能 fire 两次**(dry-run + real),两次 `tool_use_id` 不同,第一次的常常没有对应的 PostToolUse。这是 codex 内部行为,对 `_enrich_running`(基于最后一条 event 的启发式)没有影响,可以忽略。
+
 ---
 
 ## Part 3: 踩坑总结
@@ -247,6 +368,10 @@ claude mcp list
 | tmux attach 失败 | Web Terminal 报 4404 | tmux session 已被 kill，DB 中的记录过期 |
 | Waiting 检测不到 | 远程 session 无 waiting 显示 | 依赖读取本地 transcript 文件，远程机器不支持 |
 | Model 显示 unknown | SessionStart resume 无 model | Hub 从 transcript 最后一条 assistant message 读取 |
+| codex 卡片先是 placeholder | session_id 格式 `codex-<tmux>-<ts>`，发完第一条 prompt 才变 UUID | codex 0.120.0 的 SessionStart hook 延迟到首个 turn;pane-scan 先创建 placeholder,hook 到了自动 retire(这是设计) |
+| codex TUI 报 `hook returned invalid JSON output` | 控制台出现 red error 但功能正常 | wrapper 脚本必须 `echo "{}"` 作为 stdout;检查 `scripts/codex-hub-hook.sh` 最后一行 |
+| Hub 收不到 codex 事件 | dashboard 有卡但 event feed 空，session_id 是 placeholder 格式 | 检查 `~/.codex/hooks.json` 第二个 hook group 是否指向 `codex-hub-hook.sh`;辅助机检查 `AGENT_HUB_URL`;确认 `scripts/codex-hub-hook.sh` 有 `chmod +x` |
+| codex MCP 审批无 waiting 徽章 | codex 卡住等 MCP tool，dashboard 无反应 | MCP 调用不走 hook，只靠 pane-scan 3s tick —— 等一个 tick;检查 API 返回的 `pending_tool=MCP` 字段是否出现 |
 
 ---
 
