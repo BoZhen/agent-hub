@@ -372,6 +372,8 @@ export AGENT_HUB_URL="http://100.64.0.1:7800"   # 替换为 Hub 主机的 Tailsc
 | codex TUI 报 `hook returned invalid JSON output` | 控制台出现 red error 但功能正常 | wrapper 脚本必须 `echo "{}"` 作为 stdout;检查 `scripts/codex-hub-hook.sh` 最后一行 |
 | Hub 收不到 codex 事件 | dashboard 有卡但 event feed 空，session_id 是 placeholder 格式 | 检查 `~/.codex/hooks.json` 第二个 hook group 是否指向 `codex-hub-hook.sh`;辅助机检查 `AGENT_HUB_URL`;确认 `scripts/codex-hub-hook.sh` 有 `chmod +x` |
 | codex MCP 审批无 waiting 徽章 | codex 卡住等 MCP tool，dashboard 无反应 | MCP 调用不走 hook，只靠 pane-scan 3s tick —— 等一个 tick;检查 API 返回的 `pending_tool=MCP` 字段是否出现 |
+| `/clear` 后卡片跳到 From Tmux | 原 Sessions 标签里的会话在 `/clear` 后错误地变成 "From Tmux" | `ensure_session` 顺序反了 —— `_detect_transferred`(5s 启发式)先跑,看到 tmux 已老就返回 1。修复 `acd87b6`:orphan 查询提前,有 orphan 就继承它的 `transferred`,没有再跑启发式 |
+| 打断工具后 Running 状态卡死 | Esc/Ctrl-C 中断工具后 dashboard 一直显示 `Running Bash (7m 33s)`,永不清除 | `_enrich_running` 只看 "last event=PreToolUse + elapsed>30s",中断后没 PostToolUse 收尾,elapsed 无界。修复 `2f163d1`:在条件满足后加 `_pane_shows_working` ground truth 校验,pane 不再显示 `(N s · esc to interrupt)` 就不标 running |
 
 ---
 
