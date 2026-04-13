@@ -48,6 +48,7 @@ async def ensure_session(
     transcript_path: str | None = None,
     tmux_session: str | None = None,
     payload: dict[str, Any],
+    tool: str = "claude",
 ) -> None:
     """Create session if not exists, or reactivate on resume.
 
@@ -55,6 +56,10 @@ async def ensure_session(
     started inside a pre-existing bare tmux (tmux older than ~30s at
     the moment of the SessionStart hook). If so, mark transferred=1
     so the dashboard can file it under the "From Tmux" tab.
+
+    ``tool`` identifies the CLI driver ("claude" or "codex"). Codex
+    sessions skip the workspace-trust timing heuristic because codex
+    has no equivalent prompt.
     """
     event_type = payload.get("hook_event_name", "")
     model = payload.get("model")  # Accept model from any event type
@@ -64,11 +69,17 @@ async def ensure_session(
     if existing is None:
         transferred = 0
         if tmux_session:
-            transferred = await _detect_transferred(tmux_session)
+            # Claude's workspace-trust prompt delay heuristic only
+            # applies to Claude sessions — codex has no such prompt,
+            # so treat codex hook arrivals as first-class (not "from
+            # tmux") regardless of tmux creation age.
+            if tool != "codex":
+                transferred = await _detect_transferred(tmux_session)
             # Retire earlier sessions that shared this tmux name — the
-            # name has been reused for a new Claude instance, so any
-            # prior session_id bound to it is definitively dead. Without
-            # this, tmux-name reuse leaves stale idle rows forever.
+            # name has been reused for a new CLI instance (possibly a
+            # different tool), so any prior session_id bound to it is
+            # definitively dead. Without this, tmux-name reuse leaves
+            # stale idle rows forever.
             cursor = await conn.execute(
                 "SELECT session_id FROM sessions "
                 "WHERE tmux_session = ? AND session_id != ? "
@@ -94,6 +105,7 @@ async def ensure_session(
             status="active",
             transcript_path=transcript_path,
             transferred=transferred,
+            tool=tool,
         )
     elif event_type == "SessionStart":
         # Resume — preserve existing transferred flag (upsert doesn't
@@ -107,6 +119,7 @@ async def ensure_session(
             model=model,
             status="active",
             transcript_path=transcript_path,
+            tool=tool,
         )
     elif existing.get("model") is None and model:
         # Backfill model if we learn it from a later event
@@ -118,6 +131,7 @@ async def ensure_session(
             cwd=cwd,
             model=model,
             transcript_path=transcript_path,
+            tool=tool,
         )
 
 
@@ -359,6 +373,21 @@ async def _discover_codex_tmux(
         new_hash = _hash_pane(pane)
 
         if existing is None:
+            # Reverse protection against the hook-path race: if a codex
+            # session created via `/api/events?tool=codex` (omx native
+            # hook) already owns this tmux, skip placeholder creation.
+            # The `claimed` snapshot above was taken before the current
+            # iteration and may miss a row inserted mid-loop by the
+            # event pipeline. Fresh SELECT closes the window.
+            pre = await conn.execute(
+                "SELECT 1 FROM sessions "
+                "WHERE tool='codex' AND tmux_session=? "
+                "AND status IN ('active','idle') LIMIT 1",
+                (name,),
+            )
+            if await pre.fetchone():
+                continue
+
             cwd, created_ts = await _tmux_session_info(name)
             if not cwd or not created_ts:
                 continue

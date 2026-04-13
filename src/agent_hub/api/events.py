@@ -16,6 +16,7 @@ async def receive_event(
     request: Request,
     host: str = Query(default="unknown"),
     tmux_session: str = Query(default=""),
+    tool: str = Query(default="claude"),
 ):
     payload = await request.json()
 
@@ -27,6 +28,10 @@ async def receive_event(
     # Inject tmux_session from query param into payload for processing
     if tmux_session:
         payload["_tmux_session"] = tmux_session
+    # Inject CLI tool identifier ("claude" default; "codex" when omx hook
+    # wrapper posts here). Downstream session_manager.ensure_session uses
+    # this to skip Claude-specific startup heuristics for codex.
+    payload["_tool"] = tool
 
     db = request.app.state.db
     hub_id = request.app.state.config.hub_id

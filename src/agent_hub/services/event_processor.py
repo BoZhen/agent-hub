@@ -25,6 +25,7 @@ async def process_event(
     tool_name = payload.get("tool_name")
     cwd = payload.get("cwd", "")
     tmux_session = payload.get("_tmux_session")
+    cli_tool = payload.get("_tool", "claude")
 
     # Ensure session exists (auto-create on first event)
     await session_manager.ensure_session(
@@ -36,6 +37,7 @@ async def process_event(
         transcript_path=payload.get("transcript_path"),
         tmux_session=tmux_session,
         payload=payload,
+        tool=cli_tool,
     )
 
     # Enrich payload with stored model if not present (e.g. SessionStart resume)
