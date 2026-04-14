@@ -26,6 +26,7 @@ _COMMAND_BIN: dict[str, str] = {
     "claude-sonnet": "claude",
     "claude-opus": "claude",
     "claude-yolo": "claude",
+    "codex": "omx",
     "omx-yolo": "omx",
 }
 
