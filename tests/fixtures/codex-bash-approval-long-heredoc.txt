@@ -1,0 +1,185 @@
+in oh-my-
+           codex
+    Read constants.js, index.js, tmux.js
+    Search preset.*minimal|minimal.*preset|focused|full|HUD_TMUX_MAX_HEIGHT_LINES|max height|render.*hud|statusline in hud
+    Read state.js
+    Search preset in oh-my-codex
+    Read authority.js
+    Search DISABLE_HUD|NO_HUD|HUD_DISABLE|HUD_ENABLED|disable.*hud|kill-pane|listCurrentWindowHudPaneIds|
+createHudWatchPane in
+           oh-my-codex
+    Read reconcile.js, index.js
+    Search reconcileHudForPromptSubmit in oh-my-codex
+
+─ Worked for 1m 35s ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• 可以，但OMX 目前开箱没有一个现成的“隐藏 HUD”开关。我查了你本机安装的 omx，结论是：
+
+  ### 现状
+
+  1. HUD 高度其实是硬编码 3 行
+      - .../oh-my-codex/dist/hud/constants.js
+      - 里面有：
+          - HUD_TMUX_HEIGHT_LINES = 3
+          - HUD_TMUX_TEAM_HEIGHT_LINES = 3
+  2. 你看到的 10~20 行空白，不是设计值，而更像是“tmux pane 没及时 reconcile”
+      - UserPromptSubmit 时，OMX 会跑 reconcileHudForPromptSubmit(...)
+      - 这个函数会把 HUD pane 重新 resize 到 3 行
+      - 所以你一发消息，它就“突然缩回去”——这和你观察完全一致
+  3. 问题根源很可能是：inside-tmux 启动路径没有持续的 resize hook
+      - 在 dist/cli/index.js 里：
+          - 新建 detached tmux session 那条路径会注册 resize / attached hook
+          - 已经在 tmux 里直接跑 omx 那条路径只创建 HUD pane，但没有同等级的持续高度钉住逻辑
+      - 所以 attach / resize / layout 变化后，HUD pane 可能漂大，直到下一次 prompt submit 才被修正
+
+  ———
+
+  ## 你现在能做的
+
+  ### 方案 A：先减内容，但不解决高度漂移
+
+  在项目目录下写：
+
+  .omx/hud-config.json
+
+  内容：
+
+  {
+    "preset": "minimal"
+  }
+
+  这会让 HUD 信息更少，但**不会真正解决“空白很高”**的问题。
+
+  ———
+
+  ### 方案 B：手动把当前 HUD pane 缩回 3 行
+
+  先找 HUD pane：
+
+  tmux list-panes -F '#{pane_id}        #{pane_current_command} #{pane_start_command}'
+
+  找到类似 hud --watch 的 pane 后：
+
+  tmux resize-pane -t %PANE_ID -y 3
+
+  这能立刻修好，但之后可能还会再次变高。
+
+  ———
+
+  ### 方案 C：直接隐藏 HUD pane
+
+  可以 kill 掉：
+
+  tmux kill-pane -t %PANE_ID
+
+  但注意：下次你在 Codex 里发消息，OMX 很可能又把它重建出来，因为 UserPromptSubmit 的 reconcile 会补 pane。
+
+  ———
+
+  ### 方案 D：最靠谱的使用侧 workaround
+
+  如果你是先进入 tmux，再在里面跑 omx，这个问题更容易出现。
+
+  更稳的是：
+
+  - 用 omx --tmux
+  - 或让外部脚本/按钮新建 omx tmux session
+
+  因为这条路径会注册 tmux resize hooks，更容易把 HUD 固定在 3 行。
+
+  ———
+
+  ## 如果你想“真正解决”
+
+  需要改 omx 本体，比较合理的改法有两个：
+
+  1. 加配置项
+      - 例如 OMX_HUD_HEIGHT_LINES=1
+      - 或 OMX_DISABLE_HUD=1
+  2. 补 inside-tmux 路径的 resize hook
+      - 让“已经在 tmux 里启动 omx”这条路径也像 detached 路径一样，持续把 HUD 钉在 3 行
+
+  ———
+
+  ## 我的建议
+
+  如果你要的是彻底不看这个状态栏，最合适的是：
+
+  - 给 omx 加 OMX_DISABLE_HUD=1
+  - 或至少加 OMX_HUD_HEIGHT_LINES=1
+
+  如果你愿意，我可以下一步直接帮你做两种之一：
+
+  1. 给你一个本机可用的临时 workaround 脚本
+  2. 直接 patch 你本机安装的 omx，让 HUD 可隐藏/限高
+
+  如果你要，我建议我直接做第 2 种。
+
+
+› 直接隐藏这个状态栏, omx 加 OMX_DISABLE_HUD=1
+
+
+• Updated Plan
+  └ 用户要直接隐藏 omx HUD，并希望用 `OMX_DISABLE_HUD=1` 控制。我先补丁本机安装的 omx 以支持该环境变量，再视情况把变量写入
+    shell 配置实现持久生效。
+    □ 定位 omx HUD 创建与重建逻辑以及 shell 持久化入口
+    □ 补丁本机 omx，使 `OMX_DISABLE_HUD=1` 禁用 HUD
+    □ 将环境变量持久化到 shell 配置并验证效果
+
+• Running python - <<'PY'
+
+
+  Would you like to run the following command?
+
+  Reason: Do you want to allow me to patch your installed omx and bash config
+  so `OMX_DISABLE_HUD=1` fully hides the HUD pane and persists across new
+  shells?
+
+  $ python3 - <<'PY'
+  from pathlib import Path
+  from datetime import datetime
+  import shutil
+
+  stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+  root =
+  [… 178 lines] ctrl + a view all
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
+
+
+  Would you like to run the following command?
+
+  Reason: Do you want to allow me to patch your installed omx and bash config so `OMX_DISABLE_HUD=1` fully hides the HUD
+  pane and persists across new shells?
+
+  $ python3 - <<'PY'
+  from pathlib import Path
+  from datetime import datetime
+  import shutil
+
+  stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+  root = Path('/home/user/.fnm/node-versions/v22.22.0/installation/lib/node_modules/oh-my-codex/dist')
+  cli = root / 'cli' / 'index.js'
+  reconcile = root / 'hud' / 'reconcile.js'
+  bashrc = Path('/home/user/.bashrc')
+
+  for p in [cli, reconcile, bashrc]:
+      backup = p.with_name(p.name + f'.pre-hud-disable-{stamp}.bak')
+      shutil.copy2(p, backup)
+
+  cli_text = cli.read_text()
+  old = """    const hudCmd = nativeWindows
+          ? buildWindowsPromptCommand(\"node\", [omxBin, \"hud\", \"--watch\"])
+          : buildTmuxPaneCommand(\"node\", [omxBin, \"hud\", \"--watch\"]);"""
+  new = """    const hudDisabled = process.env.OMX_DISABLE_HUD === \"1\";
+      const hudCmd = hudDisabled
+          ? null
+  [… 160 lines] ctrl + a view all
+
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

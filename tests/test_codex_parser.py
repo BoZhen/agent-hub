@@ -44,6 +44,22 @@ CASES: list[tuple[str, tuple[str, str, str | None] | None]] = [
             "Yes, and don't ask again for these files",
         ),
     ),
+    # Bash approval with a long python heredoc body — the command
+    # block is ~25 lines, pushing the title 29 lines above the
+    # selector (beyond the original 15-line search window). Also
+    # exercises the "pick the *closest* title above the selector"
+    # path: an earlier approved block is still visible higher in
+    # the capture, and iterating top-down would misattribute. The
+    # detail is the joined first few continuation lines of the
+    # heredoc. 2-option UI, so always_label is None.
+    (
+        "codex-bash-approval-long-heredoc.txt",
+        (
+            "Bash",
+            "python3 - <<'PY' from pathlib import Path from datetime import datetime import shutil",
+            None,
+        ),
+    ),
 ]
 
 

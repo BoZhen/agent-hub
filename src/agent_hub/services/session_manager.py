@@ -942,19 +942,25 @@ def _parse_codex_approval_prompt(
     if not footer_found:
         return None
 
-    # Signal 3: question phrase within 15 lines above the selector.
-    # The first matching pattern wins, so the table order matters
-    # (Bash is listed first as the common case). We check each line
-    # individually AND each line joined with the next — codex word-
-    # wraps titles on narrow panes, so a 5-word phrase like
-    # "MCP server to run tool" can span two lines ("... MCP server
-    # to run" / "tool ...") and no single line contains the full
-    # phrase. The 2-line join keeps `question_idx` pointing at the
-    # first line, which is what the detail extractors expect.
+    # Signal 3: question phrase within 40 lines above the selector.
+    # We walk UPWARD from the selector so the *closest* title wins —
+    # important when a long heredoc / multi-line command body pushes
+    # the current title far up while a previously-approved block is
+    # still visible higher in the scrollback (picking the topmost
+    # match would misattribute the new selector to a stale title).
+    # The 40-line window covers real-world cases where codex
+    # truncates a heredoc body with `[… N lines] ctrl + a view all`
+    # but still shows ~25-30 lines before the truncation marker.
+    #
+    # We check each line individually AND each line joined with the
+    # next — codex word-wraps titles on narrow panes, so a phrase
+    # like "MCP server to run tool" can span two lines. The 2-line
+    # join keeps `question_idx` pointing at the first line, which is
+    # what the detail extractors expect.
     tool_name: str | None = None
     question_idx: int | None = None
-    search_start = max(0, selector_idx - 15)
-    for i in range(search_start, selector_idx):
+    search_start = max(0, selector_idx - 40)
+    for i in range(selector_idx - 1, search_start - 1, -1):
         candidates = [lines[i]]
         if i + 1 < selector_idx:
             candidates.append(lines[i].strip() + " " + lines[i + 1].strip())
