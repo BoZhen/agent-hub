@@ -31,6 +31,19 @@ CASES: list[tuple[str, tuple[str, str, str | None] | None]] = [
         "codex-mcp-approval-wrapped.txt",
         ("MCP", "omx_memory: project_memory_read", "Always allow"),
     ),
+    # Sandbox-retry / Edit approval — codex tried to write a file,
+    # the sandbox blocked it, and codex is asking permission to
+    # retry without sandbox. 3-option UI ("Yes, proceed" / "Yes,
+    # and don't ask again for these files" / "No"), Always is
+    # option 2 (Down + Enter, same as Bash).
+    (
+        "codex-edit-approval.txt",
+        (
+            "Edit",
+            "command failed; retry without sandbox?",
+            "Yes, and don't ask again for these files",
+        ),
+    ),
 ]
 
 

@@ -169,19 +169,23 @@ async def approve_session(
     tool = session.get("tool") or "claude"
 
     if tool == "codex":
-        # Option 1 is highlighted by default in both Bash and MCP
-        # approval UIs; Enter confirms it.
+        # Option 1 is highlighted by default in every codex approval
+        # UI; Enter confirms it.
         #
         # For Always, the key sequence depends on which UI variant
         # is up:
-        # - Bash 3-option: Always is option 2 → 1 Down + Enter
-        # - MCP 4-option:  Always is option 3 → 2 Downs + Enter
+        # - Bash 3-option:  Always is option 2 → 1 Down + Enter
+        #   (Yes / Yes, and don't ask again... / No)
+        # - Edit 3-option:  Always is option 2 → 1 Down + Enter
+        #   (Yes, proceed / Yes, and don't ask again for these
+        #   files / No) — sandbox-retry path.
+        # - MCP 4-option:   Always is option 3 → 2 Downs + Enter
         #   (Allow / Allow for this session / Always allow / Cancel)
         #
         # We derive the down count from `pending_tool`, which the
-        # parser set to "Bash" or "MCP" when it recognized the UI.
-        # No new DB column — the discriminator is already in the
-        # existing pending-state fields.
+        # parser set to "Bash" / "Edit" / "MCP" when it recognized
+        # the UI. No new DB column — the discriminator is already
+        # in the existing pending-state fields.
         if always:
             down_count = 2 if session.get("pending_tool") == "MCP" else 1
             keys: tuple[str, ...] = tuple(["Down"] * down_count) + ("Enter",)

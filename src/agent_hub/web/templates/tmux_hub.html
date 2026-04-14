@@ -1,16 +1,82 @@
 {% extends "base.html" %}
 {% block title %}Tmux Hub — Agent Hub{% endblock %}
+{% block main_width %}w-full max-w-none{% endblock %}
+{% block main_px %}px-2 sm:px-3{% endblock %}
+{% block body_class %}h-screen overflow-hidden flex flex-col{% endblock %}
+{% block main_py %}py-0{% endblock %}
+{% block main_extra_class %}flex-1 min-h-0 overflow-hidden flex flex-col{% endblock %}
+{% block nav %}{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-end mb-4 sm:mb-6">
-  <button id="btn-new" type="button"
-          class="text-xs sm:text-sm px-3 py-1.5 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
-    + New
-  </button>
-</div>
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:grid-rows-[auto_minmax(0,1fr)] gap-3 sm:gap-4 flex-1 min-h-0">
 
-<div id="tmux-list" class="space-y-2 sm:space-y-3">
-  <div class="text-gray-500 text-sm py-8 text-center">Loading…</div>
+  <!-- LEFT ROW 1: scoped nav -->
+  <nav class="lg:col-start-1 lg:row-start-1 shrink-0 border-b border-gray-700/50 py-3 flex items-center justify-between">
+    <a href="/tmux" class="text-lg font-bold text-accent-light hover:text-white transition">Tmux Hub</a>
+    <a href="/"
+       class="fancy-btn text-xs sm:text-sm px-3 py-1 rounded-md bg-gradient-to-b from-emerald-400 to-emerald-600 text-white font-bold border border-emerald-900/60 hover:from-white hover:to-emerald-200 hover:text-emerald-600 active:translate-y-px transition-all">
+      Agent
+    </a>
+  </nav>
+
+  <!-- LEFT ROW 2: stats + controls + list -->
+  <div class="lg:col-start-1 lg:row-start-2 min-w-0 flex flex-col min-h-0">
+    <div class="shrink-0 grid grid-cols-2 gap-1.5 sm:gap-2 mb-3 sm:mb-4 text-xs">
+      <div class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Total</span>
+        <span class="font-bold text-white ml-1" id="stat-total">0</span>
+      </div>
+      <div class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0">
+        <span class="text-gray-400 uppercase tracking-wide truncate">Attached</span>
+        <span class="font-bold status-active ml-1" id="stat-attached">0</span>
+      </div>
+    </div>
+    <div class="shrink-0 flex items-center gap-4 mb-3 border-b border-gray-700/30">
+      <span class="text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-accent-light text-white">
+        Bare Tmux
+      </span>
+      <button id="btn-new" type="button"
+              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+        + New
+      </button>
+    </div>
+    <div id="tmux-list" class="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1 space-y-2 sm:space-y-3">
+      <div class="text-gray-500 text-sm py-8 text-center">Loading…</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: iframe preview pane (lg+) -->
+  <div id="preview-pane"
+       class="hidden lg:flex lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:my-3
+              lg:flex-col lg:min-h-0 bg-surface-light rounded-lg
+              border border-gray-700/30 overflow-hidden">
+    <div id="preview-header"
+         class="shrink-0 px-3 py-2 border-b border-gray-700/30 bg-surface-lighter/40
+                flex items-center gap-3 text-xs min-w-0">
+      <span id="preview-name" class="font-semibold text-white truncate shrink-0">—</span>
+      <span id="preview-cwd" class="text-gray-400 font-mono truncate flex-1 text-right">
+        Click any tmux to preview
+      </span>
+      <button id="preview-close" type="button"
+              class="hidden text-gray-500 hover:text-white transition px-1 text-base leading-none shrink-0"
+              title="Close preview">&times;</button>
+    </div>
+    <div id="preview-body" class="flex-1 min-h-0 relative">
+      <div id="preview-empty"
+           class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm text-center px-4">
+        <div>
+          <div class="text-3xl mb-2 opacity-40">▢</div>
+          <div>Click any <span class="text-accent-light font-semibold">tmux</span> to embed its terminal here</div>
+        </div>
+      </div>
+      <iframe id="preview-iframe"
+              class="absolute inset-0 w-full h-full hidden"
+              title="Tmux preview"
+              loading="lazy"
+              referrerpolicy="no-referrer"></iframe>
+    </div>
+  </div>
+
 </div>
 
 <!-- Modal: create new tmux -->
@@ -58,18 +124,31 @@ async function loadTmuxList() {
     const res = await fetch('/api/tmux/list');
     const data = await res.json();
     const sessions = data.sessions || [];
+
+    document.getElementById('stat-total').textContent = sessions.length;
+    document.getElementById('stat-attached').textContent =
+      sessions.filter(s => s.attached && !s.dead).length;
+
     if (sessions.length === 0) {
       listEl.innerHTML = '<div class="text-gray-500 text-sm py-8 text-center">No bare tmux sessions. Click + New to create one.</div>';
+      if (previewState.name) closePreview();
       return;
     }
+
     listEl.innerHTML = sessions.map(s => {
       const cwd = s.cwd || (s.dead ? '(pane dead)' : '—');
       const dot = s.dead ? 'dot-stopped' : (s.attached ? 'dot-active' : 'dot-idle');
       const badge = s.dead
         ? '<span class="text-xs px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-400">dead</span>'
         : (s.attached ? '<span class="text-xs text-green-400">attached</span>' : '');
+      const clickable = !s.dead;
+      const cardCls = `bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition${clickable ? ' cursor-pointer' : ''}`;
+      const cardData = clickable
+        ? `data-name="${escapeHtml(s.name)}" data-cwd="${escapeHtml(s.cwd || '')}" onclick="previewTmux(this)" role="button"`
+        : '';
       const terminalBtn = s.dead ? '' : `
         <a href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.name)}" target="_blank"
+           onclick="event.stopPropagation()"
            class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
           Terminal
         </a>`;
@@ -79,12 +158,11 @@ async function loadTmuxList() {
           Kill
         </button>` : '';
       return `
-      <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition">
+      <div id="tmux-card-${escapeHtml(s.name)}" class="${cardCls}" ${cardData}>
         <div class="flex items-center justify-between mb-1.5 sm:mb-2">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 min-w-0">
             <span class="dot ${dot}"></span>
-            <span class="font-semibold text-white text-sm sm:text-base">${escapeHtml(s.name)}</span>
-            <span class="text-xs text-gray-500">tmux</span>
+            <span class="font-semibold text-white text-sm sm:text-base truncate">${escapeHtml(s.name)}</span>
             ${badge}
           </div>
         </div>
@@ -94,8 +172,10 @@ async function loadTmuxList() {
         </div>
       </div>`;
     }).join('');
+
     listEl.querySelectorAll('.kill-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
         const name = btn.dataset.kill;
         if (!confirm(`Kill dead tmux session "${name}"?`)) return;
         btn.textContent = 'Killing…';
@@ -113,6 +193,7 @@ async function loadTmuxList() {
             btn.disabled = false;
             return;
           }
+          if (previewState.name === name) closePreview();
           loadTmuxList();
         } catch (e) {
           alert('Error: ' + e.message);
@@ -121,10 +202,70 @@ async function loadTmuxList() {
         }
       });
     });
+
+    // Sync preview state with current list
+    if (previewState.name) {
+      const live = sessions.find(s => s.name === previewState.name && !s.dead);
+      if (!live) closePreview();
+      else highlightPreviewCard(previewState.name);
+    }
   } catch (e) {
     listEl.innerHTML = `<div class="text-red-400 text-sm py-8 text-center">Failed to load: ${escapeHtml(e.message)}</div>`;
   }
 }
+
+// ── Preview pane ──
+const previewState = { name: null };
+
+function previewTmux(el) {
+  const name = el.dataset.name;
+  const cwd = el.dataset.cwd || '';
+  if (!name) return;
+
+  const iframe = document.getElementById('preview-iframe');
+  const empty = document.getElementById('preview-empty');
+
+  if (previewState.name !== name) {
+    iframe.src = `${TERMINAL_URL}/?attach=${encodeURIComponent(name)}`;
+    previewState.name = name;
+  }
+  iframe.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  document.getElementById('preview-name').textContent = name;
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = cwd || '—';
+  cwdEl.classList.remove('text-right');
+  document.getElementById('preview-close').classList.remove('hidden');
+
+  highlightPreviewCard(name);
+}
+
+function highlightPreviewCard(name) {
+  document.querySelectorAll('.preview-active').forEach(el => {
+    el.classList.remove('preview-active', 'ring-2', 'ring-accent-light');
+  });
+  if (name) {
+    const card = document.getElementById('tmux-card-' + name);
+    if (card) card.classList.add('preview-active', 'ring-2', 'ring-accent-light');
+  }
+}
+
+function closePreview() {
+  const iframe = document.getElementById('preview-iframe');
+  iframe.src = 'about:blank';
+  iframe.classList.add('hidden');
+  document.getElementById('preview-empty').classList.remove('hidden');
+  document.getElementById('preview-name').textContent = '—';
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = 'Click any tmux to preview';
+  cwdEl.classList.add('text-right');
+  document.getElementById('preview-close').classList.add('hidden');
+  previewState.name = null;
+  highlightPreviewCard(null);
+}
+
+document.getElementById('preview-close').addEventListener('click', closePreview);
 
 // ── New tmux modal ──
 let currentBrowsePath = null;
@@ -249,7 +390,6 @@ loadTmuxList();
 setInterval(loadTmuxList, 10000);
 
 function onWsMessage(data) {
-  // Refresh list when a session is created/closed on the backend
   if (data.type === 'event' && data.event_type === 'SessionStart') {
     loadTmuxList();
   }

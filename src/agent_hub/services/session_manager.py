@@ -734,19 +734,30 @@ _CODEX_OPTION4_RE = _re.compile(r"^\s*4\.\s")
 # MCP 4-option UI: option 3 is "Always allow", which is the MCP
 # analog of Bash's option-2 Always variant.
 _CODEX_OPTION3_ALWAYS_RE = _re.compile(r"^\s*3\.\s+(Always.*)$")
-_CODEX_OPTION_P_HINT_RE = _re.compile(r"\s*\(p\)\s*$")
+_CODEX_OPTION_KEY_HINT_RE = _re.compile(r"\s*\([a-z]\)\s*$")
 _CODEX_COL_SPLIT_RE = _re.compile(r"\s{2,}")
+# Edit / sandbox-retry approval surfaces a "Reason: ..." subtitle
+# instead of a `$ command` line; we surface it as the badge detail.
+_CODEX_REASON_RE = _re.compile(r"^\s*Reason:\s*(.+?)\s*$")
 
 # (question_phrase, tool_name) — extension point for future codex
-# approval UIs (e.g. apply_patch / file-edit variants). The phrase
-# must be short enough to survive narrow-pane word wrap — codex
-# breaks lines at word boundaries, so a 5-word prefix fits on any
-# reasonable terminal width. Phase 3 adds the MCP tool approval
-# path; Bash stays as the first entry because it's the dominant
-# case and matching is sequential.
+# approval UIs. The phrase must be short enough to survive narrow-
+# pane word wrap (codex breaks lines at word boundaries, so a 4-5
+# word prefix fits on any reasonable terminal width). Bash stays
+# first as the common case; matching is sequential.
+#
+# - "Bash": "Would you like to run the following command?" — sandbox
+#   wants permission to execute a shell command.
+# - "MCP":  "Allow the <server> MCP server to run tool <x>?" — MCP
+#   tool call permission, 4-option UI.
+# - "Edit": "Would you like to make the following edits?" — codex
+#   wanted to write/edit files, the sandbox blocked it, and codex is
+#   asking permission to retry without sandbox. 3-option UI, same
+#   navigation as Bash (Approve = Enter, Always = Down + Enter).
 _CODEX_QUESTION_PATTERNS: list[tuple[str, str]] = [
     ("Would you like to run", "Bash"),
     ("MCP server to run tool", "MCP"),
+    ("Would you like to make", "Edit"),
 ]
 
 
@@ -773,6 +784,25 @@ def _extract_codex_bash_detail(
                 if len(parts) >= 4:
                     break
             return " ".join(parts).strip()[:150]
+    return ""
+
+
+def _extract_codex_edit_detail(
+    lines: list[str], question_idx: int, selector_idx: int
+) -> str:
+    """Extract the `Reason: ...` subtitle from an Edit approval block.
+
+    The Edit / sandbox-retry UI has no `$ command` line — instead it
+    shows a single-line reason like "command failed; retry without
+    sandbox?". We surface that as the dashboard badge detail so the
+    user can see *why* codex is asking before pressing Approve.
+    Returns "" if no Reason: line is found in the question→selector
+    window.
+    """
+    for i in range(question_idx + 1, selector_idx):
+        m = _CODEX_REASON_RE.match(lines[i])
+        if m:
+            return m.group(1)[:150]
     return ""
 
 
@@ -822,7 +852,9 @@ def _extract_codex_always_label(
     the same line for the MCP UI) are stripped so we only keep the
     option label proper.
     """
-    if tool_name == "Bash":
+    if tool_name in ("Bash", "Edit"):
+        # Both surface Always as option 2 ("Yes, and don't ask again
+        # for commands that start with..." / "...for these files").
         target_re = _CODEX_OPTION2_RE
         stop_re = _CODEX_OPTION3_RE
     elif tool_name == "MCP":
@@ -848,8 +880,11 @@ def _extract_codex_always_label(
         # spaces ("Always allow            Run the tool and remember
         # ...") so only the label itself remains.
         text = _CODEX_COL_SPLIT_RE.split(text, 1)[0].strip()
-        # Drop the legacy `(p)` single-key hint from Bash option 2.
-        text = _CODEX_OPTION_P_HINT_RE.sub("", text).strip()
+        # Drop the trailing single-key hint codex prints next to
+        # option 2 — `(p)` for legacy Bash, `(a)` for the Edit /
+        # sandbox-retry UI, etc. Only strip the lowercase letter
+        # variant so the literal label text isn't accidentally cut.
+        text = _CODEX_OPTION_KEY_HINT_RE.sub("", text).strip()
         return text[:250] if text else None
     return None
 
@@ -939,6 +974,8 @@ def _parse_codex_approval_prompt(
         detail = _extract_codex_bash_detail(lines, question_idx, selector_idx)
     elif tool_name == "MCP":
         detail = _extract_codex_mcp_detail(lines, question_idx, selector_idx)
+    elif tool_name == "Edit":
+        detail = _extract_codex_edit_detail(lines, question_idx, selector_idx)
     else:
         detail = ""
 

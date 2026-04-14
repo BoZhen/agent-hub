@@ -1,882 +1,666 @@
-# Agent Hub - Technical Design
+# Agent Hub 技术设计文档
 
-> Claude Code 会话统一管理平台
+## 1. 文档目的
 
-> **状态机相关问题,DESIGN.md 的 13-17 号踩坑和 3.3 的新图是最直接的参考。**
+本文档描述 Agent Hub 的设计目标、系统边界、核心架构、关键数据模型与运行机制。其目标读者包括：
 
-## 1. 项目目标
+- 项目维护者
+- 新加入的开发者
+- 需要理解部署方式或集成方式的使用者
 
-在多台设备（通过 Tailscale 组网）上运行的多个 Claude Code CLI 会话，需要一个中心化的管理平台来：
+本文档聚焦**当前实现与稳定设计原则**，不记录临时调试过程、个人环境习惯或一次性实验配置。安装细节与操作示例请以 `README.md` 与 `SETUP.md` 为准。
 
-- **发现** — 知道当前有哪些会话在运行、分布在哪些机器上
-- **观察** — 实时了解每个会话正在做什么任务、用了什么工具、进展如何
-- **回溯** — 查看历史会话的活动时间线
-- **统筹** — 通过 MCP Server 接口，让任一 Claude Code 会话能查询和管理其他会话
+---
 
-## 2. 系统架构
+## 2. 系统概览
 
-### 2.1 双 Hub 拓扑
+Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观察和控制多个 **Claude Code** 与 **Codex CLI** 会话。系统提供以下能力：
 
-两台主力计算机各运行一个独立的 Hub Server，其他设备选择性接入其中一个 Hub。两个 Hub 之间可定期或手动同步数据。
+- 会话发现与注册
+- 事件采集与时间线记录
+- 实时状态展示
+- 基于 tmux 的远程审批与会话操作
+- 通过 WebSocket 向前端推送实时更新
+- 通过 MCP SSE 暴露查询接口，供其他 Agent 或工具调用
 
-```
-Tailscale Network (100.x.x.x)
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│       Main Machine A                    Main  Machine B              |
-│  ┌──────────────────────┐           ┌──────────────────────┐         │
-│  │   Agent Hub A:7800   │◀─ sync ──▶│   Agent Hub B:7800   │         │
-│  │   ┌────┐ ┌───┐ ┌───┐ │           │┌────┐ ┌───┐ ┌───┐    │         │
-│  │   │API │ │WS │ │MCP│ │           ││API │ │WS │ │MCP│    │         │
-│  │   └────┘ └───┘ └───┘ │           │└────┘ └───┘ └───┘    │         │
-│  │         │            │           │        │             │         │
-│  │    ┌────┴────┐       │           │   ┌────┴────┐        │         │
-│  │    │ hub_a.db│       │           │   │ hub_b.db│        │         │
-│  │    └─────────┘       │           │   └─────────┘        │         │
-│  └──────────────────────┘           └──────────────────────┘         │
-│       ▲           ▲                       ▲          ▲               │
-│   HTTP Hook   HTTP Hook              HTTP Hook   HTTP Hook           │
-│  ┌───────┐  ┌───────┐              ┌───────┐   ┌───────┐            │
-│  │CC #1  │  │CC #2  │              │CC #3  │   │CC #4  │            │
-│  │proj-a │  │proj-b │              │proj-c │   │proj-d │            │
-│  └───────┘  └───────┘              └───────┘   └───────┘            │
-│                                                                      │
-│  Machine C (辅助机)                  Machine D (辅助机)               │
-│  ┌───────┐                          ┌───────┐                        │
-│  │CC #5  │── HTTP Hook ──▶ Hub A    │CC #6  │── HTTP Hook ──▶ Hub B │
-│  │proj-e │                          │proj-f │                        │
-│  └───────┘                          └───────┘                        │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
-```
+当前实现是一个**单进程 Python 服务**，在同一应用内提供：
 
-### 2.2 核心原则
+- HTTP API
+- Web 页面
+- WebSocket
+- MCP Server
+- Telegram 通知集成
 
-- **Push 模式** — Claude Code 通过原生 HTTP Hook 主动上报事件，Hub 不需要轮询
-- **零侵入** — 只需在 `~/.claude/settings.json` 中配置 hooks，不修改 Claude Code 本身
-- **单进程** — Hub Server、Web UI、MCP Server 运行在同一个 Python 进程中
-- **Tailscale 内网** — 所有通信走 Tailscale 内网，无需公网暴露或额外鉴权
-- **独立运行，按需同步** — 每个 Hub 独立工作，网络故障不影响各自的事件收集；同步是附加能力而非依赖
+---
 
-## 3. 数据模型
+## 3. 设计目标与非目标
 
-### 3.1 核心实体
+### 3.1 设计目标
 
-```sql
--- 会话：一次 Claude Code CLI 的启动到退出
-CREATE TABLE sessions (
-    session_id    TEXT PRIMARY KEY,     -- Claude Code 分配的 session_id
-    hub_id        TEXT NOT NULL,        -- 首次接收该会话的 Hub 标识
-    hostname      TEXT NOT NULL,        -- 机器名
-    cwd           TEXT NOT NULL,        -- 工作目录
-    model         TEXT,                 -- 使用的模型
-    status        TEXT NOT NULL DEFAULT 'active',  -- active / idle / stopped
-    started_at    DATETIME NOT NULL,
-    last_seen_at  DATETIME NOT NULL,    -- 最后一次收到事件的时间
-    stopped_at    DATETIME,
-    metadata      JSON                  -- 额外信息 (permission_mode 等)
-);
+1. **统一观测**  
+   用单一界面展示多台主机上的 AI CLI 会话状态、事件与运行上下文。
 
--- 事件：会话中发生的每一个 hook 事件
-CREATE TABLE events (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_uid     TEXT NOT NULL UNIQUE,  -- 全局唯一 ID (hub_id + 本地 id), 用于去重同步
-    hub_id        TEXT NOT NULL,         -- 产生该事件的 Hub
-    session_id    TEXT NOT NULL REFERENCES sessions(session_id),
-    event_type    TEXT NOT NULL,         -- SessionStart / PreToolUse / PostToolUse / ...
-    tool_name     TEXT,                  -- Bash / Write / Read / Edit / ...
-    summary       TEXT,                  -- 人类可读的一行摘要
-    payload       JSON,                  -- 完整的 hook payload（脱敏后）
-    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+2. **低侵入接入**  
+   尽量复用 Claude Code / Codex CLI 的现有能力，不要求修改 CLI 本体。
 
--- 同步水位线：记录从每个 peer hub 拉取到哪个位置
-CREATE TABLE sync_watermarks (
-    peer_hub_id   TEXT PRIMARY KEY,      -- 对端 Hub 标识
-    last_event_uid TEXT NOT NULL,        -- 上次同步到的最后一条 event_uid
-    synced_at     DATETIME NOT NULL
-);
+3. **实时反馈**  
+   新事件、等待审批、状态切换应尽快反映到 Web UI 和通知通道。
 
--- 索引
-CREATE INDEX idx_events_session ON events(session_id, created_at DESC);
-CREATE INDEX idx_events_type ON events(event_type, created_at DESC);
-CREATE INDEX idx_events_hub ON events(hub_id, id);  -- 同步查询用
-CREATE INDEX idx_sessions_status ON sessions(status);
+4. **可恢复会话管理**  
+   依赖 tmux 作为会话承载层，使会话能够脱离浏览器连接而持续存在。
+
+5. **集成能力**  
+   通过 MCP、API 与模块化服务层支持当前系统接入与自动化使用。
+
+### 3.2 非目标
+
+当前版本**不以以下内容为核心目标**：
+
+- 分布式强一致同步
+- 多租户权限系统
+- 公网暴露场景下的复杂鉴权体系
+- 通用任务编排平台
+
+---
+
+## 4. 系统上下文
+
+系统目前支持三类事件来源：
+
+1. **Claude Code（Hook Push）**  
+   通过本地 hook 将事件推送到 Hub。
+
+2. **Codex CLI + OMX（Hook Push）**  
+   借助 oh-my-codex 提供的原生 hook，再由桥接脚本转发到 Hub。
+
+3. **Codex CLI（tmux 扫描回退）**  
+   未启用 OMX 时，Hub 通过周期性扫描 tmux pane 识别 Codex 会话并推断状态。
+
+总体关系如下：
+
+```text
+Claude Code hooks  ───────┐
+                          │
+Codex + OMX hooks ────────┼──▶ Agent Hub (FastAPI)
+                          │       ├─ REST API
+Bare Codex tmux scan ─────┘       ├─ Web UI
+                                  ├─ WebSocket
+                                  ├─ MCP SSE
+                                  ├─ Telegram integration
+                                  └─ SQLite (WAL)
+                                           │
+                                           └─ Session / Event state
+
+Web Dashboard  ◀──────────── WebSocket / HTTP
+Web Terminal   ◀──────────── tmux attach / send-keys
+Other Agents   ◀──────────── MCP SSE
 ```
 
-> **实际 schema 的权威定义见 `src/agent_hub/db.py:init_db`**。运行时已通过自动迁移补充了以下列 (未完整列在上方骨架中): `tmux_session`、`transferred`、`pending_tool`、`pending_detail`、`pending_always_label`、`pinned`、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_create_tokens`、`transcript_path`。
+---
 
-### 3.2 事件摘要生成规则
+## 5. 核心架构
 
-收到原始 hook payload 后，Hub 提取出一行人类可读的摘要存入 `events.summary`：
+### 5.1 应用入口
 
-| event_type             | summary 示例                                   |
-| ---------------------- | -------------------------------------------- |
-| `SessionStart`         | `Session started (model: claude-sonnet-4-6)` |
-| `PreToolUse` + `Bash`  | `$ npm test`                                 |
-| `PreToolUse` + `Write` | `Write /src/app.js`                          |
-| `PreToolUse` + `Read`  | `Read /src/app.js`                           |
-| `PreToolUse` + `Edit`  | `Edit /src/app.js`                           |
-| `PreToolUse` + `Grep`  | `Grep "pattern" in **/*.ts`                  |
-| `PostToolUse` + `Bash` | `$ npm test (exit 0)`                        |
-| `PostToolUseFailure`   | `FAIL: Bash "npm test" — exit 1`             |
-| `UserPromptSubmit`     | `User: "fix the login bug"` (截断到 80 字符)      |
-| `Stop`                 | `Session idle`                               |
+`src/agent_hub/main.py` 负责：
 
-### 3.3 会话状态机
+- 解析命令行参数
+- 构建 `HubConfig`
+- 初始化 SQLite 数据库
+- 注册 API、Web 与 WebSocket 路由
+- 挂载 MCP Server
+- 启动后台任务：
+  - `periodic_sweep`
+  - `periodic_pending_check`
+- 启动与停止 Telegram Bot
 
-```
-SessionStart ──▶ active
-                   │
-            ToolUse / UserPrompt (刷新 last_seen_at)
-                   │
-         Stop event, 或 10min 无事件且 pane 不在 "esc to interrupt" ──▶ idle
-                   │
-                   │  (idle 是终态性持久状态 — 只要 tmux 还活着, 无限期保留)
-                   ▼
-         tmux session 真死 (背景 _sweep_dead_tmux 每 60s 扫一次) ──▶ stopped
-                   │
-         新的 SessionStart (相同 session_id, source=resume) ──▶ active
-```
+### 5.2 分层结构
 
-**设计原则**:
-- 时间不是 stopped 的触发条件。早上睡醒之前的 idle session 全部保留,可以直接继续干活
-- stopped 的唯一入口是 tmux 死亡,通过 `tmux ls` 和 DB 做集合差实现
-- `Running` (长工具在执行) 和 `Waiting` (等审批) 是覆盖在 active 之上的派生状态,且互斥:审批阻塞期工具没在跑,不会同时出现两种徽章
-- tmux 名字复用时 `ensure_session` 自动把同名的旧 session 退休为 stopped,避免累积重复
+项目采用较为清晰的分层设计：
 
-## 4. 双 Hub 同步机制
+#### API 层
 
-### 4.1 设计原则
+位于 `src/agent_hub/api/`，负责暴露外部接口：
 
-- **各自独立** — 每个 Hub 独立接收和存储事件，不依赖对端在线
-- **Append-only** — 事件只增不改，无写入冲突，同步本质上是日志复制
-- **幂等同步** — 通过 `event_uid` 去重，重复同步不会产生重复数据
-- **按需触发** — 支持手动触发和定时触发，不做实时双向复制
+- `events.py`：接收 hook 事件
+- `sessions.py`：查询、审批、删除、pin、通知
+- `tmux.py`：tmux 会话管理
+- `ws.py`：WebSocket 广播
 
-### 4.2 Hub 身份
+#### 服务层
 
-每个 Hub 启动时需要配置一个唯一的 `hub_id`（如 `hub-a`、`hub-b`），写入配置文件：
+位于 `src/agent_hub/services/`，承载主要业务逻辑：
 
-```yaml
-# config.yaml 或环境变量
-hub_id: "hub-a"
-peers:
-  - id: "hub-b"
-    url: "http://100.x.x.x:7800"
-```
+- `event_processor.py`：事件落库、摘要生成、广播
+- `session_manager.py`：状态机、tmux 扫描、审批检测、生命周期维护
+- `telegram_bot.py`：Telegram 通知
+- `transcript_reader.py`：从 transcript 提取 token 与摘要信息
 
-所有本地产生的事件 `event_uid` 格式为 `{hub_id}:{local_id}`，例如 `hub-a:1042`。
+#### 数据层
 
-### 4.3 同步 API
+`src/agent_hub/db.py` 定义数据库 schema、迁移与 CRUD。
 
-```
-# 供对端 Hub 拉取数据
-GET /api/sync/events?after_uid={event_uid}&limit=500
-  → 返回该 Hub 上 event_uid 之后的事件列表（含关联的 session 信息）
+#### Web 层
 
-# 供对端 Hub 推送数据（或本地拉取后写入）
-POST /api/sync/push
-  Body: { "events": [...], "sessions": [...] }
-  → 合并写入，按 event_uid 去重，按 session_id 合并（取较新的 last_seen_at）
+`src/agent_hub/web/` 提供 Jinja2 页面与路由。
 
-# 查看同步状态
-GET /api/sync/status
-  → 返回各 peer 的水位线和最后同步时间
+#### MCP 层
+
+`src/agent_hub/mcp/server.py` 暴露面向 Agent 的查询工具。
+
+### 5.3 运行拓扑
+
+当前系统的运行拓扑如下：
+
+```text
+Claude Code CLI       ──[HTTP / command hooks]────────┐
+                                                      │
+Codex CLI + OMX      ──[native hook -> bridge]────────┼──▶ Agent Hub
+                                                      │      ├─ FastAPI API
+Bare Codex CLI       ◀─[tmux capture-pane polling]────┘      ├─ Web UI
+                                                             ├─ WebSocket
+                                                             ├─ MCP SSE
+                                                             ├─ Telegram Bot
+                                                             └─ SQLite (WAL)
+
+Web Dashboard         ◀──────────── HTTP / WebSocket
+Web Terminal          ◀──────────── tmux attach / send-keys
+Other MCP Clients     ◀──────────── /mcp/sse
 ```
 
-### 4.4 同步流程
+该拓扑反映了三类输入路径：
 
+- Claude 通过 hook 主动推送事件
+- Codex + OMX 通过桥接脚本复用相同事件入口
+- 未接入 hook 的 Codex 通过 tmux 扫描维持发现与状态判断
+
+### 5.4 外部接口总览
+
+系统当前暴露四类外部接口：
+
+#### HTTP API
+
+主要接口包括：
+
+- `POST /api/events`
+- `GET /api/sessions`
+- `GET /api/sessions/{id}`
+- `GET /api/sessions/{id}/events`
+- `GET /api/sessions/{id}/events/latest`
+- `POST /api/sessions/{id}/approve`
+- `POST /api/sessions/{id}/pin`
+- `DELETE /api/sessions/{id}`
+- `POST /api/sessions/clear-stopped`
+- `GET /api/stats`
+- `GET /api/tmux/list`
+- `POST /api/tmux/new`
+- `POST /api/tmux/kill`
+- `GET /api/browse`
+- `POST /api/notify`
+
+#### Web 页面
+
+- `/`
+- `/idle`
+- `/stopped`
+- `/tmux`
+- `/sessions/{id}`
+
+#### WebSocket
+
+- `WS /ws`
+
+用于推送事件、pending 状态变化和统计更新。
+
+#### MCP
+
+- `GET /mcp/sse`
+
+用于向外部 Agent 暴露查询型工具。
+
+---
+
+## 6. 数据模型
+
+### 6.1 核心表
+
+系统以两个核心表为中心：
+
+#### `sessions`
+
+记录单个 AI CLI 会话的长期状态，包含：
+
+- `session_id`
+- `hub_id`
+- `hostname`
+- `cwd`
+- `model`
+- `status`
+- `started_at`
+- `last_seen_at`
+- `stopped_at`
+- `tool`
+- `tmux_session`
+- `pending_tool`
+- `pending_detail`
+- `pending_always_label`
+- `pinned`
+- transcript 与 token 统计相关字段
+
+#### `events`
+
+记录每一个已接收的 hook 事件，包含：
+
+- `event_uid`
+- `session_id`
+- `event_type`
+- `tool_name`
+- `summary`
+- `payload`
+- `created_at`
+
+### 6.2 设计原则
+
+1. **会话与事件分离**  
+   `sessions` 用于表达当前状态，`events` 用于表达历史过程。
+
+2. **摘要与原始载荷分离**  
+   `summary` 负责支撑 UI 与 MCP 中的快速阅读；`payload` 用于保留足够上下文。
+
+3. **运行时字段直接入库**  
+   `pending_tool`、`tmux_session`、`pinned` 等字段作为查询热点直接保存在 `sessions` 中，降低页面刷新与实时推送的计算成本。
+
+4. **数据库定义以代码为准**  
+   文档用于解释模型；真实 schema 与迁移逻辑以 `src/agent_hub/db.py` 为权威来源。
+
+---
+
+## 7. 事件模型与处理流程
+
+### 7.1 接收入口
+
+`POST /api/events` 是事件写入主入口。请求至少需要包含：
+
+- `session_id`
+- `hook_event_name`
+
+Hub 同时通过 query 参数接收额外上下文，例如：
+
+- `host`
+- `tmux_session`
+- `tool`
+
+### 7.2 标准处理流程
+
+事件进入系统后，处理步骤如下：
+
+1. 校验最小字段集合
+2. 将 `tmux_session` 与 CLI 类型注入 payload
+3. 异步调用 `event_processor.process_event`
+4. 调用 `session_manager.ensure_session` 确保会话存在
+5. 生成人类可读摘要
+6. 对 payload 做脱敏和裁剪
+7. 将事件写入数据库
+8. 根据事件类型更新会话状态
+9. 如有 transcript，则补充 token 与模型信息
+10. 通过 WebSocket 广播更新
+
+### 7.3 摘要生成
+
+系统对常见事件生成短摘要，供 Dashboard、会话详情页和 MCP 查询使用。例如：
+
+- `SessionStart` → `Session started`
+- `PreToolUse` + `Bash` → `$ <command>`
+- `Read` / `Write` / `Edit` → `<tool> <path>`
+- `UserPromptSubmit` → `User: "<prompt>"`
+- `Stop` → `Session idle`
+
+摘要的目标是**帮助快速扫描**，而不是完整复述 payload。
+
+### 7.4 脱敏策略
+
+为控制存储量和敏感信息暴露，系统会在入库前进行处理：
+
+- 对 `Write` / `Edit` 去除大段文件内容
+- 对部分 `tool_response` 进行裁剪
+- 对用户 prompt 进行长度截断
+- 不在事件 payload 中保留本地 `transcript_path`
+
+---
+
+## 8. 会话生命周期模型
+
+### 8.1 主状态
+
+会话主状态包括：
+
+- `active`
+- `idle`
+- `stopped`
+
+### 8.2 派生状态
+
+在主状态之上，还有两个重要派生状态：
+
+- `waiting`：当前存在待审批操作
+- `running`：当前存在长时间运行中的工具调用
+
+这两个派生状态是为 UI 表达服务的覆盖态，不替代主状态机。
+
+### 8.3 状态转移原则
+
+```text
+SessionStart / activity  ─────────▶ active
+Stop or soft-idle rule   ─────────▶ idle
+tmux session disappears  ─────────▶ stopped
+resume / new activity    ─────────▶ active
 ```
-Hub A                                    Hub B
-  │                                        │
-  │  GET /api/sync/events?after_uid=...    │
-  │ ─────────────────────────────────────▶ │
-  │                                        │
-  │  { events: [...], sessions: [...] }    │
-  │ ◀───────────────────────────────────── │
-  │                                        │
-  │  本地合并写入 (去重)                     │
-  │  更新 sync_watermarks                   │
-  │                                        │
-```
 
-双向同步：Hub A 拉 Hub B 的新数据，Hub B 也拉 Hub A 的新数据。两个方向独立执行。
+更具体地说：
 
-### 4.5 触发方式
+1. `SessionStart` 或新的活跃事件会将会话置为 `active`
+2. `Stop` 会将会话置为 `idle`
+3. 长时间无活动且不处于“正在工作”界面时，可被后台任务软降级为 `idle`
+4. 当底层 tmux session 消失时，会话被标记为 `stopped`
+
+### 8.4 设计取舍
+
+- `stopped` 的判断基于 **tmux 是否实际消失**，而不是单纯时间超时
+- `idle` 会话可以长期保留，以支持次日继续恢复工作
+- 同名 tmux 被复用时，旧会话会被自动退休，避免主面板出现重复活跃行
+
+---
+
+## 9. tmux 集成设计
+
+tmux 是 Agent Hub 的关键基础设施，用于承载以下能力：
+
+1. **会话持久化**  
+   Web 页面断开后，CLI 会话仍可继续执行。
+
+2. **远程审批**  
+   Hub 可通过 `tmux send-keys` 向目标 pane 发送确认操作。
+
+3. **状态探测**  
+   Hub 可通过 `tmux capture-pane` 获取当前屏幕内容，以判断：
+   - 是否等待审批
+   - 是否仍在运行工具
+   - 是否属于 Codex pane
+
+4. **回退发现机制**  
+   对未接入原生 hook 的 Codex 会话，tmux 扫描是发现与状态维持的基础。
+
+### 9.1 远程审批策略
+
+审批逻辑按 CLI 类型区分：
+
+- **Claude**  
+  - 默认批准路径通过 Web Terminal API 发送 `y + Enter`
+  - "Always" 路径通过 `tmux send-keys Down Enter` 导航
+
+- **Codex**
+  - 默认路径通过 `Enter` 确认当前高亮选项（每种审批 UI 的 option 1 都是默认接受动作）
+  - "Always" 路径根据 UI 类型决定 `Down` 次数：
+    - **Bash 命令审批**（3 选项）：1 Down + Enter
+    - **Edit / sandbox 重试审批**（3 选项）：1 Down + Enter
+    - **MCP 工具审批**（4 选项）：2 Down + Enter
+  - 判别字段是 `pending_tool`，由 parser 在识别 UI 变体时一并写入
+
+### 9.2 审批检测原则
+
+系统不只依赖历史事件，而是使用 pane 内容作为**地面真实状态**：
+
+- 判断当前是否存在待审批提示
+- 判断工具是否仍在执行
+- 处理 UI 折行和不同渲染样式
+
+这一设计可以减少由于 hook 延迟、遗漏或界面刷新带来的误判。
+
+Codex 解析器目前覆盖三种审批 UI 变体：
+
+- **Bash 命令审批** — 标题 `Would you like to run the following command?`，详情为 `$ <cmd>` 行
+- **MCP 工具审批** — 标题 `Allow the <server> MCP server to run tool <x>?`，详情为 `<server>: <tool>`
+- **Edit / sandbox 重试审批** — 标题 `Would you like to make the following edits?`，详情取自 `Reason: ...` 子标题（典型场景：sandbox 阻止文件写入后请求重试）
+
+每种 UI 都通过三信号校验避免 stale prompt 的误报：选择器锚点（`› 1. Yes` / `› 1. Allow`）、底栏文案（`Press enter to confirm or esc to cancel` / `enter to submit | esc to cancel`）、标题短语（在 selector 上方 15 行内出现，并支持单行与相邻两行拼接以应对窄终端折行）。新增 UI 变体只需在 `_CODEX_QUESTION_PATTERNS` 注册短语并提供对应的 detail 抽取器即可。
+
+---
+
+## 10. Codex 支持策略
+
+Codex 支持分为两个层次：
+
+### 10.1 首选路径：OMX Hook
+
+在启用 oh-my-codex 后，Codex 可通过桥接脚本向 `/api/events?tool=codex` 推送原生事件。此路径具备：
+
+- 完整事件时间线
+- 更准确的工具名称与上下文
+- 更及时的状态更新
+
+### 10.2 回退路径：tmux Pane 扫描
+
+未启用 OMX 时，系统通过周期性扫描 tmux pane：
+
+- 识别 Codex pane
+- 基于 pane 内容 hash 判断是否有活动
+- 解析审批界面
+- 更新活跃/空闲状态
+
+该模式能够提供基础管理能力，但事件流不如 hook 模式完整。
+
+---
+
+## 11. Web 界面设计
+
+### 11.1 页面组成
+
+当前 Web 层包含以下主要页面：
+
+- `/`：主 Dashboard
+- `/idle`：空闲会话列表
+- `/stopped`：已停止会话列表
+- `/tmux`：tmux 管理页面
+- `/sessions/{id}`：单会话详情页
+
+主 Dashboard 与 `/tmux` 页采用同源的 **1/3 : 2/3 分屏布局**（`lg+` 断点）：
+
+- **左列（1/3）** —— 页面级 scoped nav（`Agent Hub` 与 `Tmux Hub` 互跳，金属配色按钮）+ 紧凑统计条 + 标签 / 新建按钮 + 可滚动卡片列表
+- **右列（2/3）** —— iframe 嵌入 Web Terminal（`:7700`），点击任意卡片空白处即将 iframe 切换到该会话的 `?attach=<tmux_name>`，header 同步显示名称与工作目录；窄屏自动收成单列并隐藏 iframe
+
+`/tmux` 页相对 Dashboard 做了减法：
+
+- 卡片仅保留 dot + 名称 + 状态 badge + cwd + Terminal/Kill 按钮，不渲染工具图标、事件流、token 与审批徽章
+- 统计条只显示 `Total / Attached` 两项（裸 tmux 多数为 detached，单独统计意义不大）
+- 不引入额外 tab；dead pane 通过红色 dot + Kill 按钮直接出现在主列表中
+- 当前以 10 秒轮询 + `SessionStart` WebSocket 事件触发列表刷新，未启用按 ID 注入卡片的实时通道
+
+### 11.2 交互原则
+
+Dashboard 的设计目标是：
+
+- 在单屏内快速扫描会话状态
+- 让常用操作尽量接近会话卡片
+- 将详情信息下沉到详情页，避免主页面信息过载
+
+主页面重点展示：
+
+- 状态
+- 会话名 / tmux 名
+- 主机名
+- 最近事件
+- 审批按钮
+- 终端入口
+
+### 11.3 实时更新
+
+WebSocket 负责向前端推送：
+
+- 新事件
+- pending 状态变化
+- waiting 统计变化
+
+这使得页面在大多数场景下无需手动刷新。
+
+---
+
+## 12. MCP 设计
+
+系统通过 `/mcp/sse` 暴露 FastMCP 服务，当前以**查询类工具**为主，主要包括：
+
+- `list_sessions`
+- `get_session`
+- `search_events`
+- `get_dashboard`
+- `get_transcript_summary`
+
+设计原则如下：
+
+1. **优先返回人类可读文本**  
+   工具面向 Agent 调用场景，强调快速理解。
+
+2. **支持部分 session_id 匹配**  
+   减少人工复制完整 ID 的负担。
+
+3. **与 Dashboard 保持一致语义**  
+   MCP 返回的状态字段与页面展示尽量一致，避免双重解释。
+
+---
+
+## 13. 后台任务
+
+系统目前依赖两个常驻后台任务：
+
+### 13.1 `periodic_sweep`
+
+负责：
+
+- 软降级长时间无活动的会话
+- 发现底层已死亡的 tmux session
+- 清理与退休过期状态
+
+### 13.2 `periodic_pending_check`
+
+负责：
+
+- 周期性读取 tmux pane
+- 判断是否出现待审批状态
+- 解析审批详情与“Always”标签
+- 将结果同步到数据库与前端广播
+- 触发 Telegram 待审批通知
+
+---
+
+## 14. 配置与运行约定
+
+### 14.1 启动方式
+
+标准启动方式如下：
 
 ```bash
-# 手动触发同步
-agent-hub sync
-
-# 定时同步（每 30 分钟，通过 cron 或 systemd timer）
-*/30 * * * * cd ~/Git/agent-hub && uv run agent-hub sync
+uv sync
+uv run agent-hub serve --hub-id <hub-id>
 ```
 
-### 4.6 冲突处理
+默认配置由 `HubConfig` 定义，主要包括：
 
-由于数据模型是 append-only，唯一可能的"冲突"是 session 状态：
+- `host`：默认 `0.0.0.0`
+- `port`：默认 `7800`
+- `db_path`：默认 `hub.db`
+- `terminal_port`：默认 `7700`
 
-- 同一个 `session_id` 不会出现在两个 Hub 上（一个 Claude Code 实例只连一个 Hub）
-- 同步时 session 记录按 `last_seen_at` 取较新值合并
-- 如果同一会话的 `status` 不一致，以 `last_seen_at` 更晚的为准
+### 14.2 环境变量
 
-## 5. Hub Server API
+当前支持的外部配置主要包括：
 
-### 5.1 事件接收（供 Claude Code Hook 调用）
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-```
-POST /api/events
-Content-Type: application/json
+### 14.3 Hook 与桥接脚本
 
-Body: Claude Code hook 原始 payload
-```
+Hook 配置与脚本接入属于部署说明，不在本文档展开写入本机路径、个人目录或设备专属配置。实际配置方式请参阅：
 
-这是唯一需要对外暴露的写入接口。Hub 根据 `hook_event_name` 字段决定如何处理：
+- `README.md`
+- `SETUP.md`
+- `scripts/codex-hub-hook.sh`
 
-- `SessionStart` → 创建或更新 session 记录，标记为 active
-- `PreToolUse` / `PostToolUse` / `PostToolUseFailure` → 插入 event，更新 session.last_seen_at
-- `UserPromptSubmit` → 插入 event（prompt 截断存储，不存完整内容）
-- `Stop` → 插入 event，标记 session 为 idle
+---
 
-响应：
+## 15. 安全与隐私考虑
 
-```json
-{ "ok": true }
-```
+### 15.1 网络边界
 
-响应必须尽快返回（< 100ms），不能阻塞 Claude Code 的工作流。
+当前设计默认 Hub 部署在受信任网络中使用，例如：
 
-### 5.2 查询与管理 API
+- 本机 loopback
+- 私有局域网
+- Tailscale 等私有网络
 
-```
-GET  /api/sessions                     -- 列出所有会话 (支持 ?status=active|idle|stopped 过滤)
-GET  /api/sessions/:id                 -- 会话详情 (SessionResponse 含 pending_tool / pending_detail / pending_always_label / pinned)
-GET  /api/sessions/:id/events          -- 会话事件时间线 (分页)
-GET  /api/sessions/:id/events/latest   -- 最近 N 条事件 (dashboard 卡片的 mini-list 数据源)
-POST /api/sessions/:id/approve?always= -- 远程审批 pending tool (tmux send-keys)
-POST /api/sessions/:id/pin             -- pin/unpin 到主 dashboard (body `{pinned: bool}`, 拒绝 stopped)
-DELETE /api/sessions/:id               -- 删除会话记录 (拒绝 active; idle 会连带 kill tmux; stopped 直接删)
-POST /api/sessions/clear-stopped       -- 一键清空所有 stopped 会话
-GET  /api/stats                        -- 全局统计 (active/idle/stopped/waiting 数量、今日事件数)
-POST /api/notify                       -- 从 Claude session 往 Telegram 推自定义消息
+当前实现不以公网暴露为主要目标，因此不内建完整认证体系。若部署到更开放的网络环境，应在反向代理或网络层补充访问控制。
 
--- Tmux Hub APIs:
-GET  /api/tmux/list                    -- 未被 active/idle Claude session 占用的裸 tmux
-POST /api/tmux/new                     -- 创建 detached tmux, body {name?, cwd, command?}
-                                          command 支持 "claude"/"codex", 落地启动对应进程
-POST /api/tmux/kill                    -- 按名字 kill tmux session
-GET  /api/browse?path=                 -- 目录选择器的子目录列表
-```
+### 15.2 数据最小化
 
-### 5.3 WebSocket 实时推送
+系统通过以下方式降低敏感信息风险：
 
-```
-WS /ws
+- 事件摘要优先
+- 大字段裁剪
+- 不保存无必要的本地路径信息到事件 payload
+- transcript 仅读取必要信息
 
--- 服务端推送格式：
-{
-  "type": "event",
-  "session_id": "abc123",
-  "event_type": "PreToolUse",
-  "summary": "$ npm test",
-  "timestamp": "2026-04-10T15:30:00Z"
-}
+### 15.3 远程控制边界
 
-{
-  "type": "session_update",
-  "session_id": "abc123",
-  "status": "active",
-  "hostname": "desktop",
-  "cwd": "/home/user/project"
-}
+审批与会话控制能力本质上依赖 tmux 控制通道，因此应将 Hub 视为**高权限控制平面**。部署时应保证：
 
-{
-  "type": "pending",
-  "session_id": "abc123",
-  "pending_tool": "Bash",
-  "pending_detail": "find ~/.claude -type f -name '*.jsonl'",
-  "has_always": true,
-  "always_label": "Yes, allow reading from .claude/ from this project",
-  "tmux_session": "claude-proj-a",
-  "waiting_count": 2
-}
-```
+- Hub 所在主机可信
+- tmux 会话访问受控
+- Web Terminal 不向非授权用户开放
 
-`event` 消息会被 dashboard 前端按 `session_id` 路由到对应卡片的 mini-list (`#events-{session_id}`), 不再有全局事件面板; `pending` 消息驱动 waiting 徽章、Always label 行以及 Approve/Always 按钮的增删和 `title` 属性更新。
+---
 
-## 6. MCP Server
+## 16. 测试与验证
 
-Hub 同时作为 MCP Server 运行，使用 SSE transport（便于远程连接）。
+当前仓库中已有基础回归测试，重点覆盖 Codex 审批解析逻辑：
 
-### 6.1 Tools
+- `tests/test_codex_parser.py`
+- `tests/fixtures/`
 
-```yaml
-list_sessions:
-  description: "列出所有 Claude Code 会话"
-  params:
-    status: string? # active / idle / stopped / all (默认 active)
-  returns: 会话列表，含 session_id, hostname, cwd, status, last_seen_at
+---
 
-get_session:
-  description: "获取会话详情和最近活动"
-  params:
-    session_id: string
-    event_limit: int? # 最近 N 条事件，默认 20
-  returns: 会话信息 + 事件时间线
+## 17. 代码结构索引
 
-search_events:
-  description: "搜索事件（按工具名、关键词）"
-  params:
-    query: string?     # 模糊搜索 summary
-    tool_name: string? # 精确匹配工具名
-    session_id: string? # 限定会话
-    limit: int?        # 默认 50
-  returns: 匹配的事件列表
-
-get_dashboard:
-  description: "获取全局仪表盘概览"
-  returns: |
-    - 各状态会话数量
-    - 按机器分组的活跃会话
-    - 最近 10 条事件
-    - 今日统计
-
-sync_now:
-  description: "立即触发与所有 peer Hub 的数据同步"
-  returns: 同步结果（每个 peer 拉取/推送了多少条记录）
-
-sync_status:
-  description: "查看各 peer Hub 的同步状态"
-  returns: 各 peer 的水位线、最后同步时间、是否可达
+```text
+src/agent_hub/
+├── api/
+│   ├── events.py
+│   ├── sessions.py
+│   ├── tmux.py
+│   └── ws.py
+├── mcp/
+│   └── server.py
+├── services/
+│   ├── event_processor.py
+│   ├── session_manager.py
+│   ├── telegram_bot.py
+│   └── transcript_reader.py
+├── web/
+│   ├── routes.py
+│   └── templates/
+├── config.py
+├── db.py
+├── main.py
+└── models.py
 ```
 
-### 6.2 MCP 配置（客户端侧）
+---
 
-在需要接入管理能力的 Claude Code 实例中，添加 MCP Server 配置：
+## 18. 总结
 
-```json
-// ~/.claude/settings.json
-{
-  "mcpServers": {
-    "agent-hub": {
-      "type": "sse",
-      "url": "http://100.x.x.x:7801/sse"
-    }
-  }
-}
-```
+Agent Hub 的核心设计可以概括为：
 
-## 7. Claude Code Hook 配置
+- 以 **hook + tmux 扫描** 作为事件与状态来源
+- 以 **SQLite** 作为单机状态存储
+- 以 **FastAPI + WebSocket + Jinja2** 作为交互层
+- 以 **tmux** 作为会话持久化与远程控制基础设施
+- 以 **MCP** 作为对其他 Agent 的可编程接口
 
-### 7.1 全局配置
-
-在每台设备的 `~/.claude/settings.json` 中添加。
-
-**重要约束：**
-- Claude Code HTTP hook 仅允许 loopback (`127.0.0.1`)，Tailscale 私有 IP 会被拒绝
-- SessionStart 不支持 HTTP hook（会导致 headless 模式死锁），必须使用 command hook
-- 本机部署时所有 hook 统一使用 `http://127.0.0.1:7800`
-
-```jsonc
-{
-  "hooks": {
-    // SessionStart 必须用 command hook — HTTP hook 被 Claude Code 阻止
-    // 抓 tmux 名前必须先检查 $TMUX,否则 tmux server 上有别的 session 时命令会返回
-    // 错误的 session 名 (见踩坑 #18)
-    "SessionStart": [
-      {
-        "type": "command",
-        "command": "bash -c 'TS=\"\"; [ -n \"$TMUX\" ] && TS=$(tmux display-message -p \"#{session_name}\" 2>/dev/null); cat | curl -s -X POST \"http://127.0.0.1:7800/api/events?host=$(hostname)&tmux_session=$TS\" -H \"Content-Type: application/json\" -d @-'"
-      }
-    ],
-    // 其余事件类型使用 HTTP hook
-    "PreToolUse": [
-      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
-    ],
-    "PostToolUse": [
-      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
-    ],
-    "PostToolUseFailure": [
-      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
-    ],
-    "UserPromptSubmit": [
-      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
-    ],
-    "Stop": [
-      { "type": "http", "url": "http://127.0.0.1:7800/api/events?host=HOSTNAME" }
-    ]
-  }
-}
-```
-
-替换 `HOSTNAME` 为机器名。SessionStart 的 command hook 会自动获取 hostname。
-
-### 7.2 设计要点
-
-- **统一 endpoint** — 所有事件发送到同一个 `/api/events`，由 Hub 根据 `hook_event_name` 分发处理
-- **loopback only** — HTTP hook 必须使用 `127.0.0.1`，Claude Code 阻止私有/非 loopback 地址
-- **SessionStart command hook** — 通过 `cat | curl` 管道将 stdin payload 转发到 Hub API
-- **无需 auth** — 本机 loopback 无需鉴权；跨机器访问通过 Tailscale 内网保护
-- **hostname via query param** — `?host=HOSTNAME` 传递机器名，因为 hook payload 不含 hostname
-
-### 7.3 hostname 识别
-
-Hook payload 中不包含 hostname。Hub 通过以下方式获取：
-
-1. 从 HTTP 请求的 `X-Forwarded-For` 或 peer IP 解析 Tailscale hostname
-2. 或者在 hook URL 中加入 query param：`/api/events?host=desktop`
-3. 推荐方案 2，因为更可靠：
-
-```json
-"url": "http://<hub-ip>:7800/api/events?host=my-desktop"
-```
-
-## 8. Web Dashboard
-
-### 8.1 页面结构
-
-```
-/                          -- 主 Dashboard: active + pinned idle + waiting 的 session
-  ├── 顶部 stats 卡片: Active | Waiting | Idle (→/idle) | Stopped (→/stopped)
-  ├── + New 按钮: 弹出目录选择器 → POST /api/tmux/new command=claude → 新标签页打开 Web Terminal
-  └── 活跃会话卡片列表 (Sessions / From Tmux 双 tab)
-        每张卡片是响应式分栏 (宽屏 `md:flex-row` 左右, 窄屏上下):
-        左/上 — 主体 (flex-1):
-          - ● 状态点 + tmux 名 + hostname + waiting/running 胶囊
-          - pending 时: command 摘要 (黄) + `Always → <option 2 原文>` (绿)
-          - cwd / token 用量 / model / last_seen 时间
-        右/下 — `#events-{session_id}` mini-list:
-          - 最近 2 条事件 (类型 + 时间 + summary), 从 `/api/sessions/:id/events/latest?n=2` 加载
-          - 新事件通过 WS 按 session_id 路由到这里 prepend, trim 到 2
-        右上角 — 📌 pin 按钮 (灰 outline / 紫 filled 切换) + session_id 短码
-        底部 (actions 行):
-          - [Terminal] 跳 Web Terminal 对应 tmux
-          - [Approve] (waiting 时) — POST /api/sessions/:id/approve → tmux send-keys 'y'
-          - [Always] (有 option 2 时) — POST /api/sessions/:id/approve?always=true → tmux send-keys Down Enter
-                     `title` 属性带 option 2 原文, hover 可见完整放行范围
-
-/idle                       -- Idle session 列表 (点 Idle 卡片进入)
-  └── 每张卡片: 📌 pin + [Terminal] [Delete]
-        - pin 打开后该 session 同时出现在主 Dashboard (状态仍是 idle)
-        - Delete 会 kill tmux 并清除 DB 行
-
-/stopped                    -- Stopped session 列表 (点 Stopped 卡片进入)
-  ├── 右上角 [Clear All] — 一键清空所有 stopped
-  └── 每张卡片: [Delete]
-
-/tmux                       -- Tmux Hub: 裸 tmux 的列表/创建/kill
-/sessions/:id               -- 会话详情页
-  ├── 会话元信息
-  ├── 事件时间线 (无限滚动)
-  └── 工具使用统计
-```
-
-### 8.2 技术实现
-
-- **服务端渲染 + htmx** — 无需独立前端项目，HTML 模板内嵌在 Python 包中
-- **WebSocket** — 实时事件推送，前端自动刷新卡片状态
-- **Tailwind CSS (CDN)** — 简洁的样式，不需要构建步骤
-- **暗色主题** — 默认暗色，适配终端用户习惯
-
-## 9. 项目结构
-
-```
-agent-hub/
-├── pyproject.toml              # 项目配置 (uv)
-├── DESIGN.md                   # 本文档
-│
-├── src/
-│   └── agent_hub/
-│       ├── __init__.py
-│       ├── main.py             # 入口：启动 FastAPI + MCP
-│       ├── config.py           # 配置（hub_id、端口、peers、数据库路径）
-│       ├── db.py               # SQLite 数据库操作
-│       ├── models.py           # Pydantic 数据模型
-│       │
-│       ├── api/
-│       │   ├── __init__.py
-│       │   ├── events.py       # POST /api/events (hook 接收)
-│       │   ├── sessions.py     # GET /api/sessions (查询)
-│       │   ├── sync.py         # GET/POST /api/sync/* (Hub 间同步)
-│       │   └── ws.py           # WebSocket /ws
-│       │
-│       ├── mcp/
-│       │   ├── __init__.py
-│       │   └── server.py       # MCP Server (FastMCP)
-│       │
-│       ├── services/
-│       │   ├── __init__.py
-│       │   ├── event_processor.py  # 事件处理 + 摘要生成
-│       │   ├── session_manager.py  # 会话状态管理
-│       │   └── sync_service.py     # Hub 间同步逻辑
-│       │
-│       └── web/
-│           ├── __init__.py
-│           ├── routes.py       # Web 页面路由
-│           └── templates/
-│               ├── base.html
-│               ├── dashboard.html
-│               └── session.html
-│
-└── tests/
-    ├── test_api.py
-    ├── test_event_processor.py
-    ├── test_session_manager.py
-    └── test_sync.py
-```
-
-## 10. 技术栈
-
-| 组件        | 选择           | 版本     | 理由                           |
-| --------- | ------------ | ------ | ---------------------------- |
-| 包管理       | uv           | latest | 已有工具链，快速                     |
-| Web 框架    | FastAPI      | 0.115+ | 原生 async、WebSocket、自动 API 文档 |
-| MCP SDK   | fastmcp      | latest | Python MCP 官方推荐              |
-| 数据库       | SQLite       | 内置     | 零运维、aiosqlite 支持 async       |
-| SQLite 驱动 | aiosqlite    | latest | 配合 FastAPI async             |
-| 模板        | Jinja2       | latest | FastAPI 内置支持                 |
-| 前端交互      | htmx         | 2.0    | 最小化 JS，服务端驱动                 |
-| 样式        | Tailwind CSS | CDN    | 无构建步骤                        |
-| 进程管理      | uvicorn      | latest | ASGI 服务器                     |
-
-## 11. 部署与运行
-
-### 11.1 启动 Hub
-
-```bash
-cd ~/Git/agent-hub
-
-# 主力机 A
-uv run agent-hub serve --hub-id hub-a --host 0.0.0.0 --port 7800
-
-# 主力机 B
-uv run agent-hub serve --hub-id hub-b --host 0.0.0.0 --port 7800
-```
-
-Hub 监听 `0.0.0.0:7800`，Tailscale 网络内的所有设备均可访问。
-
-### 11.2 配置 Claude Code
-
-在每台设备上运行部署脚本（或手动编辑 `~/.claude/settings.json`）：
-
-```bash
-uv run agent-hub install --hub-url http://<tailscale-ip>:7800 --hostname my-machine
-```
-
-该命令自动将 hook 配置和 MCP Server 配置写入 `~/.claude/settings.json`（合并现有配置）。
-
-### 11.3 验证连通性
-
-```bash
-# 从远程设备测试
-curl http://<tailscale-ip>:7800/api/stats
-
-# 模拟一个 hook 事件
-curl -X POST http://<tailscale-ip>:7800/api/events \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"test-123","hook_event_name":"SessionStart","cwd":"/tmp","source":"startup"}'
-```
-
-### 11.4 同步两个 Hub
-
-```bash
-# 手动触发
-uv run agent-hub sync
-
-# 或加入 crontab 定时执行（每 30 分钟）
-*/30 * * * * cd ~/Git/agent-hub && uv run agent-hub sync 2>&1 | logger -t agent-hub
-```
-
-## 12. 数据保留与隐私
-
-### 12.1 脱敏策略
-
-- **tool_input** — Bash 命令完整保留；Write/Edit 的文件内容不存储，仅保留文件路径
-- **UserPromptSubmit** — prompt 截断至 200 字符，仅用于概览，不存完整对话
-- **payload** — 完整 payload 存入 JSON 字段，但 30 天后自动清理 payload 只保留摘要
-
-### 12.2 数据保留
-
-- events 记录保留 90 天，之后自动清理
-- sessions 记录永久保留（数据量很小）
-- 可通过 `DELETE /api/sessions/:id` 手动清理
-
-## 13. 实施计划
-
-### Phase 1: 核心骨架 ✅
-
-- [x] 项目初始化（pyproject.toml, 目录结构）
-- [x] SQLite 数据库初始化（WAL 模式 + 自动迁移）
-- [x] `POST /api/events` 端点 — 接收并存储 hook 事件
-- [x] 事件处理器 — payload 解析 + 摘要生成 + 脱敏存储
-- [x] 会话状态管理 — active → idle (Stop) → stopped (30min sweep)
-- [x] 基本查询 API（sessions, events, stats）
-
-### Phase 2: 实时 + 可视化 ✅
-
-- [x] WebSocket 实时事件推送（broadcaster 模式）
-- [x] Web Dashboard — 会话卡片 + 实时事件流
-- [x] 会话详情页 — 事件时间线 + 分页加载
-- [x] Token usage tracking — 解析 transcript .jsonl 聚合 input/output/cache 用量
-- [x] Model auto-detection — 从 transcript 读取最新模型，支持 mid-session 切换
-- [x] Waiting-for-authorization 检测 — 后台每 3s 检查 transcript 末尾的 pending tool_use
-- [x] Mobile-friendly 响应式布局 — 两行事件卡片、紧凑 header、粉蓝/黄色状态方案
-- [x] SessionStart command hook — 绕过 Claude Code 对 SessionStart HTTP hook 的限制
-- [x] systemd user service — 开机自启，`systemctl --user restart agent-hub`
-
-**实现过程中发现的约束和踩坑记录（供 hub-b 部署参考）：**
-
-1. **HTTP hook 仅允许 loopback** — Claude Code 会检查 hook URL 的解析 IP，Tailscale 私有地址 (100.x.x.x) 被拒绝。所有 HTTP hook 必须用 `http://127.0.0.1:7800`。跨机器的 hook 无法使用 HTTP type，只能用 command type + curl。
-
-2. **SessionStart 不支持 HTTP hook** — 源码 `hooks.ts:1850-1864`，headless 模式会死锁。必须使用 command hook：`bash -c 'cat | curl ... -d @-'`。
-
-3. **SessionStart hook 中检测 tmux** — 命令中加 `$(tmux display-message -p "#{session_name}" 2>/dev/null || echo "")` 传给 Hub。不在 tmux 中时返回空字符串，不影响功能。
-
-4. **MCP server 注册** — 必须用 `claude mcp add --transport sse --scope user agent-hub URL`。手动创建 `~/.claude/.mcp.json` 无效！配置写入 `~/.claude.json`。
-
-5. **Terminal URL 不能写死 localhost** — 手机通过 Tailscale 访问时，嵌入页面的 terminal 链接也得是 Tailscale IP。解决：从 HTTP request 的 Host header 动态提取 hostname，只配端口号。
-
-6. **Web Terminal 端口** — 从 7683 改为 7700。Web Terminal 和 Hub 是独立服务，分别用 systemd user service 管理。
-
-7. **tmux session 生命周期** — Hub DB 中存的 `tmux_session` 名可能过期（tmux session 被 kill 但 DB 未清理）。Dashboard 的 attach 链接会失败。Web Terminal 端会返回 4404 错误码。
-
-8. **Waiting 检测** — 依赖读取本地 transcript 文件（每 3s 检查尾部）。远程 session（transcript 不在本机）无法检测 waiting 状态。
-
-9. **Model 检测** — SessionStart resume payload 不含 model 字段。解决：从 transcript 的最后一条 assistant message 的 `message.model` 字段读取。
-
-10. **approve API** — Hub 内部通过 `http://127.0.0.1:{terminal_port}/api/terminals/{name}/send` 调用 Web Terminal。Web Terminal 如果配了 auth，Hub 也需要传 auth header（当前未实现，假设 loopback 免 auth）。
-
-11. **5h/weekly 限额** — 不在 hook payload 或 transcript 中，无法追踪。
-
-12. **前端 JS event 作用域** — `onclick="fn()"` 中的 `event` 对象在 async callback（fetch .then）中不可用。按钮操作需要直接传 DOM 元素：`onclick="fn(id, this)"`。
-
-### Phase 3: MCP Server + 服务协同
-
-**MCP Server ✅ — 让任意 Claude Code 会话查询和管理其他会话**
-
-- [x] MCP Server 集成（FastMCP v3, SSE transport, 挂载在 Hub `/mcp` 路径下）
-- [x] `list_sessions` tool — 列出会话，显示 waiting/pending 状态和 token 用量
-- [x] `get_session` tool — 会话详情 + 最近 N 条事件，支持 partial ID 前缀匹配
-- [x] `search_events` tool — 按 summary 关键词、tool_name、session_id 搜索
-- [x] `get_dashboard` tool — 全局概览（各状态数量、活跃会话、最近事件）
-- [x] `get_transcript_summary` tool — 读取 transcript 尾部，提取最近 user prompts / tool calls / responses
-- [x] Claude Code MCP 注册 — `claude mcp add --transport sse --scope user agent-hub http://127.0.0.1:7800/mcp/sse`
-
-**注意：** MCP server 配置必须通过 `claude mcp add` 命令注册，写入 `~/.claude.json`。手动创建 `.mcp.json` 文件无效。
-
-**Tmux Hub + 状态机简化 + UI 流程 ✅**
-
-- [x] Tmux Hub 页面 (`/tmux`) — 裸 tmux 列表 / 创建 (带目录选择器) / kill / dead-pane 检测
-- [x] 自动转移检测 — 在预先存在的 tmux 里起 claude 会自动标记为 From Tmux
-- [x] Dashboard `+ New` 按钮 — 复用目录选择器,POST `/api/tmux/new` 带 `command=claude`,一键起 tmux+claude
-- [x] Hub-launched 会话不会被误判为 transferred — 用进程内 TTL set 记录,绕过 `_detect_transferred` 的时间阈值
-- [x] Dead-tmux sweep — `_sweep_dead_tmux` 每 60s 跑一次 `tmux ls`,跟 DB 做集合差,tmux 死了立刻 (<60s) 翻到 stopped
-- [x] 状态机彻底去时间化 — 删掉 `idle_timeout_minutes` 配置、`get_stale_sessions` 函数、`sweep_stale_sessions` 里的时间 cutoff 分支。idle 永久保留直到 tmux 死,实现"睡一觉醒来老会话还在"
-- [x] 分离 Idle / Stopped 页面 — 主 Dashboard 只展示 active (+ waiting);Idle/Stopped stat 卡片点击进入独立页面
-- [x] Delete 按钮 — 每张 idle/stopped 卡片一个;idle delete 会先 `tmux kill-session` 再清 DB 行 (避免"点了 Delete 但会话因 Claude 下次发事件又回来"的悬浮 bug)
-- [x] `POST /api/sessions/clear-stopped` + Stopped 页面 Clear All 按钮 — 一键清空历史
-- [x] 审批解析器升级 — 从硬依赖箱体边框 `│` 改成锚定 `❯ 1. Yes` pattern,既支持 boxed 又支持 unboxed 渲染;向上扫描窗口从 12 行扩到 25 行,并识别 `Bash command` / `Edit file` 等 header,工具名识别更准
-- [x] `SessionResponse` 补全 `pending_detail` 字段 — 之前 pydantic model 漏了,API 只返 `pending_tool`
-- [x] Running/Waiting 互斥 — `_enrich_running` 发现有 `pending_tool` 时 early-return,避免出现"Running Bash"和"waiting: Bash"同时显示
-- [x] Tmux 名字复用自动退休 — `ensure_session` 在创建新 session row 前,把同名 `tmux_session` 的旧 active/idle 行批量标 stopped。防止 tmux 名字复用导致的孤儿行累积
-
-**Dashboard v2 + Pin + Always 透明化 ✅**
-
-- [x] **Per-session live events** — 去掉全局 Live Events 面板, 每张卡片内嵌 `#events-{id}` mini-list, 服务端渲染最近 2 条 (`/api/sessions/:id/events/latest?n=2`), WS 事件按 `session_id` 路由到对应卡片而不是追加到全局流; 响应式 `md:flex-row` 布局, 宽屏事件在右, 窄屏事件在下。"哪个 session 在干什么"一眼可见, 不再是流水账
-- [x] **Session pinning** — DB 新列 `pinned INTEGER DEFAULT 0`, API `POST /api/sessions/:id/pin` body `{pinned: bool}`; pinned idle session 同时出现在主 Dashboard 和 `/idle` 页面, 主页查询从 `status='active'` 扩成 `active + (idle AND pinned=1)`; tmux 死进入 stopped 时自动清 pin (避免误导); 卡片右上角 📌 按钮 (灰 outline / 紫 filled) 常驻可见; 在主页 unpin idle session 时卡片立即消失 (JS 检测 status+pathname)。典型用途: 跑后台任务的 session 或暂停思考的 session 不想被卷进 /idle
-- [x] **Always 按钮原文透明化** — 之前 `has_always: bool` 只知道"有第二项", 不知道第二项说什么。新增 `_OPTION2_RE` 在 `❯ 1. Yes` 之后扫 9 行提取 option 2 verbatim text, 返回改成 `tuple[tool, detail, always_label: str | None]`; DB 新列 `pending_always_label TEXT`, WS `pending` 消息带 `always_label` 字段; dashboard 卡片在 pending_detail 下面多一行绿色 `Always → <原文>`, Always 按钮 `title` 也带原文; Telegram 通知追加 `_Always →_ <原文>` 一行。用户 hover/瞟一眼就知道点下去会放行到哪个范围 (命令前缀 / 路径 / 真 session-wide), 不再踩 option 2 语义陷阱
-- [x] **SessionStart hook `$TMUX` 守卫** — 之前的 `TS=$(tmux display-message ... || echo "")` 在 tmux 外运行时会蹭别的 session 名 (见踩坑 18), 修成 `TS=""; [ -n "$TMUX" ] && TS=$(tmux display-message ...)`。README/DESIGN/SETUP 的示例全部同步
-
-**新增的踩坑 (接续 Phase 2 的 12 条)：**
-
-13. **Running 与 Waiting 语义冲突** — 当 `_enrich_running` 只看 `last_event == PreToolUse` + elapsed > 30s,会把等审批的会话(PreToolUse 已触发,用户没批)误标为 Running。修复:把 pending_tool 作为 early-return 条件,两者互斥。
-
-14. **审批提示的无框渲染** — Claude Code 的审批 UI 并非总是用 `│` 边框,Bash with shell-metachar warning 等场景会是纯文本。原解析器要求选择器行同时含 `│` 和 `❯`,会整体漏判。锚定 `❯ 1. Yes` 比箱体更可靠,同时兼容两种样式。
-
-15. **Tmux 名字复用产生幽灵 idle 行** — 昨天的 `claude-proj-1` 退出 → tmux 可能死了或被重建 → 今天又起了一个 `claude-proj-1`,新 claude 是不同的 session_id,DB 增加一行。老的 `_sweep_stale_sessions` 用 tmux 名字匹配活 tmux 就 `touch_session`,把昨天的老行 last_seen_at 一直续命。修:`ensure_session` 在创建新行时直接退休同名旧行。
-
-16. **Hub-launched claude 会被 `_detect_transferred` 误判** — `tmux new-session -d claude` 到 SessionStart 中间有 claude 的 workspace trust prompt 卡住,实际延迟可能远超 5s 阈值。加一个 `_HUB_LAUNCHED_TMUX` TTL set (120s),`_detect_transferred` 开头查一次就直接 return 0。
-
-17. **idle→stopped 不应由时间驱动** — 30 分钟 cutoff 本质上是 "最近没动就判死",但一个用户睡一觉醒来想继续的 idle session 根本没死,只是没动。正确的语义是:idle 只要 tmux 还活着就保留,stopped 只由 tmux 死亡触发。这是对 Phase 1 状态机的根本性修正。
-
-18. **`tmux display-message` 在终端外会蹭其他 session 名** — SessionStart hook 之前用 `TS=$(tmux display-message -p "#{session_name}" 2>/dev/null || echo "")` 抓 tmux 名, 但这命令在 tmux 外运行时, 如果 tmux server 上有**任何**活着的 session, **不会失败**而是返回 server 上某个 session 名, exit 0。结果:在普通终端直接启动 claude 的用户会被 hook 错抓一个无关 tmux 名, `_detect_transferred` 看到这个 tmux 是很久以前创建的 → 判 transferred=1 → 错误分到 From Tmux tab, 而且卡片挂在别人的 tmux 名下。**修复**: hook 先检查 `$TMUX` 环境变量 — 这是"我真在 tmux pane 里"的唯一可靠标记。`TS=""; [ -n "$TMUX" ] && TS=$(tmux display-message -p "#{session_name}" 2>/dev/null)` 。`|| echo ""` 是个 trap:只在命令失败时生效, 而本 bug 的症结是命令**根本不失败**。
-
-19. **Always 按钮的 option 2 不是 session-wide 放行** — 原设计按 `Down + Enter` 机械地选第二项, 以为这就是"始终允许"。实测 Claude Code 的 option 2 语义随工具动: Bash `git status` → `Yes, and don't ask again for git status commands` (命令前缀白名单), Read `.claude/x` → `Yes, allow reading from .claude/ from this project` (路径白名单), Edit → `Yes, allow all edits during this session` (真 session-wide)。用户点 Always 以为全放行, 下一条稍不同的命令又弹出来。**修复**: parser 新增 `_OPTION2_RE`, 在 `❯ 1. Yes` 后扫 9 行提取 option 2 原文, 返回 `tuple[str, str, str | None]` 代替之前的 `(tool, detail, has_always: bool)`。新增 DB 列 `pending_always_label`, WS `pending` 消息带 `always_label`, dashboard 卡片在 pending_detail 下面多一行绿色 `Always → <原文>`, Always 按钮的 `title` 属性也带原文; Telegram 通知文本里追加 `_Always →_ <原文>` 一行。用户点之前就能看清放行范围, 不再踩坑。
-
-**Web Terminal 集成 — tmux 持久化 + Dashboard 联动**
-
-现有 Web Terminal (Tornado + xterm.js) 运行在 `localhost:7683`，支持手机虚拟键盘。
-核心改造：用 tmux 替代裸 PTY 作为后端，实现会话持久化和跨终端 attach。
-
-选择 tmux 而非 zellij 的原因：
-- `tmux send-keys` 可以从程序发送按键（实现一键审批）
-- `tmux list-sessions` / `tmux capture-pane` 完整的 session 枚举和输出读取
-- scripting API 成熟，被广泛用作 web terminal 后端（ttyd、gotty、wetty）
-- zellij 的优势在 UI 和手动使用，但程序化控制远不如 tmux
-
-#### 3.1 Web Terminal 改造（独立项目，`/home/user/Git/web-terminal`）
-
-**URL 参数 API：**
-
-```
-http://localhost:7683/?name=SESSION_NAME&cwd=PATH&cmd=COMMAND&attach=TMUX_SESSION
-```
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `name` | 命名 terminal session，断开后可重连 | `?name=proj-a` |
-| `cwd` | 初始工作目录 | `?cwd=/home/user/project` |
-| `cmd` | 连接后自动执行命令 | `?cmd=claude+--resume+abc` |
-| `attach` | 直接 attach 到已有 tmux session | `?attach=claude-1` |
-
-**tmux 后端行为：**
-
-```
-连接时：
-  if ?attach=SESSION:
-    tmux attach-session -t SESSION          # attach 到已有 session
-  elif ?name=NAME:
-    tmux new-session -A -s NAME             # 创建或 reattach（-A 是关键）
-    if ?cwd: tmux send-keys "cd PATH" Enter
-    if ?cmd: tmux send-keys "CMD" Enter
-  else:
-    tmux new-session -s auto-XXXX           # 匿名 session
-
-断开时：
-  tmux session 继续存活（这是核心价值）
-  重新连接同一 ?name= 自动 reattach
-
-手机场景：
-  切换应用 → WebSocket 断开 → tmux session 存活
-  回到浏览器 → 自动 reattach → 终端状态完整保留
-```
-
-**Terminal 管理 API：**
-
-```
-GET  /api/terminals              → 列出所有活跃 tmux sessions
-POST /api/terminals/:name/send   → 向指定 session 发送按键
-     Body: {"keys": "y\n"}         （实现一键审批）
-DELETE /api/terminals/:name      → 关闭指定 tmux session
-```
-
-#### 3.2 Hub Dashboard 集成（Agent Hub 端）
-
-**Session card 添加操作按钮：**
-
-```
-┌─────────────────────────────────────────┐
-│ ● amd-tr7975wx                          │
-│ /home/user/project-a                    │
-│ claude-opus-4-6        last: 14:30:25   │
-│                                         │
-│ [Terminal]  [waiting: Bash → Approve]   │
-└─────────────────────────────────────────┘
-```
-
-- **Terminal 按钮** → `http://localhost:7683/?name=hub-SESSION_ID_PREFIX&cwd=SESSION_CWD`
-  - 打开持久化终端，自动 cd 到会话目录
-  - 再次点击 reattach 到同一终端（不会创建新的）
-
-- **Approve 按钮**（仅 waiting 状态显示）→ 两种实现路径：
-  1. 简单方案：跳转 Web Terminal attach 到 Claude Code 所在的 tmux session
-  2. 高级方案：Hub 直接调用 `POST /api/terminals/:name/send {"keys": "y\n"}`
-     - 前提：Claude Code 跑在 tmux 里，且 Hub 知道 tmux session 名
-
-**配置：** Hub 需要知道 Web Terminal 的地址：
-
-```python
-# config.py 或环境变量
-terminal_url = "http://localhost:7683"
-```
-
-#### 3.3 Claude Code 运行在 tmux 中的工作流
-
-为了让 Hub 能 attach/approve Claude Code 会话，推荐在 tmux 中启动 Claude Code：
-
-```bash
-# 启动 Claude Code 时创建命名 tmux session
-tmux new-session -d -s "claude-proj-a" -c "/home/user/project-a" "claude"
-
-# Hub 检测到 waiting 时，可以直接发送审批
-tmux send-keys -t "claude-proj-a" "y" Enter
-
-# 也可以通过 Web Terminal attach 到这个 session
-http://localhost:7683/?attach=claude-proj-a
-```
-
-未来可通过 Hub MCP tool 自动化这个流程：
-```
-> 在 /home/user/project-a 启动一个新的 Claude Code 会话
-→ MCP tool: create_claude_session(cwd="/home/user/project-a")
-→ Hub 创建 tmux session + 启动 claude
-→ Dashboard 自动显示新会话
-```
-
-#### 3.4 统一服务门户
-
-- [ ] Dashboard 顶部导航添加服务快捷链接（Terminal、OpenClaw 等）
-- [ ] 手机只需收藏 Hub Dashboard 一个 URL 即可访问所有服务
-- [ ] Terminal 管理页面 — 列出所有 tmux sessions，提供 attach/kill 操作
-
-### Phase 4: 双 Hub 同步
-
-- [ ] 同步 API（`/api/sync/events`, `/api/sync/push`, `/api/sync/status`）
-- [ ] sync_service — 拉取 + 合并 + 水位线管理
-- [ ] `agent-hub sync` CLI 命令
-- [ ] MCP tool: `sync_now` / `sync_status`
-
-### Phase 5: 增强
-
-- [ ] 过期数据自动清理（events 90 天，payload 30 天后仅保留摘要）
-- [ ] 按项目/机器/工具维度的统计分析
-- [ ] 告警机制（会话长时间无响应等）
-- [ ] 支持标注/备注会话（手动添加任务描述）
-- [ ] Session 详情页内嵌 Terminal iframe — 同一页面查看事件 + 操作终端
-- [ ] Cost tracking — 基于 token 用量和模型定价估算 API 费用
-- [ ] `create_claude_session` MCP tool — 通过 Hub 在 tmux 中启动新 Claude Code 会话
-
-## 14. 服务拓扑
-
-当前单机部署的服务全景：
-
-```
-┌─── AMD-7975WX (Tailscale) ──────────────────────────────────────┐
-│                                                                  │
-│  Agent Hub (:7800)              Web Terminal (:7683)             │
-│  ┌──────────────────┐           ┌──────────────────┐            │
-│  │ Dashboard        │──[link]──▶│ xterm.js + tmux  │            │
-│  │ REST API         │           │ 虚拟键盘 (mobile) │            │
-│  │ WebSocket        │◀──[api]──▶│ /api/terminals   │            │
-│  │ MCP Server (/mcp)│           └────────┬─────────┘            │
-│  └──────┬───────────┘                    │                      │
-│         │ HTTP hooks              tmux attach/send-keys          │
-│  ┌──────┴────────────────────────────────┴──────────┐           │
-│  │ tmux sessions                                     │           │
-│  │  ├── claude-proj-a  (Claude Code #1)             │           │
-│  │  ├── claude-proj-b  (Claude Code #2)             │           │
-│  │  └── hub-XXXX       (ad-hoc terminals)           │           │
-│  │                                                   │           │
-│  │ Claude Code ← MCP client → Agent Hub             │           │
-│  └──────────────────────────────────────────────────┘           │
-│                                                                  │
-│  OpenClaw (:443 via Tailscale serve)                            │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-         │
-    手机 (Tailscale)
-    └── 浏览器 → Hub Dashboard
-         ├── 查看所有 session 状态和 token 用量
-         ├── [Terminal] 按钮 → Web Terminal (tmux reattach)
-         └── [Approve] 按钮 → tmux send-keys "y" (一键审批)
-```
-
-## 15. 未来扩展
-
-暂不实现，但架构上预留扩展空间：
-
-- **其他 CLI 接入** — Codex CLI / Crush CLI / Copilot CLI 通过 wrapper 脚本调用 `POST /api/events`
-- **远程指令** — 通过 Hub 向指定会话发送消息（需要 Claude Code 支持双向通信）
-- **任务分配** — 在 Hub 上创建任务，指定某个会话执行
-- **多用户** — 加入认证，支持团队使用
+该设计优先服务于单机/私有网络中的高效会话管理场景，强调低侵入、可恢复与可观测。
