@@ -416,13 +416,26 @@ tmux 是 Agent Hub 的关键基础设施，用于承载以下能力：
 
 这一设计可以减少由于 hook 延迟、遗漏或界面刷新带来的误判。
 
-Codex 解析器目前覆盖三种审批 UI 变体：
+Codex 解析器把**检测**和**分类**解耦，以避免 Claude 解析器从未遇到的 UI 漂移问题：Codex 有多种审批 UI（Bash / MCP / Edit / 未来变体），而 Claude 只有一种。
 
-- **Bash 命令审批** — 标题 `Would you like to run the following command?`，详情为 `$ <cmd>` 行
-- **MCP 工具审批** — 标题 `Allow the <server> MCP server to run tool <x>?`，详情为 `<server>: <tool>`
-- **Edit / sandbox 重试审批** — 标题 `Would you like to make the following edits?`，详情取自 `Reason: ...` 子标题（典型场景：sandbox 阻止文件写入后请求重试）
+**检测**采用纯结构信号，任一 UI 变体都不会改变这三条：
 
-每种 UI 都通过三信号校验避免 stale prompt 的误报：选择器锚点（`› 1. Yes` / `› 1. Allow`）、底栏文案（`Press enter to confirm or esc to cancel` / `enter to submit | esc to cancel`）、标题短语（在 selector 上方 15 行内出现，并支持单行与相邻两行拼接以应对窄终端折行）。新增 UI 变体只需在 `_CODEX_QUESTION_PATTERNS` 注册短语并提供对应的 detail 抽取器即可。
+1. `› 1. (Yes|Allow)` 选择器在 pane 尾部窗口（最后 16 行）
+2. `2. <text>` 选项行在 selector 下方 8 行内出现（确认是活的选项列表，排除单行残片）
+3. Codex 底栏文案（`Press enter to confirm or esc to cancel` 或 `enter to submit | esc to cancel`）在同一尾部窗口
+
+三条全部命中 → 认定存在待审批，**不依赖标题短语**。
+
+**分类**是第二遍 best-effort 扫描，用于 badge 显示和 Always 按钮的导航键计数：
+
+- **Bash** — 标题 `Would you like to run the following command?`，详情为 `$ <cmd>` 行
+- **MCP** — 标题 `Allow the <server> MCP server to run tool <x>?`，详情为 `<server>: <tool>`
+- **Edit / sandbox 重试** — 标题 `Would you like to make the following edits?`，详情取自 `Reason: ...` 子标题
+- **Codex（generic fallback）** — 以上都未命中时仍然报告待审批，详情尽量从最近的 `$ `/`Reason:`/以 `?` 结尾的标题行回取
+
+分类窗口向上扫描 80 行，且从 selector 就近遍历（closest title wins），这样即便历史里还残留已批准块也不会错配。未能分类的 generic Codex 会正常显示 Approve 按钮（Enter 在每种 Codex UI 上都能确认默认选项），只有 Always 按钮会在分类失败时静默隐藏（`_extract_codex_always_label` 对未知 tool_name 返回 `None`）。
+
+这个设计的核心规律：**标题短语漂移或新增 UI 变体只会降级 badge 的精确度，不会把审批请求丢在地上**。要新增一个已知 UI 分类时，只需在 `_CODEX_QUESTION_PATTERNS` 注册短语并按需提供 detail/Always 提取器。
 
 ---
 

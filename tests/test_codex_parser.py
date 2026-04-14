@@ -60,6 +60,21 @@ CASES: list[tuple[str, tuple[str, str, str | None] | None]] = [
             None,
         ),
     ),
+    # Generic / unknown UI variant — structural signals match
+    # (selector + option 2 + footer) but no title phrase in the
+    # classification table matches. The parser must NOT drop this
+    # on the floor; it should classify as generic "Codex" and
+    # surface a best-effort detail (nearest `$ ` line above the
+    # selector). Always label is None because generic codex
+    # approvals don't know which option holds Always.
+    (
+        "codex-generic-approval-unknown-ui.txt",
+        (
+            "Codex",
+            "echo synthetic-command-body",
+            None,
+        ),
+    ),
 ]
 
 

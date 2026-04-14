@@ -739,6 +739,11 @@ _CODEX_COL_SPLIT_RE = _re.compile(r"\s{2,}")
 # Edit / sandbox-retry approval surfaces a "Reason: ..." subtitle
 # instead of a `$ command` line; we surface it as the badge detail.
 _CODEX_REASON_RE = _re.compile(r"^\s*Reason:\s*(.+?)\s*$")
+# Structural option 2 anchor — any line starting with `  2. <text>`.
+# Used as a third detection signal so we can confirm a live option
+# list without relying on the title phrase. Independent of Yes/Allow
+# wording so it matches every codex UI variant.
+_CODEX_OPTION2_ANCHOR_RE = _re.compile(r"^\s*2\.\s+\S")
 
 # (question_phrase, tool_name) — extension point for future codex
 # approval UIs. The phrase must be short enough to survive narrow-
@@ -803,6 +808,34 @@ def _extract_codex_edit_detail(
         m = _CODEX_REASON_RE.match(lines[i])
         if m:
             return m.group(1)[:150]
+    return ""
+
+
+def _extract_codex_generic_detail(
+    lines: list[str], selector_idx: int, scan_start: int
+) -> str:
+    """Best-effort detail for an unclassified codex approval block.
+
+    Used when no known title phrase matches (new UI variant, phrasing
+    drift, pane wrap edge case) but the structural anchors confirm a
+    real approval is pending. Priority order when scanning upward
+    from the selector:
+    1. nearest `$ ` command line  (Bash-like)
+    2. nearest `Reason: ...`      (Edit / sandbox-retry-like)
+    3. first indented question line ending in `?` (the title)
+    4. empty string
+    """
+    for i in range(selector_idx - 1, scan_start - 1, -1):
+        s = lines[i].strip()
+        if s.startswith("$ "):
+            return s[2:][:150]
+        m = _CODEX_REASON_RE.match(lines[i])
+        if m:
+            return m.group(1)[:150]
+    for i in range(selector_idx - 1, scan_start - 1, -1):
+        s = lines[i].strip()
+        if s.endswith("?") and len(s) > 5:
+            return s[:150]
     return ""
 
 
@@ -898,14 +931,40 @@ def _parse_codex_approval_prompt(
     `_parse_approval_prompt` so `periodic_pending_check` can dispatch
     on session tool and treat both the same downstream.
 
-    Supported UI variants (Phase 3):
+    ## Detection philosophy
+
+    Detection and classification are **decoupled**. Detection is
+    purely structural — we confirm a live option list is on screen
+    via three anchors that never change regardless of UI variant:
+      1. `› 1. (Yes|Allow)` selector in the pane tail
+      2. `2. <text>` option line within a few lines below it
+      3. a codex footer (`Press enter...` or `enter to submit...`)
+         within the same tail window
+    If all three hit, there is a real codex approval pending. Full
+    stop. No title phrase required.
+
+    Classification (Bash / MCP / Edit) runs as a second, best-effort
+    pass that scans upward for known title phrases or content-type
+    hints. When classification fails we still report a pending
+    approval as generic `"Codex"` — the dashboard shows the Approve
+    button, Enter works on every codex UI, and only the Always
+    button degrades (it requires knowing which option holds Always).
+
+    This structure is why codex phrasing drift, new UI variants, and
+    long command bodies no longer silently drop approvals on the
+    floor: detection survives even when classification doesn't.
+
+    ## Supported classifications
+
     - **Bash** — "Would you like to run the following command?" with
-      2 or 3 options. `always_label` is option 2 text ("Yes, and
-      don't ask again...") for 3-option variants, None for 2.
-    - **MCP** — "Allow the <server> MCP server to run tool <x>?"
-      with 4 options. `always_label` is option 3 text ("Always
-      allow"); Approve = Enter (option 1 default), Always = Down
-      Down Enter (navigate to option 3).
+      2 or 3 options. `always_label` is option 2 text for 3-option
+      variants, None for 2-option.
+    - **Edit** — "Would you like to make the following edits?" —
+      sandbox-retry. 3 options, Always is option 2 (Bash nav).
+    - **MCP**  — "Allow the <server> MCP server to run tool <x>?"
+      with 4 options. Always is option 3 (Down Down Enter).
+    - **Codex** — anything else that looks structurally like a codex
+      approval. No Always button; Approve still works.
     """
     lines = pane_text.splitlines()
     # tmux capture-pane returns a fixed-height grid, so panes shorter
@@ -917,9 +976,8 @@ def _parse_codex_approval_prompt(
     if total == 0:
         return None
 
-    # 16-line tail (up from Phase 2's 12) to accommodate the MCP UI,
-    # which renders 4 options plus a workingDirectory line and may
-    # push the selector + footer further up on tall terminals.
+    # 16-line tail — enough to contain the tallest codex UI (MCP
+    # 4-option with workingDirectory line + blank + footer).
     tail_start = max(0, total - 16)
 
     # Signal 1: `› 1. (Yes|Allow)` must be in the tail window.
@@ -931,9 +989,21 @@ def _parse_codex_approval_prompt(
     if selector_idx is None:
         return None
 
-    # Signal 2: the approval footer must also be in the tail window,
-    # guarding against a stale prompt that hasn't been redrawn away
-    # yet. Both Bash and MCP footers are matched by the alternation.
+    # Signal 2: structural option 2 anchor within 8 lines below the
+    # selector. Confirms a live option list is rendered and rules
+    # out a stale single-line fragment that happens to contain
+    # `› 1. Yes`. UI-variant-agnostic — doesn't care about Yes/Allow.
+    option2_found = False
+    for i in range(selector_idx + 1, min(total, selector_idx + 8)):
+        if _CODEX_OPTION2_ANCHOR_RE.match(lines[i]):
+            option2_found = True
+            break
+    if not option2_found:
+        return None
+
+    # Signal 3: codex footer phrase within the tail window. Guards
+    # against a mid-redraw capture where the options are visible but
+    # the input loop hasn't armed yet.
     footer_found = False
     for i in range(tail_start, total):
         if _CODEX_FOOTER_RE.search(lines[i]):
@@ -942,25 +1012,18 @@ def _parse_codex_approval_prompt(
     if not footer_found:
         return None
 
-    # Signal 3: question phrase within 40 lines above the selector.
-    # We walk UPWARD from the selector so the *closest* title wins —
-    # important when a long heredoc / multi-line command body pushes
-    # the current title far up while a previously-approved block is
-    # still visible higher in the scrollback (picking the topmost
-    # match would misattribute the new selector to a stale title).
-    # The 40-line window covers real-world cases where codex
-    # truncates a heredoc body with `[… N lines] ctrl + a view all`
-    # but still shows ~25-30 lines before the truncation marker.
+    # Classification: best-effort. Scan upward 80 lines for a known
+    # title phrase (picks the closest match, so stale blocks higher
+    # up don't shadow the current one). The 80-line window handles
+    # long heredocs where codex still shows 25+ pre-truncation lines.
     #
-    # We check each line individually AND each line joined with the
-    # next — codex word-wraps titles on narrow panes, so a phrase
-    # like "MCP server to run tool" can span two lines. The 2-line
-    # join keeps `question_idx` pointing at the first line, which is
-    # what the detail extractors expect.
+    # Word-wrap join: codex wraps titles on narrow panes, so
+    # "MCP server to run tool" can span two lines. We check each
+    # line individually AND the line joined with its successor.
     tool_name: str | None = None
     question_idx: int | None = None
-    search_start = max(0, selector_idx - 40)
-    for i in range(selector_idx - 1, search_start - 1, -1):
+    scan_start = max(0, selector_idx - 80)
+    for i in range(selector_idx - 1, scan_start - 1, -1):
         candidates = [lines[i]]
         if i + 1 < selector_idx:
             candidates.append(lines[i].strip() + " " + lines[i + 1].strip())
@@ -969,21 +1032,24 @@ def _parse_codex_approval_prompt(
                 question_idx = i
                 tool_name = t_name
                 break
-        if question_idx is not None:
+        if tool_name is not None:
             break
-    if question_idx is None or tool_name is None:
-        return None
 
-    # Dispatch detail extraction by UI type. Each helper returns a
-    # 150-char-truncated string suitable for the dashboard badge.
+    # Dispatch detail extraction by classification. Generic codex
+    # falls through to a best-effort helper that looks for `$ ...`,
+    # `Reason: ...`, or the first `?`-terminated line upward.
     if tool_name == "Bash":
+        assert question_idx is not None
         detail = _extract_codex_bash_detail(lines, question_idx, selector_idx)
     elif tool_name == "MCP":
+        assert question_idx is not None
         detail = _extract_codex_mcp_detail(lines, question_idx, selector_idx)
     elif tool_name == "Edit":
+        assert question_idx is not None
         detail = _extract_codex_edit_detail(lines, question_idx, selector_idx)
     else:
-        detail = ""
+        tool_name = "Codex"
+        detail = _extract_codex_generic_detail(lines, selector_idx, scan_start)
 
     always_label = _extract_codex_always_label(
         lines, selector_idx, total, tool_name,

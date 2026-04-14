@@ -1,0 +1,14 @@
+• Working on something
+
+  Do you want to proceed with this experimental action?
+
+  Reason: this is a synthetic fixture representing a future codex UI
+  variant that hasn't been seen yet — no known title phrase matches,
+  but the structural signals are all present.
+
+  $ echo synthetic-command-body
+
+› 1. Yes, please do it (y)
+  2. No thanks (esc)
+
+  Press enter to confirm or esc to cancel
