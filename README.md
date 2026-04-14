@@ -2,6 +2,18 @@
 
 Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服务，用于集中查看会话状态、事件时间线、审批状态与 tmux 终端入口。
 
+## 界面预览
+
+<p align="center">
+  <img src="figs/computer-view.png" alt="桌面端 Dashboard" width="90%">
+</p>
+<p align="center"><em>桌面端 Dashboard：左列会话卡片 + 右列嵌入式终端</em></p>
+
+<p align="center">
+  <img src="figs/phone-view.jpg" alt="移动端视图" width="30%">
+</p>
+<p align="center"><em>移动端：单列布局，方便在手机上查看并审批</em></p>
+
 ## 核心能力
 
 - 统一管理 Claude Code 与 Codex CLI 会话
