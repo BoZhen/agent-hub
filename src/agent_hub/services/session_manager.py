@@ -66,6 +66,116 @@ def mark_approved_suppress(
     )
 
 
+_SUBAGENT_START_WINDOW_S = 120.0
+_SUBAGENT_SPAWN_EVENT_WINDOW_S = 60.0
+
+
+async def _match_subagent_parent(
+    conn: aiosqlite.Connection,
+    *,
+    candidate_ids: list[str],
+) -> str | None:
+    """Pick the parent session_id from ``candidate_ids`` if the caller
+    looks like a subagent spawn of one of them.
+
+    The primary signal: a candidate is currently blocked **inside** a
+    Task/Agent tool call. That means its most recent Task/Agent
+    PreToolUse has no matching PostToolUse — the tool hasn't returned
+    yet because the subagent (us) is just now firing its first event.
+    This is what distinguishes a subagent spawn from a ``/clear`` — in
+    the /clear case the Task tool already completed (or never fired),
+    so the PreToolUse-without-PostToolUse guard fails.
+
+    UUIDv7 prefix matching is NOT required: legacy Claude sessions still
+    carry v4 session_ids while the Task tool spawns v7 ones, and we
+    want detection to work across that boundary.
+    """
+    if not candidate_ids:
+        return None
+
+    now = datetime.now(timezone.utc)
+    event_cutoff = (now - timedelta(seconds=_SUBAGENT_SPAWN_EVENT_WINDOW_S)).isoformat()
+    placeholders = ",".join("?" * len(candidate_ids))
+    cursor = await conn.execute(
+        f"""
+        SELECT s.session_id
+        FROM sessions s
+        WHERE s.session_id IN ({placeholders})
+          AND s.status IN ('active', 'idle')
+          AND EXISTS (
+            SELECT 1 FROM events e1
+            WHERE e1.session_id = s.session_id
+              AND e1.event_type = 'PreToolUse'
+              AND e1.tool_name IN ('Task', 'Agent')
+              AND e1.created_at >= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM events e2
+                WHERE e2.session_id = s.session_id
+                  AND e2.event_type IN ('PostToolUse', 'PostToolUseFailure')
+                  AND e2.tool_name IN ('Task', 'Agent')
+                  AND e2.created_at > e1.created_at
+              )
+          )
+        ORDER BY s.started_at DESC
+        LIMIT 1
+        """,
+        (*candidate_ids, event_cutoff),
+    )
+    row = await cursor.fetchone()
+    return row["session_id"] if row else None
+
+
+async def maybe_late_assign_subagent_parent(
+    conn: aiosqlite.Connection,
+    *,
+    session_id: str,
+    tmux_session: str | None,
+    hub_id: str,
+    hostname: str,
+) -> str | None:
+    """Late-pass subagent detection run from the event pipeline.
+
+    On a fresh session the first event sometimes arrives before the
+    parent's `Task` PreToolUse has been written to DB (brief race
+    between two concurrent hook HTTP calls). This function re-runs
+    detection on every non-creation event while the session is still
+    recent and has no parent yet, so we catch the assignment as soon
+    as the parent's Task event lands.
+    """
+    if not tmux_session:
+        return None
+    row = await db.get_session(conn, session_id)
+    if not row or row.get("parent_session_id"):
+        return None
+    started_raw = row.get("started_at")
+    if started_raw:
+        try:
+            started = datetime.fromisoformat(started_raw)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - started).total_seconds() > _SUBAGENT_START_WINDOW_S:
+                return None
+        except ValueError:
+            pass
+    cursor = await conn.execute(
+        "SELECT session_id FROM sessions "
+        "WHERE hub_id = ? AND hostname = ? AND tmux_session = ? "
+        "AND session_id != ? AND status IN ('active', 'idle')",
+        (hub_id, hostname, tmux_session, session_id),
+    )
+    candidates = [r["session_id"] for r in await cursor.fetchall()]
+    parent_id = await _match_subagent_parent(
+        conn, candidate_ids=candidates
+    )
+    if parent_id:
+        await db.set_session_parent(conn, session_id, parent_id)
+        logger.info(
+            "Late-assigned subagent parent: %s → parent=%s (tmux=%s)",
+            session_id, parent_id, tmux_session,
+        )
+    return parent_id
+
+
 async def ensure_session(
     conn: aiosqlite.Connection,
     *,
@@ -96,6 +206,7 @@ async def ensure_session(
 
     if existing is None:
         transferred = 0
+        parent_session_id: str | None = None
         if tmux_session:
             # Look for an in-flight predecessor in this tmux BEFORE
             # running the timing heuristic. An active/idle row with
@@ -115,7 +226,18 @@ async def ensure_session(
             orphan_rows = list(await cursor.fetchall())
 
             if orphan_rows:
-                # /clear or resume: inherit the predecessor's flag.
+                # Subagent check before orphan retirement: if one of
+                # the same-tmux candidates is currently blocked inside
+                # a Task/Agent tool call (PreToolUse without matching
+                # PostToolUse), this is a Task-tool subagent spawn —
+                # link to parent instead of retiring it.
+                parent_session_id = await _match_subagent_parent(
+                    conn,
+                    candidate_ids=[r["session_id"] for r in orphan_rows],
+                )
+                # Inherit the predecessor's transferred flag whether
+                # this is a subagent or a /clear reuse — in both cases
+                # the new session lives inside the same tmux lineage.
                 transferred = int(orphan_rows[0]["transferred"] or 0)
             elif tool != "codex":
                 # Fresh tmux (no same-tmux predecessor) — run the
@@ -124,17 +246,21 @@ async def ensure_session(
                 # stay first-class regardless of tmux age.
                 transferred = await _detect_transferred(tmux_session)
 
-            # Retire the orphans. This covers both /clear (new
-            # session inside same tmux) and genuine tmux-name reuse
-            # by a different CLI instance.
-            for row in orphan_rows:
-                orphan_id = row["session_id"]
-                await db.update_session_status(conn, orphan_id, "stopped")
-                await db.update_session_pending_tool(conn, orphan_id, None, None)
-            if orphan_rows:
+            # Retire the orphans only if this is NOT a subagent spawn.
+            # Subagent parents must keep running alongside the child.
+            if orphan_rows and not parent_session_id:
+                for row in orphan_rows:
+                    orphan_id = row["session_id"]
+                    await db.update_session_status(conn, orphan_id, "stopped")
+                    await db.update_session_pending_tool(conn, orphan_id, None, None)
                 logger.info(
                     "Retired %d older session(s) bound to reused tmux %s",
                     len(orphan_rows), tmux_session,
+                )
+            elif parent_session_id:
+                logger.info(
+                    "Detected subagent spawn: %s → parent=%s (tmux=%s)",
+                    session_id, parent_session_id, tmux_session,
                 )
         await db.upsert_session(
             conn,
@@ -146,8 +272,11 @@ async def ensure_session(
             status="active",
             transcript_path=transcript_path,
             transferred=transferred,
+            tmux_session=tmux_session,
             tool=tool,
         )
+        if parent_session_id:
+            await db.set_session_parent(conn, session_id, parent_session_id)
     elif event_type == "SessionStart":
         # Resume — preserve existing transferred flag (upsert doesn't
         # modify it on conflict).
@@ -382,14 +511,22 @@ async def _discover_codex_tmux(
     if not alive:
         return 0
 
+    # Order DESC by started_at so the newest session "wins" the tmux
+    # claim in the dict below. When a parent + subagent share a tmux,
+    # the subagent is the one actively emitting pane changes, so it
+    # should own the pane-activity bump; the parent stays quiet and
+    # will naturally soft-idle after its cutoff.
     cursor = await conn.execute(
         "SELECT tmux_session, session_id, status, tool FROM sessions "
-        "WHERE tmux_session IS NOT NULL AND status IN ('active', 'idle')"
+        "WHERE tmux_session IS NOT NULL AND status IN ('active', 'idle') "
+        "ORDER BY started_at DESC"
     )
     rows = await cursor.fetchall()
-    claimed: dict[str, dict[str, Any]] = {
-        r["tmux_session"]: dict(r) for r in rows if r["tmux_session"]
-    }
+    claimed: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        tn = r["tmux_session"]
+        if tn and tn not in claimed:
+            claimed[tn] = dict(r)
 
     created = 0
     for name in alive:
@@ -1075,6 +1212,28 @@ async def periodic_pending_check(
             await asyncio.sleep(3)
             await _discover_codex_tmux(conn, hub_id, _LOCAL_HOSTNAME)
             sessions = await db.get_sessions(conn, status="active")
+
+            # Dedupe by tmux: when a parent + subagent share a tmux,
+            # only the newest-started session owns the pending-tool
+            # detection. Otherwise both would hit the same pane and
+            # both would get marked waiting on the same prompt.
+            # get_sessions already sorts by last_seen_at DESC, so we
+            # sort explicitly by started_at here and keep the first
+            # occurrence per tmux.
+            sessions_by_tmux_seen: set[str] = set()
+            deduped: list[dict] = []
+            for session in sorted(
+                sessions,
+                key=lambda s: s.get("started_at") or "",
+                reverse=True,
+            ):
+                tn = session.get("tmux_session")
+                if tn:
+                    if tn in sessions_by_tmux_seen:
+                        continue
+                    sessions_by_tmux_seen.add(tn)
+                deduped.append(session)
+            sessions = deduped
 
             for session in sessions:
                 sid = session["session_id"]

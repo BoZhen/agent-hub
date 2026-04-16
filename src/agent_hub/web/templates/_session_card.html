@@ -1,8 +1,9 @@
 {% import "_macros.html" as icons %}
 
 {% macro session_card(s, terminal_url) %}
-  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}"
+  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}{% if s.parent_session_id %} subagent-card ml-6 border-l-2 border-l-purple-500/50{% endif %}"
        id="card-{{ s.session_id }}"
+       data-parent-sid="{{ s.parent_session_id or '' }}"
        {% if s.tmux_session %}onclick="previewSession(this)"{% endif %}>
     <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
       <span class="hidden sm:inline text-xs text-gray-500">{{ s.hostname }}</span>
@@ -28,6 +29,9 @@
             <div class="flex items-center gap-2 flex-wrap">
               <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
               <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
+              {% if s.parent_session_id %}
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-900/40 text-purple-300 border border-purple-500/30 uppercase tracking-wide">subagent</span>
+              {% endif %}
               {% if s.pending_tool %}
               <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
                     id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>

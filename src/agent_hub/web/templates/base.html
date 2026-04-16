@@ -31,6 +31,17 @@
     .dot-idle { background: #7dd3fc; }
     .dot-stopped { background: #6b7280; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes waiting-glow {
+      0%, 100% {
+        box-shadow: 0 0 4px rgba(251, 191, 36, 0.35), inset 0 0 3px rgba(251, 191, 36, 0.15);
+        border-color: rgba(251, 191, 36, 0.45);
+      }
+      50% {
+        box-shadow: 0 0 16px rgba(251, 191, 36, 0.9), inset 0 0 8px rgba(251, 191, 36, 0.35);
+        border-color: rgba(251, 191, 36, 0.9);
+      }
+    }
+    .waiting-glow { animation: waiting-glow 1.3s ease-in-out infinite; }
     .fancy-btn {
       box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.45),

@@ -1,0 +1,14 @@
+# agent-hub MCP server for Codex CLI
+#
+# Append this block to ~/.codex/config.toml and restart any running
+# Codex session. Requires the Hub itself to be running on the same
+# machine (default: http://localhost:7800). Change the URL below if
+# you run the Hub on a non-default port or on a different host.
+#
+# This URL points at the Streamable HTTP endpoint, which is what
+# Codex 0.120+ expects from URL-based MCP servers. The Hub also
+# exposes a legacy SSE endpoint at /mcp/sse for Claude Code; don't
+# point Codex at that one.
+
+[mcp_servers.agent_hub]
+url = "http://localhost:7800/mcp-http/mcp"

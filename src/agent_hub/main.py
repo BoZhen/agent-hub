@@ -25,33 +25,44 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(config: HubConfig) -> FastAPI:
+    # Build the MCP transport apps up-front so we can both mount them
+    # below and chain the Streamable HTTP app's lifespan into our own.
+    # The streamable_http transport spins up a session manager task
+    # group that must be started via its own lifespan; SSE does not.
+    mcp_sse_app = mcp_server.http_app(transport="sse")
+    mcp_http_app = mcp_server.http_app(transport="http")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Startup
-        logger.info("Agent Hub [%s] starting on %s:%d", config.hub_id, config.host, config.port)
-        conn = await db.init_db(config.db_path)
-        app.state.db = conn
-        app.state.config = config
-        mcp_set_db(conn)
-        sweep_task = asyncio.create_task(periodic_sweep(conn))
-        pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
-        logger.info("Database initialized: %s", config.db_path)
-        telegram = await start_bot(config, conn)
-        yield
-        # Shutdown
-        await stop_bot()
-        sweep_task.cancel()
-        pending_task.cancel()
-        try:
-            await sweep_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await pending_task
-        except asyncio.CancelledError:
-            pass
-        await conn.close()
-        logger.info("Agent Hub shut down")
+        # The MCP streamable-http session manager has to be entered
+        # before we yield so requests to /mcp-http/mcp can be served;
+        # without this chain, every POST returns a 500 complaining
+        # about an uninitialized task group.
+        async with mcp_http_app.lifespan(app):
+            logger.info("Agent Hub [%s] starting on %s:%d", config.hub_id, config.host, config.port)
+            conn = await db.init_db(config.db_path)
+            app.state.db = conn
+            app.state.config = config
+            mcp_set_db(conn)
+            sweep_task = asyncio.create_task(periodic_sweep(conn))
+            pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
+            logger.info("Database initialized: %s", config.db_path)
+            telegram = await start_bot(config, conn)
+            yield
+            # Shutdown
+            await stop_bot()
+            sweep_task.cancel()
+            pending_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await pending_task
+            except asyncio.CancelledError:
+                pass
+            await conn.close()
+            logger.info("Agent Hub shut down")
 
     app = FastAPI(title="Agent Hub", version="0.1.0", lifespan=lifespan)
     app.include_router(events.router, prefix="/api")
@@ -60,9 +71,17 @@ def create_app(config: HubConfig) -> FastAPI:
     app.include_router(ws.router)
     app.include_router(web_routes.router)
 
-    # Mount MCP server at /mcp (SSE transport for remote MCP clients)
-    app.mount("/mcp", mcp_server.http_app(transport="sse"))
-    logger.info("MCP server mounted at /mcp/sse")
+    # Expose the same FastMCP instance over two transports so both
+    # legacy and modern MCP clients can connect:
+    #   /mcp/sse       — old SSE transport (still used by Claude Code)
+    #   /mcp-http/mcp  — Streamable HTTP transport (Codex CLI 0.120+
+    #                    only speaks this; it treats URL-based MCP
+    #                    servers as streamable_http and won't fall
+    #                    back to SSE). Mount paths don't overlap so
+    #                    registration order doesn't matter.
+    app.mount("/mcp", mcp_sse_app)
+    app.mount("/mcp-http", mcp_http_app)
+    logger.info("MCP server mounted at /mcp/sse (SSE) and /mcp-http/mcp (Streamable HTTP)")
 
     return app
 

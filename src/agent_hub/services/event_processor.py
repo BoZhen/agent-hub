@@ -40,6 +40,18 @@ async def process_event(
         tool=cli_tool,
     )
 
+    # Late subagent-parent detection. The subagent's first event may
+    # arrive before its parent's Task/Agent PreToolUse lands in DB,
+    # so creation-time detection can miss the link. Re-run the check
+    # on every event until the session gets linked or ages out.
+    await session_manager.maybe_late_assign_subagent_parent(
+        conn,
+        session_id=session_id,
+        tmux_session=tmux_session,
+        hub_id=hub_id,
+        hostname=hostname,
+    )
+
     # Enrich payload with stored model if not present (e.g. SessionStart resume)
     if not payload.get("model"):
         session = await db.get_session(conn, session_id)

@@ -111,7 +111,34 @@ async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
         s["recent_events"] = await db.get_session_events_latest(
             conn, s["session_id"], n=2
         )
-    return sessions
+    # Float waiting sessions to the top so pending approvals can't hide
+    # below the fold. Python's sort is stable, so relative order within
+    # the waiting and non-waiting groups is preserved (still last_seen_at
+    # DESC within each bucket).
+    sessions.sort(key=lambda s: 0 if s.get("pending_tool") else 1)
+
+    # Place subagent cards directly after their parent so the
+    # visual indent forms a tree. Any subagent whose parent isn't
+    # in the current list falls through to the end.
+    parents: list[dict] = []
+    children_by_parent: dict[str, list[dict]] = {}
+    orphan_subagents: list[dict] = []
+    for s in sessions:
+        pid = s.get("parent_session_id")
+        if pid:
+            children_by_parent.setdefault(pid, []).append(s)
+        else:
+            parents.append(s)
+    parent_ids = {p["session_id"] for p in parents}
+    for pid, kids in children_by_parent.items():
+        if pid not in parent_ids:
+            orphan_subagents.extend(kids)
+    ordered: list[dict] = []
+    for p in parents:
+        ordered.append(p)
+        ordered.extend(children_by_parent.get(p["session_id"], []))
+    ordered.extend(orphan_subagents)
+    return ordered
 
 
 @router.get("/", response_class=HTMLResponse)

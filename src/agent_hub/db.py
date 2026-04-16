@@ -50,6 +50,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0",
     "ALTER TABLE sessions ADD COLUMN pending_always_label TEXT",
     "ALTER TABLE sessions ADD COLUMN tool TEXT DEFAULT 'claude'",
+    "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
 ]
 
 
@@ -157,6 +158,16 @@ async def update_session_tmux(
     await db.execute(
         "UPDATE sessions SET tmux_session = ? WHERE session_id = ?",
         (tmux_session, session_id),
+    )
+    await db.commit()
+
+
+async def set_session_parent(
+    db: aiosqlite.Connection, session_id: str, parent_session_id: str | None
+) -> None:
+    await db.execute(
+        "UPDATE sessions SET parent_session_id = ? WHERE session_id = ?",
+        (parent_session_id, session_id),
     )
     await db.commit()
 
@@ -392,19 +403,22 @@ async def get_stats(db: aiosqlite.Connection) -> dict:
     result: dict = {}
     for status in ("active", "idle", "stopped"):
         cursor = await db.execute(
-            "SELECT COUNT(*) FROM sessions WHERE status = ?", (status,)
+            "SELECT COUNT(*) FROM sessions WHERE status = ? AND parent_session_id IS NULL",
+            (status,),
         )
         row = await cursor.fetchone()
-        result[f"{status}_sessions"] = row[0]
+        result[f"{status}_sessions"] = row[0] if row else 0
 
     cursor = await db.execute(
-        "SELECT COUNT(*) FROM sessions WHERE pending_tool IS NOT NULL AND status = 'active'"
+        "SELECT COUNT(*) FROM sessions "
+        "WHERE pending_tool IS NOT NULL AND status = 'active' "
+        "AND parent_session_id IS NULL"
     )
     row = await cursor.fetchone()
-    result["waiting_sessions"] = row[0]
+    result["waiting_sessions"] = row[0] if row else 0
 
     cursor = await db.execute("SELECT COUNT(*) FROM events")
     row = await cursor.fetchone()
-    result["total_events"] = row[0]
+    result["total_events"] = row[0] if row else 0
 
     return result

@@ -28,7 +28,8 @@
         <span class="text-gray-400 uppercase tracking-wide truncate">Active</span>
         <span class="font-bold status-active ml-1" id="stat-active">{{ stats.active_sessions }}</span>
       </div>
-      <div class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0">
+      <div id="stat-waiting-card"
+           class="bg-surface-light rounded px-2 py-1.5 border border-gray-700/30 flex items-center justify-between min-w-0{% if stats.waiting_sessions %} waiting-glow{% endif %}">
         <span class="text-gray-400 uppercase tracking-wide truncate">Waiting</span>
         <span class="font-bold text-yellow-400 ml-1" id="stat-waiting">{{ stats.waiting_sessions }}</span>
       </div>
@@ -180,6 +181,7 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
   const dot = document.getElementById('dot-' + sessionId);
 
   if (pendingTool) {
+    const wasAlreadyWaiting = !!existing;
     if (dot) dot.className = 'dot dot-waiting';
     if (existing) {
       existing.textContent = 'waiting: ' + pendingTool;
@@ -190,6 +192,15 @@ function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
       badge.textContent = 'waiting: ' + pendingTool;
       const nameRow = card.querySelector('.flex.items-center.gap-2');
       if (nameRow) nameRow.appendChild(badge);
+    }
+    // Float this card to the top of its tab panel on the first-time
+    // transition into waiting. Repeated pending ticks don't re-prepend
+    // — that would wiggle the list whenever a second waiting session
+    // re-broadcasts its state. On approval we intentionally leave the
+    // card where it is so the click target doesn't move mid-flight.
+    if (!wasAlreadyWaiting) {
+      const panel = card.parentElement;
+      if (panel && panel.firstElementChild !== card) panel.prepend(card);
     }
     // Update or create detail line
     if (pendingDetail) {
@@ -286,6 +297,8 @@ function onWsMessage(data) {
     updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session, data.has_always, data.always_label);
     const el = document.getElementById('stat-waiting');
     if (el) el.textContent = data.waiting_count;
+    const waitCard = document.getElementById('stat-waiting-card');
+    if (waitCard) waitCard.classList.toggle('waiting-glow', data.waiting_count > 0);
     return;
   }
 
@@ -330,6 +343,8 @@ function onWsMessage(data) {
     document.getElementById('stat-waiting').textContent = s.waiting_sessions;
     document.getElementById('stat-idle').textContent = s.idle_sessions;
     document.getElementById('stat-stopped').textContent = s.stopped_sessions;
+    const waitCard = document.getElementById('stat-waiting-card');
+    if (waitCard) waitCard.classList.toggle('waiting-glow', s.waiting_sessions > 0);
   }).catch(() => {});
 }
 
@@ -356,7 +371,16 @@ async function ensureCardExists(sessionId) {
     const newCard = wrapper.firstElementChild;
     if (newCard) {
       newCard.classList.add('fade-in');
-      panel.prepend(newCard);
+      // Subagent cards insert right after their parent so the
+      // visual indent tree stays connected. Fallback to prepend
+      // if the parent isn't in the DOM (unusual).
+      const parentSid = newCard.dataset.parentSid || '';
+      const parentCard = parentSid ? document.getElementById('card-' + parentSid) : null;
+      if (parentCard && parentCard.parentElement === panel) {
+        parentCard.insertAdjacentElement('afterend', newCard);
+      } else {
+        panel.prepend(newCard);
+      }
     }
   } catch (e) {
     console.error('ensureCardExists failed', e);
