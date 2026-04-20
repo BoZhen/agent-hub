@@ -207,7 +207,7 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
 
     if cmd_path:
         from agent_hub.services.session_manager import mark_hub_launched
-        mark_hub_launched(name)
+        mark_hub_launched(name, req.command or "")
 
     return {"name": name, "cwd": str(resolved), "command": req.command}
 

@@ -1,7 +1,8 @@
 {% import "_macros.html" as icons %}
 
 {% macro session_card(s, terminal_url) %}
-  <div class="bg-surface-light hover:bg-surface-lighter rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}{% if s.parent_session_id %} subagent-card ml-6 border-l-2 border-l-purple-500/50{% endif %}"
+  {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
+  <div class="{% if is_yolo %}yolo-card{% else %}bg-surface-light hover:bg-surface-lighter{% endif %} rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}{% if s.parent_session_id %} subagent-card ml-6 border-l-2 border-l-purple-500/50{% endif %}"
        id="card-{{ s.session_id }}"
        data-parent-sid="{{ s.parent_session_id or '' }}"
        {% if s.tmux_session %}onclick="previewSession(this)"{% endif %}>

@@ -27,15 +27,15 @@ _LOCAL_HOSTNAME = socket.gethostname()
 # track them here so `_detect_transferred` can skip the timing heuristic
 # (claude's workspace-trust prompt can delay SessionStart past the 5s
 # threshold, otherwise misclassifying them as From Tmux).
-_HUB_LAUNCHED_TMUX: dict[str, float] = {}
+_HUB_LAUNCHED_TMUX: dict[str, tuple[float, str]] = {}
 _HUB_LAUNCHED_TTL = 120.0
 
 
-def mark_hub_launched(tmux_name: str) -> None:
+def mark_hub_launched(tmux_name: str, command: str = "") -> None:
     now = time.time()
-    for k in [k for k, ts in _HUB_LAUNCHED_TMUX.items() if now - ts > _HUB_LAUNCHED_TTL]:
+    for k in [k for k, (ts, _) in _HUB_LAUNCHED_TMUX.items() if now - ts > _HUB_LAUNCHED_TTL]:
         _HUB_LAUNCHED_TMUX.pop(k, None)
-    _HUB_LAUNCHED_TMUX[tmux_name] = now
+    _HUB_LAUNCHED_TMUX[tmux_name] = (now, command)
 
 
 # Suppression table for Hub-initiated approvals: when the user clicks
@@ -208,6 +208,12 @@ async def ensure_session(
         transferred = 0
         parent_session_id: str | None = None
         if tmux_session:
+            hub_entry = _HUB_LAUNCHED_TMUX.get(tmux_session)
+            if hub_entry is not None:
+                _, hub_command = hub_entry
+                if hub_command:
+                    tool = hub_command
+
             # Look for an in-flight predecessor in this tmux BEFORE
             # running the timing heuristic. An active/idle row with
             # the same tmux_session means this SessionStart is a
