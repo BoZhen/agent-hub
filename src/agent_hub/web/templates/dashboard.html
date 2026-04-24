@@ -3,13 +3,30 @@
 {% block title %}Dashboard — Agent Hub{% endblock %}
 {% block main_width %}w-full max-w-none{% endblock %}
 {% block main_px %}px-2 sm:px-3{% endblock %}
-{% block body_class %}min-h-screen lg:h-screen lg:overflow-hidden flex flex-col{% endblock %}
+{% block body_class %}dash-page min-h-screen lg:h-screen lg:overflow-hidden flex flex-col{% endblock %}
 {% block main_py %}py-3 lg:py-0{% endblock %}
 {% block main_extra_class %}lg:flex-1 lg:min-h-0 lg:overflow-hidden flex flex-col{% endblock %}
 {% block nav %}{% endblock %}
+{% block head %}
+<style>
+  @media screen and (min-width: 600px) and (max-width: 1023px) {
+    body.dash-page { height: 100vh; overflow: hidden; }
+    .dash-page main { flex: 1; min-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0; }
+    #dash-grid {
+      grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+      grid-template-rows: auto minmax(0,1fr);
+      flex: 1; min-height: 0;
+    }
+    #dash-grid > nav { grid-column: 1; grid-row: 1; }
+    #sessions-pane { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; }
+    #sessions-pane .session-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 0.25rem; margin-right: -0.25rem; }
+    #preview-pane { display: flex !important; grid-column: 2; grid-row: 1 / span 2; margin-block: 0.75rem; flex-direction: column; min-height: 0; }
+  }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:grid-rows-[auto_minmax(0,1fr)] gap-3 sm:gap-4 lg:flex-1 lg:min-h-0">
+<div id="dash-grid" class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:grid-rows-[auto_minmax(0,1fr)] gap-3 sm:gap-4 lg:flex-1 lg:min-h-0">
 
   <!-- LEFT ROW 1: nav scoped to left column -->
   <nav class="lg:col-start-1 lg:row-start-1 shrink-0 border-b border-gray-700/50 py-3 flex items-center justify-between">
@@ -56,7 +73,7 @@
         + New
       </button>
     </div>
-    <div class="lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1 lg:-mr-1">
+    <div class="session-scroll lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1 lg:-mr-1">
       <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
         {% for s in sessions_native %}
           {{ session_card(s, terminal_url) }}
