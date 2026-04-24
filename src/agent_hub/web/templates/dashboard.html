@@ -9,7 +9,11 @@
 {% block nav %}{% endblock %}
 {% block head %}
 <style>
-  @media screen and (min-width: 600px) and (max-width: 1023px) {
+  @media screen and (max-aspect-ratio: 7/10) and (min-width: 500px) and (max-width: 1023px) {
+    html { font-size: 20px; }
+    .dash-page main { max-width: 640px; margin-left: auto; margin-right: auto; }
+  }
+  @media screen and (min-width: 600px) and (max-width: 1023px) and (min-aspect-ratio: 7/10) {
     body.dash-page { height: 100vh; overflow: hidden; }
     .dash-page main { flex: 1; min-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0; }
     #dash-grid {
