@@ -72,8 +72,13 @@
               class="tab-btn text-xs sm:text-sm font-semibold uppercase tracking-wide py-2 px-1 border-b-2 border-transparent text-gray-400 hover:text-white transition">
         From Tmux <span class="text-gray-500 font-normal">({{ sessions_from_tmux | length }})</span>
       </button>
+      <button id="btn-restore-all" type="button"
+              title="Restore tmux + resume Claude/Codex for sessions whose tmux is missing"
+              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-amber-700/60 hover:bg-amber-600 text-white transition font-semibold hidden">
+        Restore <span id="orphan-count" class="opacity-80">0</span>
+      </button>
       <button id="btn-new-claude" type="button"
-              class="ml-auto mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
+              class="mb-1 text-xs sm:text-sm px-3 py-1 rounded bg-accent hover:bg-accent-light text-white transition font-semibold">
         + New
       </button>
     </div>
@@ -623,6 +628,48 @@ document.getElementById('nc-tool-omx-yolo').addEventListener('click', () => ncSe
 document.getElementById('modal-new-claude').addEventListener('click', (ev) => {
   if (ev.target.id === 'modal-new-claude') ncClose();
 });
+
+// ── Orphan-session restore button ─────────────────────────────────
+async function refreshOrphanCount() {
+  try {
+    const res = await fetch('/api/orphan-sessions');
+    if (!res.ok) return;
+    const data = await res.json();
+    const count = (data.orphans || []).length;
+    const btn = document.getElementById('btn-restore-all');
+    document.getElementById('orphan-count').textContent = count;
+    btn.classList.toggle('hidden', count === 0);
+  } catch (e) { /* silent */ }
+}
+
+async function restoreAll(btn) {
+  if (!confirm('Recreate tmux sessions and resume Claude/Codex for missing sessions?')) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Restoring…';
+  try {
+    const res = await fetch('/api/restore-orphans', {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok) {
+      alert('Restore failed: ' + (data.detail || res.statusText));
+      return;
+    }
+    btn.textContent = `${data.restored}/${data.total} restored`;
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.textContent = orig;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('btn-restore-all').addEventListener('click', function() {
+  restoreAll(this);
+});
+
+refreshOrphanCount();
+setInterval(refreshOrphanCount, 15000);
 
 // ── Preview pane (embedded terminal on the right at lg+) ──────────
 const previewState = { sid: null };

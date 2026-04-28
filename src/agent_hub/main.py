@@ -15,6 +15,7 @@ from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
 from agent_hub.services.session_manager import periodic_sweep, periodic_pending_check
+from agent_hub.services.restore import restore_on_startup
 from agent_hub.services.telegram_bot import start_bot, stop_bot
 
 logging.basicConfig(
@@ -46,19 +47,25 @@ def create_app(config: HubConfig) -> FastAPI:
             mcp_set_db(conn)
             sweep_task = asyncio.create_task(periodic_sweep(conn))
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
+            restore_task = asyncio.create_task(restore_on_startup(conn))
             logger.info("Database initialized: %s", config.db_path)
-            telegram = await start_bot(config, conn)
+            await start_bot(config, conn)
             yield
             # Shutdown
             await stop_bot()
             sweep_task.cancel()
             pending_task.cancel()
+            restore_task.cancel()
             try:
                 await sweep_task
             except asyncio.CancelledError:
                 pass
             try:
                 await pending_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await restore_task
             except asyncio.CancelledError:
                 pass
             await conn.close()

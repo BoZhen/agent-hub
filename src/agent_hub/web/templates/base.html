@@ -112,6 +112,46 @@
       };
     }
     connectWS();
+
+    function copyResumeCmd(tmuxName, sid, tool, btn) {
+      let resumeArgs = '';
+      if (tool === 'claude-yolo') resumeArgs = ' --dangerously-skip-permissions';
+      else if (tool === 'claude-sonnet') resumeArgs = ' --model sonnet';
+      else if (tool === 'claude-opus') resumeArgs = ' --model opus';
+      // Smart one-liner: feed the resume command into the tmux pane,
+      // then attach. Works whether or not tmux is empty/already running.
+      const cmd = `tmux send-keys -t ${tmuxName}: 'claude --resume ${sid}${resumeArgs}' Enter; tmux attach -t ${tmuxName}`;
+      _copyToClipboard(cmd, btn);
+    }
+
+    function copyTmuxName(name, btn) {
+      const cmd = 'tmux attach -t ' + name;
+      _copyToClipboard(cmd, btn);
+    }
+
+    function _copyToClipboard(cmd, btn) {
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = cmd;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      };
+      const done = () => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<span class="text-[10px] text-emerald-400 font-semibold px-1">✓</span>';
+        setTimeout(() => { btn.innerHTML = orig; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cmd).then(done).catch(() => { fallback(); done(); });
+      } else {
+        fallback();
+        done();
+      }
+    }
   </script>
   {% block scripts %}{% endblock %}
 </body>

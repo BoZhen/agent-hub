@@ -11,6 +11,11 @@ from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
 from agent_hub.services.session_manager import mark_approved_suppress
+from agent_hub.services.restore import (
+    find_orphan_sessions,
+    restore_all_orphans,
+    restore_session,
+)
 
 router = APIRouter()
 
@@ -25,6 +30,24 @@ async def list_sessions(
     conn = request.app.state.db
     rows = await db.get_sessions(conn, status=status, limit=limit, offset=offset)
     return rows
+
+
+@router.get("/orphan-sessions")
+async def list_orphans(request: Request):
+    """List sessions whose tmux is dead (restore candidates).
+
+    Path is `/orphan-sessions` (not `/sessions/orphans`) to avoid
+    collision with the parameterized `/sessions/{session_id}` route.
+    """
+    conn = request.app.state.db
+    return {"orphans": await find_orphan_sessions(conn)}
+
+
+@router.post("/restore-orphans")
+async def restore_all(request: Request):
+    """Recreate tmux for every orphan session and resume Claude/Codex."""
+    conn = request.app.state.db
+    return await restore_all_orphans(conn)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -108,6 +131,23 @@ async def delete_session(request: Request, session_id: str):
     if not deleted:
         raise HTTPException(status_code=500, detail="Failed to delete session")
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/restore")
+async def restore_one(request: Request, session_id: str):
+    """Recreate tmux + resume command for a single session."""
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.get("tmux_session"):
+        raise HTTPException(
+            status_code=400, detail="Session has no tmux name to restore",
+        )
+    result = await restore_session(conn, session)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("error"))
+    return result
 
 
 @router.post("/sessions/{session_id}/approve")
