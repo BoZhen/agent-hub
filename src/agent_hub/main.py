@@ -25,6 +25,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _augment_path() -> None:
+    """Add common user-local bin dirs to PATH so shutil.which finds
+    `claude`, `omx`, etc. even when the hub runs under systemd-user
+    (which doesn't inherit the interactive shell's PATH). Skip dirs
+    that don't exist or are already present."""
+    extras = [
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.bun/bin"),
+        os.path.expanduser("~/.cargo/bin"),
+        os.path.expanduser("~/.juliaup/bin"),
+        os.path.expanduser("~/bin"),
+        "/opt/homebrew/bin",
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/usr/local/bin",
+    ]
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    added: list[str] = []
+    for p in extras:
+        if p and os.path.isdir(p) and p not in parts:
+            parts.append(p)
+            added.append(p)
+    if added:
+        os.environ["PATH"] = os.pathsep.join(parts)
+        logger.info("Augmented PATH with %d dir(s): %s", len(added), ", ".join(added))
+
+
+_augment_path()
+
+
 def create_app(config: HubConfig) -> FastAPI:
     # Build the MCP transport apps up-front so we can both mount them
     # below and chain the Streamable HTTP app's lifespan into our own.
