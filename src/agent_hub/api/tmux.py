@@ -5,7 +5,6 @@ import asyncio
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +59,43 @@ _FORMAT = _SEP.join([
     "#{session_created}",
     "#{pane_dead}",
 ])
+
+
+def _extra_command_dirs(home: Path | None = None) -> list[str]:
+    """Return user-level CLI install dirs missing from systemd user PATH.
+
+    The Hub usually runs as a systemd user service.  That environment often
+    does not load interactive shell startup files, so CLIs installed by nvm /
+    npm / uv can be invisible to ``shutil.which`` even though they work in a
+    normal terminal.  Keep this list conservative and user-scoped.
+    """
+    root = (home or Path.home()).expanduser()
+    dirs = [
+        root / ".local" / "bin",
+        root / ".bun" / "bin",
+        root / ".npm-global" / "bin",
+        root / ".nvm" / "current" / "bin",
+    ]
+    node_versions = root / ".nvm" / "versions" / "node"
+    if node_versions.is_dir():
+        dirs.extend(sorted(node_versions.glob("*/bin"), reverse=True))
+    return [str(path) for path in dirs if path.is_dir()]
+
+
+def _resolve_command(bin_name: str, *, path_env: str | None = None, home: Path | None = None) -> str | None:
+    """Resolve a command using PATH plus common per-user CLI directories."""
+    search_path = path_env if path_env is not None else os.environ.get("PATH", "")
+    paths = [p for p in search_path.split(os.pathsep) if p]
+    seen = set(paths)
+    for extra in _extra_command_dirs(home):
+        if extra not in seen:
+            paths.append(extra)
+            seen.add(extra)
+    for directory in paths:
+        candidate = Path(directory) / bin_name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 async def _tmux_ls() -> list[dict[str, Any]]:
@@ -161,7 +197,7 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
                 f"command must be one of {sorted(_ALLOWED_COMMANDS)}",
             )
         bin_name = _COMMAND_BIN.get(req.command, req.command)
-        cmd_path = shutil.which(bin_name)
+        cmd_path = _resolve_command(bin_name)
         if not cmd_path:
             raise HTTPException(400, f"command not found in PATH: {bin_name}")
 
