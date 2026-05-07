@@ -99,7 +99,12 @@ async def upsert_session(
             status = excluded.status,
             last_seen_at = excluded.last_seen_at,
             model = COALESCE(excluded.model, sessions.model),
-            cwd = excluded.cwd,
+            -- cwd is pinned to the value at first insert. Claude indexes
+            -- its session JSONL under ~/.claude/projects/<encoded-cwd>/,
+            -- so a SessionStart fired from a different directory (the
+            -- user resuming after `cd /elsewhere`) must not rewrite
+            -- this column — restore-on-reboot needs the original cwd.
+            cwd = sessions.cwd,
             transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
             tmux_session = COALESCE(excluded.tmux_session, sessions.tmux_session)
         """,

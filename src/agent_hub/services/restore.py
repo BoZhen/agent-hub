@@ -14,6 +14,7 @@ existing DB row and flips status back to active automatically.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any
@@ -23,6 +24,45 @@ import aiosqlite
 from agent_hub.services.session_manager import mark_hub_launched
 
 logger = logging.getLogger(__name__)
+
+
+def extract_cwd_from_transcript(
+    transcript_path: str | None, *, max_lines: int = 30
+) -> str | None:
+    """Read a Claude transcript JSONL and return the first ``cwd`` value.
+
+    Claude indexes session JSONL under
+    ``~/.claude/projects/<encoded-cwd>/<sid>.jsonl`` based on the cwd at
+    first launch. Resuming with ``claude --resume <sid>`` later only
+    works from that original cwd, so we need an authoritative way to
+    recover it. The transcript itself records ``cwd`` on regular
+    user/attachment records — but the first few records are metadata
+    (``last-prompt``, ``permission-mode``) that lack the field, so we
+    scan the head of the file for the first hit.
+
+    Returns ``None`` for codex transcripts (no ``cwd`` field) and for
+    any IO/parse failure — callers fall back to the DB ``cwd`` column.
+    """
+    if not transcript_path:
+        return None
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cwd = rec.get("cwd") if isinstance(rec, dict) else None
+                if isinstance(cwd, str) and cwd:
+                    return cwd
+    except OSError as e:
+        logger.debug("transcript read failed: %s (%s)", transcript_path, e)
+    return None
 
 
 async def _list_alive_tmux_names() -> set[str]:
@@ -129,15 +169,38 @@ async def restore_session(
     Returns {"ok": True, "name": ...} on success, or
     {"ok": False, "error": ..., "name": ...} on failure.
     """
-    _ = conn  # reserved
     name = session_row["tmux_session"]
-    cwd = session_row["cwd"]
     sid = session_row["session_id"]
     tool = (session_row.get("tool") or "claude").strip()
+    db_cwd = session_row["cwd"]
+
+    # Trust the transcript: the JSONL lives under the directory Claude
+    # used at first launch, and `claude --resume <sid>` only works from
+    # that exact path. The DB `cwd` column can drift if the user once
+    # resumed from elsewhere (pre-fix data), so prefer the transcript.
+    transcript_path = session_row.get("transcript_path")
+    canonical_cwd = extract_cwd_from_transcript(transcript_path) or db_cwd
+    cwd = canonical_cwd
 
     # Pre-flight checks.
     if not cwd or not os.path.isdir(cwd):
         return {"ok": False, "name": name, "error": f"cwd not found: {cwd}"}
+
+    # If the transcript revealed a different cwd than the DB held,
+    # quietly correct the row so the dashboard / Terminal links also
+    # point at the right place. Best-effort; never block restore on it.
+    if canonical_cwd != db_cwd:
+        try:
+            await conn.execute(
+                "UPDATE sessions SET cwd = ? WHERE session_id = ?",
+                (canonical_cwd, sid),
+            )
+            await conn.commit()
+            logger.info(
+                "Corrected drifted cwd for %s: %r → %r", sid, db_cwd, canonical_cwd
+            )
+        except Exception:
+            logger.exception("Failed to backfill cwd for %s", sid)
 
     # If tmux already exists (race / hub restart without machine reboot),
     # do nothing — caller will see tmux is alive on next sweep.
@@ -214,6 +277,44 @@ async def restore_all_orphans(conn: aiosqlite.Connection) -> dict[str, Any]:
     }
 
 
+async def backfill_canonical_cwds(conn: aiosqlite.Connection) -> int:
+    """Repair drifted cwd values by reading transcripts.
+
+    Pre-fix data may have a DB ``cwd`` that diverged from Claude's
+    project-dir-encoded location (the user once resumed from a
+    different directory). Walk every active/idle Claude session, ask
+    the transcript for the original cwd, and write it back where it
+    differs. Returns the count of rows fixed. Best-effort — failures
+    are logged and ignored.
+    """
+    cursor = await conn.execute(
+        "SELECT session_id, cwd, transcript_path FROM sessions "
+        "WHERE status IN ('active','idle') AND tool LIKE 'claude%' "
+        "AND transcript_path IS NOT NULL"
+    )
+    rows = await cursor.fetchall()
+    fixed = 0
+    for r in rows:
+        real = extract_cwd_from_transcript(r["transcript_path"])
+        if not real or real == r["cwd"]:
+            continue
+        try:
+            await conn.execute(
+                "UPDATE sessions SET cwd = ? WHERE session_id = ?",
+                (real, r["session_id"]),
+            )
+            fixed += 1
+            logger.info(
+                "Backfilled cwd for %s: %r → %r",
+                r["session_id"], r["cwd"], real,
+            )
+        except Exception:
+            logger.exception("cwd backfill failed for %s", r["session_id"])
+    if fixed:
+        await conn.commit()
+    return fixed
+
+
 async def restore_on_startup(conn: aiosqlite.Connection) -> None:
     """Background task to run shortly after hub starts.
 
@@ -223,6 +324,8 @@ async def restore_on_startup(conn: aiosqlite.Connection) -> None:
     """
     try:
         await asyncio.sleep(2.0)  # let other startup tasks settle
+        # Repair drifted cwds before any restore decision uses them.
+        await backfill_canonical_cwds(conn)
         await restore_all_orphans(conn)
     except Exception:
         logger.exception("restore_on_startup failed")
