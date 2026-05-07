@@ -412,20 +412,61 @@ class TelegramBot:
 # ── Module API ──────────────────────────────────────────────────────
 
 
-async def start_bot(config: HubConfig, conn: aiosqlite.Connection) -> TelegramBot | None:
-    """Start the Telegram bot if token is configured. Returns the bot or None."""
+_retry_task: asyncio.Task | None = None
+
+
+async def _retry_start_bot(bot: TelegramBot) -> None:
+    """Retry bot.start() until it succeeds.
+
+    Why: at boot, DNS / network may not be ready when the lifespan runs.
+    A failed bot.start() must not bring down the whole HTTP service, so
+    we hand it to this background task and back off between attempts.
+    """
     global _bot_instance
+    delay = 5
+    while True:
+        try:
+            await asyncio.sleep(delay)
+            await bot.start()
+        except Exception as exc:
+            logger.warning("Telegram bot retry failed (next in %ds): %s", delay, exc)
+            delay = min(delay * 2, 300)
+            continue
+        _bot_instance = bot
+        logger.info("Telegram bot connected after retry")
+        return
+
+
+async def start_bot(config: HubConfig, conn: aiosqlite.Connection) -> TelegramBot | None:
+    """Start the Telegram bot if token is configured. Returns the bot or None.
+
+    Tolerates startup failure (e.g. DNS not yet ready at boot): on error,
+    schedule a background retry instead of propagating to the ASGI lifespan.
+    """
+    global _bot_instance, _retry_task
     if not config.telegram_bot_token:
         logger.info("Telegram bot disabled (no TELEGRAM_BOT_TOKEN)")
         return None
     bot = TelegramBot(config, conn)
-    await bot.start()
+    try:
+        await bot.start()
+    except Exception as exc:
+        logger.warning("Telegram bot start failed, retrying in background: %s", exc)
+        _retry_task = asyncio.create_task(_retry_start_bot(bot))
+        return None
     _bot_instance = bot
     return bot
 
 
 async def stop_bot() -> None:
-    global _bot_instance
+    global _bot_instance, _retry_task
+    if _retry_task and not _retry_task.done():
+        _retry_task.cancel()
+        try:
+            await _retry_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _retry_task = None
     if _bot_instance:
         await _bot_instance.stop()
         _bot_instance = None
