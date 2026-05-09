@@ -155,6 +155,22 @@ def create_app(config: HubConfig) -> FastAPI:
             logger.info("Agent Hub shut down")
 
     app = FastAPI(title="Agent Hub", version="0.1.0", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def _no_cache_html(request, call_next):
+        """Force browsers to refetch every HTML page. Without this,
+        phone Chrome / Safari heuristic-cache the dashboard HTML and
+        users keep seeing stale templates after a hub update — the
+        symptom we hit when a CSS fix landed on hub-a but the phone
+        kept rendering the pre-fix version. Static asset URLs already
+        include version-busting hashes; only the HTML response itself
+        needs `no-store`."""
+        response = await call_next(request)
+        ctype = response.headers.get("content-type", "")
+        if ctype.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     app.include_router(events.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
     app.include_router(tmux.router, prefix="/api")
