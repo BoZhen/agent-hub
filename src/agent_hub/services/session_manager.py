@@ -534,115 +534,130 @@ async def _tmux_session_info(name: str) -> tuple[str | None, int | None]:
         return (parts[0] or None, None)
 
 
+async def _claim_for_tmux(
+    conn: aiosqlite.Connection, name: str
+) -> dict[str, Any] | None:
+    """Newest active/idle session bound to this tmux, or None.
+
+    Newest-first matters when a parent + subagent share a tmux: the
+    subagent owns the pane-activity bump, the parent will soft-idle.
+    """
+    cursor = await conn.execute(
+        "SELECT session_id, status, tool FROM sessions "
+        "WHERE tmux_session = ? AND status IN ('active', 'idle') "
+        "ORDER BY started_at DESC LIMIT 1",
+        (name,),
+    )
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def discover_codex_for_tmux(
+    conn: aiosqlite.Connection,
+    hub_id: str,
+    hostname: str,
+    name: str,
+) -> bool:
+    """Run the codex-discovery logic for a single tmux name.
+
+    Shared by:
+    - Push: ``/api/internal/tmux-discovered`` endpoint, called from a
+      ``session-created`` hook fired by tmux when a new session opens.
+    - Polling fallback: ``periodic_codex_discovery`` calls this for
+      every alive tmux every 60s.
+
+    Returns True if a NEW codex session row was inserted; False if the
+    tmux belongs to a Claude session, isn't a codex pane, was already
+    claimed, or only a touch/reactivate happened.
+    """
+    existing = await _claim_for_tmux(conn, name)
+    if existing and existing.get("tool") != "codex":
+        # Claude tmux — leave it alone.
+        return False
+
+    pane = await _tmux_capture(name)
+    if pane is None:
+        return False
+
+    # For brand-new tmux (not yet in DB) we need the codex signature
+    # to decide whether this is even a codex session. Once recorded in
+    # DB as codex we trust that: the welcome-box / `weekly` status-line
+    # signature can scroll off in narrow panes with a tall approval UI,
+    # and we still want to track activity in that state.
+    if existing is None and not _is_codex_pane(pane):
+        return False
+
+    new_hash = _hash_pane(pane)
+
+    if existing is None:
+        # Reverse race guard: a hook-path codex session may have been
+        # inserted between _claim_for_tmux and now.
+        pre = await conn.execute(
+            "SELECT 1 FROM sessions "
+            "WHERE tool='codex' AND tmux_session=? "
+            "AND status IN ('active','idle') LIMIT 1",
+            (name,),
+        )
+        if await pre.fetchone():
+            return False
+
+        cwd, created_ts = await _tmux_session_info(name)
+        if not cwd or not created_ts:
+            return False
+        session_id = f"codex-{name}-{created_ts}"
+        model = _extract_codex_model(pane)
+        await db.upsert_session(
+            conn,
+            session_id=session_id,
+            hub_id=hub_id,
+            hostname=hostname,
+            cwd=cwd,
+            model=model,
+            status="active",
+            tmux_session=name,
+            tool="codex",
+        )
+        _CODEX_PANE_HASH[session_id] = new_hash
+        mgr = get_pipe_manager()
+        if mgr is not None:
+            await mgr.attach(session_id, name)
+        logger.info(
+            "Discovered codex session: tmux=%s → %s (model=%s)",
+            name, session_id, model,
+        )
+        return True
+
+    sid = existing["session_id"]
+    old_hash = _CODEX_PANE_HASH.get(sid)
+    if new_hash != old_hash:
+        _CODEX_PANE_HASH[sid] = new_hash
+        if existing["status"] == "idle":
+            await db.update_session_status(conn, sid, "active")
+            mgr = get_pipe_manager()
+            if mgr is not None:
+                await mgr.attach(sid, name)
+            logger.info("Reactivated codex session %s (pane changed)", sid)
+        await db.touch_session(conn, sid)
+    return False
+
+
 async def _discover_codex_tmux(
     conn: aiosqlite.Connection, hub_id: str, hostname: str
 ) -> int:
-    """Scan alive tmux panes for Codex and sync DB state.
+    """Slow-path codex discovery: scan every alive tmux pane.
 
-    Transitions (all driven off pane capture):
-    - Unclaimed tmux + codex signature     → upsert new session
-    - Existing session + pane changed      → touch + reactivate if idle
-    - Existing session + pane unchanged    → leave it; _soft_idle_pass
-      will eventually demote if no change for 10 min
+    Used as the polling fallback behind the push hook (``session-created``
+    → ``/api/internal/tmux-discovered``). Push handles new tmuxes within
+    ~50 ms of creation; this loop catches anything push misses (hub down
+    when tmux was created, hook unset, etc.).
     """
     alive = await _list_alive_tmux_names()
     if not alive:
         return 0
-
-    # Order DESC by started_at so the newest session "wins" the tmux
-    # claim in the dict below. When a parent + subagent share a tmux,
-    # the subagent is the one actively emitting pane changes, so it
-    # should own the pane-activity bump; the parent stays quiet and
-    # will naturally soft-idle after its cutoff.
-    cursor = await conn.execute(
-        "SELECT tmux_session, session_id, status, tool FROM sessions "
-        "WHERE tmux_session IS NOT NULL AND status IN ('active', 'idle') "
-        "ORDER BY started_at DESC"
-    )
-    rows = await cursor.fetchall()
-    claimed: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        tn = r["tmux_session"]
-        if tn and tn not in claimed:
-            claimed[tn] = dict(r)
-
     created = 0
     for name in alive:
-        existing = claimed.get(name)
-        if existing and existing.get("tool") != "codex":
-            # This tmux belongs to a Claude session — skip.
-            continue
-
-        pane = await _tmux_capture(name)
-        if pane is None:
-            continue
-
-        # For brand-new tmux (not yet in DB) we need the codex signature
-        # to decide whether this is even a codex session. But once we've
-        # recorded it in DB as a codex session, trust that: the signature
-        # (welcome box / status line `weekly` token) can scroll off in
-        # narrow terminals with a tall approval UI, and we still want to
-        # track pane activity and detect approvals in that state.
-        if existing is None and not _is_codex_pane(pane):
-            continue
-
-        new_hash = _hash_pane(pane)
-
-        if existing is None:
-            # Reverse protection against the hook-path race: if a codex
-            # session created via `/api/events?tool=codex` (omx native
-            # hook) already owns this tmux, skip placeholder creation.
-            # The `claimed` snapshot above was taken before the current
-            # iteration and may miss a row inserted mid-loop by the
-            # event pipeline. Fresh SELECT closes the window.
-            pre = await conn.execute(
-                "SELECT 1 FROM sessions "
-                "WHERE tool='codex' AND tmux_session=? "
-                "AND status IN ('active','idle') LIMIT 1",
-                (name,),
-            )
-            if await pre.fetchone():
-                continue
-
-            cwd, created_ts = await _tmux_session_info(name)
-            if not cwd or not created_ts:
-                continue
-            session_id = f"codex-{name}-{created_ts}"
-            model = _extract_codex_model(pane)
-            await db.upsert_session(
-                conn,
-                session_id=session_id,
-                hub_id=hub_id,
-                hostname=hostname,
-                cwd=cwd,
-                model=model,
-                status="active",
-                tmux_session=name,
-                tool="codex",
-            )
-            _CODEX_PANE_HASH[session_id] = new_hash
-            mgr = get_pipe_manager()
-            if mgr is not None:
-                await mgr.attach(session_id, name)
+        if await discover_codex_for_tmux(conn, hub_id, hostname, name):
             created += 1
-            logger.info(
-                "Discovered codex session: tmux=%s → %s (model=%s)",
-                name, session_id, model,
-            )
-            continue
-
-        sid = existing["session_id"]
-        old_hash = _CODEX_PANE_HASH.get(sid)
-        if new_hash != old_hash:
-            _CODEX_PANE_HASH[sid] = new_hash
-            if existing["status"] == "idle":
-                await db.update_session_status(conn, sid, "active")
-                mgr = get_pipe_manager()
-                if mgr is not None:
-                    await mgr.attach(sid, name)
-                logger.info("Reactivated codex session %s (pane changed)", sid)
-            await db.touch_session(conn, sid)
-
     return created
 
 
@@ -1403,17 +1418,17 @@ async def attach_all_active_pipes(conn: aiosqlite.Connection) -> int:
 async def periodic_codex_discovery(
     conn: aiosqlite.Connection, hub_id: str
 ) -> None:
-    """Background task: scan tmux panes for new Codex TUIs every 3s.
+    """Polling fallback for codex discovery — scans all alive tmuxes
+    every 60 s.
 
-    Codex has no hook system, so the only way to discover a new codex
-    session is to scan tmux panes for its signature. This stays on a
-    fast cadence so newly-started codex sessions show up on the
-    dashboard quickly. (Phase 5 of the push-observability plan would
-    push this via tmux session-created hooks.)
+    Push (tmux ``session-created`` hook → ``/api/internal/tmux-discovered``)
+    is the primary path and detects new codex panes within ~50 ms. This
+    loop is the safety net for anything push misses (hub down at the
+    moment of tmux creation, hook unset, etc.).
     """
     while True:
         try:
-            await asyncio.sleep(3)
+            await asyncio.sleep(60)
             await _discover_codex_tmux(conn, hub_id, _LOCAL_HOSTNAME)
         except asyncio.CancelledError:
             break
