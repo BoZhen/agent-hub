@@ -364,6 +364,18 @@ async def update_session_activity(
     conn: aiosqlite.Connection, session_id: str
 ) -> None:
     await db.update_session_activity(conn, session_id)
+    # Any hook event that lands here may have just promoted an idle
+    # session back to active (db.update_session_activity unconditionally
+    # sets status='active'). Push observability needs the pipe attached
+    # in that case — `ensure_session` only attaches on SessionStart, so
+    # for other event types this is the only path that reaches the
+    # newly-active session.
+    mgr = get_pipe_manager()
+    if mgr is None or mgr.is_attached(session_id):
+        return
+    session = await db.get_session(conn, session_id)
+    if session and session.get("tmux_session"):
+        await mgr.attach(session_id, session["tmux_session"])
 
 
 async def mark_session_idle(
