@@ -19,7 +19,14 @@ from agent_hub.api import agent as agent_api, events, sessions, tmux, ws
 from agent_hub.web import routes as web_routes
 from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
-from agent_hub.services.session_manager import periodic_sweep, periodic_pending_check
+from agent_hub.services.session_manager import (
+    attach_all_active_pipes,
+    make_pane_pipe_callback,
+    periodic_codex_discovery,
+    periodic_pending_check,
+    periodic_sweep,
+)
+from agent_hub.services.pane_pipe import PanePipeManager, set_pipe_manager
 from agent_hub.services.restore import restore_on_startup
 from agent_hub.services.telegram_bot import start_bot, stop_bot
 
@@ -81,18 +88,44 @@ def create_app(config: HubConfig) -> FastAPI:
             app.state.config = config
             mcp_set_db(conn)
             sweep_task = asyncio.create_task(periodic_sweep(conn))
+            # Codex discovery stays on a fast (3s) cadence — codex has
+            # no event hook so this is the only way to detect a new
+            # codex TUI in tmux. Approval-pending detection moves to
+            # push-based observability with a 60s polling fallback.
+            codex_task = asyncio.create_task(
+                periodic_codex_discovery(conn, config.hub_id)
+            )
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
             restore_task = asyncio.create_task(restore_on_startup(conn))
+            # Push-based pane observability: tmux pipe-pane → file →
+            # inotify → debounce → parse_one. The manager is the
+            # primary detection path; the polling loop above is the
+            # safety net.
+            pipe_callback = make_pane_pipe_callback(conn)
+            pipe_manager = PanePipeManager(parse_callback=pipe_callback)
+            await pipe_manager.start()
+            set_pipe_manager(pipe_manager)
+            app.state.pipe_manager = pipe_manager
+            await attach_all_active_pipes(conn)
             logger.info("Database initialized: %s", config.db_path)
             await start_bot(config, conn)
             yield
-            # Shutdown
+            # Shutdown — release the manager singleton FIRST so any
+            # session-status changes that race with shutdown don't
+            # try to call attach/detach on a half-stopped manager.
+            set_pipe_manager(None)
             await stop_bot()
+            await pipe_manager.stop()
             sweep_task.cancel()
+            codex_task.cancel()
             pending_task.cancel()
             restore_task.cancel()
             try:
                 await sweep_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await codex_task
             except asyncio.CancelledError:
                 pass
             try:

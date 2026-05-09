@@ -12,6 +12,7 @@ import aiosqlite
 
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
+from agent_hub.services.pane_pipe import get_pipe_manager
 from agent_hub.services.telegram_bot import (
     cancel_pending as tg_cancel_pending,
     notify_pending as tg_notify_pending,
@@ -255,10 +256,13 @@ async def ensure_session(
             # Retire the orphans only if this is NOT a subagent spawn.
             # Subagent parents must keep running alongside the child.
             if orphan_rows and not parent_session_id:
+                mgr = get_pipe_manager()
                 for row in orphan_rows:
                     orphan_id = row["session_id"]
                     await db.update_session_status(conn, orphan_id, "stopped")
                     await db.update_session_pending_tool(conn, orphan_id, None, None)
+                    if mgr is not None:
+                        await mgr.detach(orphan_id)
                 logger.info(
                     "Retired %d older session(s) bound to reused tmux %s",
                     len(orphan_rows), tmux_session,
@@ -283,6 +287,13 @@ async def ensure_session(
         )
         if parent_session_id:
             await db.set_session_parent(conn, session_id, parent_session_id)
+        # Attach push-based pane observability for this fresh active
+        # session. No-op if no manager is registered (e.g. during
+        # tests). Failure to attach falls through to the polling-only
+        # fallback in periodic_pending_check.
+        mgr = get_pipe_manager()
+        if mgr is not None and tmux_session:
+            await mgr.attach(session_id, tmux_session)
     elif event_type == "SessionStart":
         # Resume — preserve existing transferred flag (upsert doesn't
         # modify it on conflict).
@@ -297,6 +308,9 @@ async def ensure_session(
             transcript_path=transcript_path,
             tool=tool,
         )
+        mgr = get_pipe_manager()
+        if mgr is not None and tmux_session:
+            await mgr.attach(session_id, tmux_session)
     elif existing.get("model") is None and model:
         # Backfill model if we learn it from a later event
         await db.upsert_session(
@@ -357,6 +371,9 @@ async def mark_session_idle(
 ) -> None:
     await db.update_session_status(conn, session_id, "idle")
     await db.update_session_pending_tool(conn, session_id, None, None)
+    mgr = get_pipe_manager()
+    if mgr is not None:
+        await mgr.detach(session_id)
 
 
 _INTERRUPT_RE = None  # lazy-compiled regex (see _pane_shows_working)
@@ -406,6 +423,7 @@ async def _soft_idle_pass(
     )
     rows = await cursor.fetchall()
     marked = 0
+    mgr = get_pipe_manager()
     for row in rows:
         sid = row["session_id"]
         tmux_name = row["tmux_session"]
@@ -416,6 +434,8 @@ async def _soft_idle_pass(
             continue  # pane shows Claude is actively working
         await db.update_session_status(conn, sid, "idle")
         await db.update_session_pending_tool(conn, sid, None, None)
+        if mgr is not None:
+            await mgr.detach(sid)
         marked += 1
     if marked:
         logger.info("Soft-idle: demoted %d active sessions to idle", marked)
@@ -589,6 +609,9 @@ async def _discover_codex_tmux(
                 tool="codex",
             )
             _CODEX_PANE_HASH[session_id] = new_hash
+            mgr = get_pipe_manager()
+            if mgr is not None:
+                await mgr.attach(session_id, name)
             created += 1
             logger.info(
                 "Discovered codex session: tmux=%s → %s (model=%s)",
@@ -602,6 +625,9 @@ async def _discover_codex_tmux(
             _CODEX_PANE_HASH[sid] = new_hash
             if existing["status"] == "idle":
                 await db.update_session_status(conn, sid, "active")
+                mgr = get_pipe_manager()
+                if mgr is not None:
+                    await mgr.attach(sid, name)
                 logger.info("Reactivated codex session %s (pane changed)", sid)
             await db.touch_session(conn, sid)
 
@@ -623,10 +649,14 @@ async def _sweep_dead_tmux(conn: aiosqlite.Connection) -> int:
     )
     rows = await cursor.fetchall()
     marked = 0
+    mgr = get_pipe_manager()
     for row in rows:
         if row["tmux_session"] not in alive:
-            await db.update_session_status(conn, row["session_id"], "stopped")
-            await db.update_session_pending_tool(conn, row["session_id"], None, None)
+            sid = row["session_id"]
+            await db.update_session_status(conn, sid, "stopped")
+            await db.update_session_pending_tool(conn, sid, None, None)
+            if mgr is not None:
+                await mgr.detach(sid)
             marked += 1
     if marked:
         logger.info("Dead-tmux sweep: marked %d sessions stopped", marked)
@@ -1201,31 +1231,208 @@ def _parse_codex_approval_prompt(
     return (tool_name, detail, always_label)
 
 
-async def periodic_pending_check(
+async def _broadcast_pending_clear(
+    conn: aiosqlite.Connection, sid: str, tmux_name: str | None
+) -> None:
+    stats = await db.get_stats(conn)
+    await broadcaster.broadcast({
+        "type": "pending",
+        "session_id": sid,
+        "pending_tool": None,
+        "pending_detail": None,
+        "tmux_session": tmux_name,
+        "waiting_count": stats["waiting_sessions"],
+    })
+
+
+async def parse_one(
+    conn: aiosqlite.Connection, session_id: str
+) -> None:
+    """Parse one session's pane and update its pending_tool state.
+
+    Shared by both detection paths:
+    - Push: PanePipeManager fires this when a tmux pipe sees activity.
+    - Polling fallback: periodic_pending_check calls this every 60s for
+      every active session as a safety net.
+
+    Self-contained — fetches the session row itself, so callers don't
+    need to pre-load it. Returns silently if the session has gone away
+    or doesn't have a tmux.
+    """
+    session = await db.get_session(conn, session_id)
+    if session is None:
+        return
+    tmux_name = session.get("tmux_session")
+    if not tmux_name:
+        return
+    db_tool = session.get("pending_tool")
+
+    pane_text = await _tmux_capture(tmux_name)
+    if pane_text is None:
+        # tmux not reachable — clear any stale pending state.
+        if db_tool:
+            _APPROVED_SUPPRESS.pop(session_id, None)
+            await db.update_session_pending_tool(conn, session_id, None, None)
+            await tg_cancel_pending(session_id)
+            await _broadcast_pending_clear(conn, session_id, tmux_name)
+        return
+
+    if session.get("tool") == "codex":
+        parsed = _parse_codex_approval_prompt(pane_text)
+    else:
+        parsed = _parse_approval_prompt(pane_text)
+
+    if parsed is None:
+        if db_tool:
+            # Prompt gone — tool was approved or cancelled.
+            _APPROVED_SUPPRESS.pop(session_id, None)
+            await db.update_session_pending_tool(conn, session_id, None, None)
+            await tg_cancel_pending(session_id)
+            await _broadcast_pending_clear(conn, session_id, tmux_name)
+        return
+
+    pending_tool, pending_detail, always_label = parsed
+    sig = (pending_tool, pending_detail, always_label)
+
+    # Suppression: user just clicked Approve via the Hub and the pane
+    # UI hasn't dismissed yet. If signature still matches the approved
+    # one within the grace window, drop this tick to avoid re-firing
+    # the same notification.
+    suppress = _APPROVED_SUPPRESS.get(session_id)
+    if suppress is not None:
+        suppress_sig, until_ts = suppress
+        if time.time() < until_ts and sig == suppress_sig:
+            return
+        _APPROVED_SUPPRESS.pop(session_id, None)
+
+    has_always = always_label is not None
+    if (
+        pending_tool != db_tool
+        or pending_detail != session.get("pending_detail")
+        or always_label != session.get("pending_always_label")
+    ):
+        await db.update_session_pending_tool(
+            conn, session_id, pending_tool, pending_detail, always_label,
+        )
+        stats = await db.get_stats(conn)
+        await broadcaster.broadcast({
+            "type": "pending",
+            "session_id": session_id,
+            "pending_tool": pending_tool,
+            "pending_detail": pending_detail,
+            "has_always": has_always,
+            "always_label": always_label,
+            "tmux_session": tmux_name,
+            "waiting_count": stats["waiting_sessions"],
+        })
+        updated_session = await db.get_session(conn, session_id)
+        await tg_notify_pending(
+            session_id, updated_session or session, has_always, always_label,
+        )
+
+
+def make_pane_pipe_callback(conn: aiosqlite.Connection):
+    """Build the tmux→sid resolver callback for PanePipeManager.
+
+    The push path delivers tmux_name; we resolve to the newest active
+    session in that tmux (matches the dedupe rule used by the polling
+    fallback below) and run parse_one for it.
+    """
+    async def callback(tmux_name: str) -> None:
+        cursor = await conn.execute(
+            "SELECT session_id FROM sessions "
+            "WHERE tmux_session = ? AND status = 'active' "
+            "ORDER BY started_at DESC LIMIT 1",
+            (tmux_name,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        await parse_one(conn, row["session_id"])
+
+    return callback
+
+
+async def attach_all_active_pipes(conn: aiosqlite.Connection) -> int:
+    """Attach a pipe to every currently-active session with a tmux.
+
+    Used at hub startup so resumed-active sessions (sessions that were
+    active before a hub restart) get push observability immediately
+    instead of waiting for the next event from the agent. Also:
+    1. Cleans up orphan pipe files left over from prior hub instances.
+    2. Runs an initial parse_one pass so any approval prompt that's
+       already on screen is detected without waiting for the next
+       pane redraw.
+    """
+    mgr = get_pipe_manager()
+    if mgr is None:
+        return 0
+    cursor = await conn.execute(
+        "SELECT session_id, tmux_session FROM sessions "
+        "WHERE status = 'active' AND tmux_session IS NOT NULL"
+    )
+    rows = await cursor.fetchall()
+    keep: set[str] = {row["tmux_session"] for row in rows}
+    await mgr.cleanup_orphan_pipes(keep)
+    attached = 0
+    for row in rows:
+        ok = await mgr.attach(row["session_id"], row["tmux_session"])
+        if ok:
+            attached += 1
+            # Bootstrap: pane may already show an approval prompt. Push
+            # only fires on NEW activity, so without this initial parse
+            # an existing prompt could go undetected until the user
+            # interacts with the pane again.
+            await parse_one(conn, row["session_id"])
+    logger.info("attach_all_active_pipes: attached %d session(s)", attached)
+    return attached
+
+
+async def periodic_codex_discovery(
     conn: aiosqlite.Connection, hub_id: str
 ) -> None:
-    """Background task: check active sessions for pending tool approval every 3s.
+    """Background task: scan tmux panes for new Codex TUIs every 3s.
 
-    Uses tmux capture-pane as ground truth — if the terminal shows
-    "Do you want to proceed?", the session is waiting for approval.
-    No delay, no false positives.
-
-    Also runs the Codex discovery sweep at the top of each tick so
-    newly-started codex TUIs appear on the dashboard within ~3s.
+    Codex has no hook system, so the only way to discover a new codex
+    session is to scan tmux panes for its signature. This stays on a
+    fast cadence so newly-started codex sessions show up on the
+    dashboard quickly. (Phase 5 of the push-observability plan would
+    push this via tmux session-created hooks.)
     """
     while True:
         try:
             await asyncio.sleep(3)
             await _discover_codex_tmux(conn, hub_id, _LOCAL_HOSTNAME)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Error in codex discovery")
+
+
+async def periodic_pending_check(
+    conn: aiosqlite.Connection, hub_id: str
+) -> None:
+    """Background task: poll active sessions for pending tool approval.
+
+    Acts as a safety net behind the push-based PanePipeManager. Push
+    handles the common case in <200ms; this loop runs every 60s so
+    that anything push misses (inotify limits, watchfiles bugs, hub
+    restart gaps, panes the manager didn't get attached to) is still
+    detected within a minute.
+
+    `hub_id` is unused here but retained for symmetry with the codex
+    discovery task signature.
+    """
+    del hub_id  # symmetry only
+    while True:
+        try:
+            await asyncio.sleep(60)
             sessions = await db.get_sessions(conn, status="active")
 
             # Dedupe by tmux: when a parent + subagent share a tmux,
             # only the newest-started session owns the pending-tool
             # detection. Otherwise both would hit the same pane and
             # both would get marked waiting on the same prompt.
-            # get_sessions already sorts by last_seen_at DESC, so we
-            # sort explicitly by started_at here and keep the first
-            # occurrence per tmux.
             sessions_by_tmux_seen: set[str] = set()
             deduped: list[dict] = []
             for session in sorted(
@@ -1239,99 +1446,9 @@ async def periodic_pending_check(
                         continue
                     sessions_by_tmux_seen.add(tn)
                 deduped.append(session)
-            sessions = deduped
 
-            for session in sessions:
-                sid = session["session_id"]
-                tmux_name = session.get("tmux_session")
-                db_tool = session.get("pending_tool")
-
-                if not tmux_name:
-                    continue
-
-                pane_text = await _tmux_capture(tmux_name)
-
-                if pane_text is None:
-                    # tmux not reachable — clear pending if set
-                    if db_tool:
-                        await db.update_session_pending_tool(conn, sid, None, None)
-                        await tg_cancel_pending(sid)
-                        stats = await db.get_stats(conn)
-                        await broadcaster.broadcast({
-                            "type": "pending",
-                            "session_id": sid,
-                            "pending_tool": None,
-                            "pending_detail": None,
-                            "tmux_session": tmux_name,
-                            "waiting_count": stats["waiting_sessions"],
-                        })
-                    continue
-
-                if session.get("tool") == "codex":
-                    parsed = _parse_codex_approval_prompt(pane_text)
-                else:
-                    parsed = _parse_approval_prompt(pane_text)
-
-                if parsed:
-                    pending_tool, pending_detail, always_label = parsed
-                    sig = (pending_tool, pending_detail, always_label)
-
-                    # Suppression window: the user just clicked Approve in
-                    # the Hub, and claude/codex hasn't dismissed the pane
-                    # UI yet. If the parsed signature still matches what
-                    # we approved and we're within the grace window, skip
-                    # this tick — avoids re-broadcasting the already-
-                    # resolved approval as a "new" pending. When the
-                    # signature changes (new approval came up) or the
-                    # grace window expires, fall through to normal
-                    # compare+broadcast so we don't miss anything.
-                    suppress = _APPROVED_SUPPRESS.get(sid)
-                    if suppress is not None:
-                        suppress_sig, until_ts = suppress
-                        if time.time() < until_ts and sig == suppress_sig:
-                            continue
-                        _APPROVED_SUPPRESS.pop(sid, None)
-
-                    has_always = always_label is not None
-                    db_label = session.get("pending_always_label")
-                    if (
-                        pending_tool != db_tool
-                        or pending_detail != session.get("pending_detail")
-                        or always_label != db_label
-                    ):
-                        await db.update_session_pending_tool(
-                            conn, sid, pending_tool, pending_detail, always_label,
-                        )
-                        stats = await db.get_stats(conn)
-                        await broadcaster.broadcast({
-                            "type": "pending",
-                            "session_id": sid,
-                            "pending_tool": pending_tool,
-                            "pending_detail": pending_detail,
-                            "has_always": has_always,
-                            "always_label": always_label,
-                            "tmux_session": tmux_name,
-                            "waiting_count": stats["waiting_sessions"],
-                        })
-                        # Re-fetch session with updated pending fields
-                        updated_session = await db.get_session(conn, sid)
-                        await tg_notify_pending(
-                            sid, updated_session or session, has_always, always_label,
-                        )
-                elif db_tool:
-                    # Prompt gone — tool was approved or cancelled
-                    _APPROVED_SUPPRESS.pop(sid, None)
-                    await db.update_session_pending_tool(conn, sid, None, None)
-                    await tg_cancel_pending(sid)
-                    stats = await db.get_stats(conn)
-                    await broadcaster.broadcast({
-                        "type": "pending",
-                        "session_id": sid,
-                        "pending_tool": None,
-                        "pending_detail": None,
-                        "tmux_session": tmux_name,
-                        "waiting_count": stats["waiting_sessions"],
-                    })
+            for session in deduped:
+                await parse_one(conn, session["session_id"])
 
         except asyncio.CancelledError:
             break
