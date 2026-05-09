@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Monitor — Agent Hub{% endblock %}
+{% block body_class %}min-h-screen flex flex-col{% endblock %}
+
+{% block content %}
+<div class="mb-3 flex items-center gap-3">
+  <a href="/" class="text-sm text-gray-400 hover:text-white transition">&larr; Dashboard</a>
+  <span class="text-gray-600">/</span>
+  <span class="text-sm font-semibold text-white">Monitor</span>
+  <span id="agent-status-pill" class="ml-auto text-xs px-2 py-0.5 rounded bg-gray-700/50 text-gray-400">checking…</span>
+</div>
+
+<div id="chat-pane" class="flex-1 min-h-[60vh] bg-surface-light border border-gray-700/30 rounded-lg flex flex-col overflow-hidden">
+  <div id="chat-log" class="flex-1 overflow-y-auto px-3 sm:px-5 py-4 space-y-4 text-sm">
+    <div class="text-gray-500 text-center text-xs italic py-8">
+      Monitor 是只读助手，可以查询 sessions / 事件 / 统计。它不会自主决策或修改任何状态。<br>
+      Try: <span class="text-accent-light">"hub 上现在有多少 active session?"</span> 或 <span class="text-accent-light">"找一下最近用 Bash 跑 git 的事件"</span>
+    </div>
+  </div>
+  <form id="chat-form" class="shrink-0 border-t border-gray-700/30 px-3 py-2 flex gap-2">
+    <textarea id="chat-input"
+              class="flex-1 bg-surface text-gray-200 text-sm rounded px-3 py-2 border border-gray-700/50 focus:border-accent focus:outline-none resize-none"
+              rows="2"
+              placeholder="问 Monitor (Enter 发送, Shift+Enter 换行)..."></textarea>
+    <button id="chat-send" type="submit"
+            class="self-end text-xs sm:text-sm px-4 py-2 rounded bg-accent hover:bg-accent-light text-white font-semibold transition">
+      Send
+    </button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const chatLog = document.getElementById('chat-log');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+const chatForm = document.getElementById('chat-form');
+const statusPill = document.getElementById('agent-status-pill');
+
+// Conversation history kept browser-side; sent to server each turn.
+let history = [];
+
+fetch('/api/agent/status').then(r => r.json()).then(s => {
+  if (s.configured) {
+    statusPill.textContent = `${s.model}`;
+    statusPill.className = 'ml-auto text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300';
+  } else {
+    statusPill.textContent = 'not configured';
+    statusPill.className = 'ml-auto text-xs px-2 py-0.5 rounded bg-red-900/40 text-red-300';
+  }
+}).catch(() => {
+  statusPill.textContent = 'offline';
+  statusPill.className = 'ml-auto text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-500';
+});
+
+function appendMessage(role, content, opts = {}) {
+  const wrap = document.createElement('div');
+  if (role === 'user') {
+    wrap.className = 'flex justify-end';
+    wrap.innerHTML = `<div class="max-w-[80%] bg-accent/30 text-white rounded-lg px-3 py-2 whitespace-pre-wrap break-words"></div>`;
+    wrap.firstElementChild.textContent = content;
+  } else if (role === 'assistant') {
+    wrap.className = '';
+    wrap.innerHTML = `<div class="max-w-full text-gray-200 rounded-lg px-1 py-1 prose prose-invert prose-sm break-words"></div>`;
+    wrap.firstElementChild.innerHTML = renderMarkdown(content);
+  } else if (role === 'tool-trace') {
+    wrap.className = 'text-xs text-gray-500 italic font-mono pl-2 border-l-2 border-gray-700/50';
+    wrap.textContent = content;
+  } else if (role === 'error') {
+    wrap.className = 'text-sm text-red-400 italic';
+    wrap.textContent = content;
+  }
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return wrap;
+}
+
+// Lightweight markdown rendering (tables, code, bold/italic, lists, line breaks).
+// Keeps things to the few patterns DeepSeek-style replies use most.
+function renderMarkdown(text) {
+  if (!text) return '';
+  // Escape HTML first
+  let out = text.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  // Code blocks ```...```
+  out = out.replace(/```([\s\S]*?)```/g, (_, code) =>
+    `<pre class="bg-surface rounded p-2 my-2 overflow-x-auto text-xs"><code>${code}</code></pre>`);
+  // Inline code `...`
+  out = out.replace(/`([^`\n]+)`/g, '<code class="bg-surface rounded px-1 text-xs">$1</code>');
+  // Tables — naive: detect blocks of |...|...| lines separated by | --- | line
+  out = out.replace(/((?:^\|.+\|\s*$\n?)+)/gm, block => {
+    const lines = block.trim().split('\n');
+    if (lines.length < 2 || !/^\|[\s\-:|]+\|$/.test(lines[1])) return block;
+    const head = lines[0].split('|').slice(1, -1).map(c => c.trim());
+    const body = lines.slice(2).map(r => r.split('|').slice(1, -1).map(c => c.trim()));
+    let html = '<table class="my-2 border-collapse text-xs"><thead><tr>';
+    for (const h of head) html += `<th class="border border-gray-700/50 px-2 py-1 text-left bg-surface">${h}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const row of body) {
+      html += '<tr>';
+      for (const cell of row) html += `<td class="border border-gray-700/50 px-2 py-1">${cell}</td>`;
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+  });
+  // Bold **text**
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  // Italic *text* / _text_
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  // Lists — paragraphs starting with - or *
+  out = out.replace(/(^|\n)([-*]) (.+)/g, '$1<li class="ml-4 list-disc">$3</li>');
+  // Newlines
+  out = out.replace(/\n/g, '<br>');
+  return out;
+}
+
+async function send() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  appendMessage('user', text);
+  chatInput.value = '';
+  chatInput.disabled = true;
+  chatSend.disabled = true;
+  const placeholder = appendMessage('assistant', '_thinking…_');
+  try {
+    const res = await fetch('/api/agent/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text, history}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      placeholder.remove();
+      appendMessage('error', data.detail || res.statusText);
+      return;
+    }
+    placeholder.remove();
+    if ((data.tool_trace || []).length) {
+      const names = data.tool_trace.map(t => `${t.name}(${JSON.stringify(t.args)})`).join('  →  ');
+      appendMessage('tool-trace', '🔧 ' + names);
+    }
+    appendMessage('assistant', data.reply);
+    history = data.history || history;
+  } catch (e) {
+    placeholder.remove();
+    appendMessage('error', 'Network error: ' + e.message);
+  } finally {
+    chatInput.disabled = false;
+    chatSend.disabled = false;
+    chatInput.focus();
+  }
+}
+
+chatForm.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  send();
+});
+
+chatInput.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    send();
+  }
+});
+
+chatInput.focus();
+</script>
+{% endblock %}

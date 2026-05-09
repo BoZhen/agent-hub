@@ -35,10 +35,16 @@
   <!-- LEFT ROW 1: nav scoped to left column -->
   <nav class="lg:col-start-1 lg:row-start-1 shrink-0 border-b border-gray-700/50 py-3 flex items-center justify-between">
     <a href="/" class="text-lg font-bold text-accent-light hover:text-white transition">Agent Hub</a>
+    <div class="flex items-center gap-2">
+    <a href="/agent"
+       class="text-xs sm:text-sm px-3 py-1 rounded-md bg-gradient-to-b from-emerald-500 to-emerald-700 text-white font-bold border border-emerald-900/60 hover:from-white hover:to-emerald-200 hover:text-emerald-700 active:translate-y-px transition-all">
+      Monitor
+    </a>
     <a href="/tmux"
        class="fancy-btn text-xs sm:text-sm px-3 py-1 rounded-md bg-gradient-to-b from-pink-400 to-pink-600 text-white font-bold border border-pink-900/60 hover:from-white hover:to-pink-200 hover:text-pink-600 active:translate-y-px transition-all">
       Tmux
     </a>
+    </div>
   </nav>
 
   <!-- LEFT ROW 2: compact stats row + session list -->
@@ -132,6 +138,7 @@
               class="absolute inset-0 w-full h-full hidden"
               title="Session terminal preview"
               loading="lazy"
+              allow="clipboard-read; clipboard-write"
               referrerpolicy="no-referrer"></iframe>
     </div>
   </div>

@@ -12,3 +12,6 @@ build/
 uv.lock
 certs/
 .omx/
+.env
+.env.local
+.env.*.local

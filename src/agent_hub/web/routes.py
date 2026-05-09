@@ -194,6 +194,15 @@ async def idle_sessions(request: Request):
     )
 
 
+@router.get("/agent", response_class=HTMLResponse)
+async def agent_chat_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="agent.html",
+        context={"current_page": "agent"},
+    )
+
+
 @router.get("/tmux", response_class=HTMLResponse)
 async def tmux_hub(request: Request):
     terminal_url = _terminal_url(request)
