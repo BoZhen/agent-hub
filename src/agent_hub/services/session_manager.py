@@ -1433,8 +1433,12 @@ async def install_tmux_session_hook(port: int, *, verbose: bool = False) -> bool
     the periodic re-install doesn't flood the journal.
     """
     url = f"http://127.0.0.1:{port}/api/internal/tmux-discovered"
+    # `curl -o /dev/null` is critical: tmux's `run-shell -b` dumps the
+    # subprocess stdout into a copy-mode buffer for the new session, so
+    # without this the user's freshly-created tmux opens straight into
+    # copy mode displaying the endpoint's JSON response.
     cmd = (
-        f'run-shell -b "curl -s --max-time 2 -X POST '
+        f'run-shell -b "curl -s --max-time 2 -o /dev/null -X POST '
         f'{url}?name=#{{session_name}}"'
     )
     try:
