@@ -28,6 +28,7 @@ from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
 from agent_hub.services.session_manager import (
     attach_all_active_pipes,
+    install_tmux_session_hook,
     make_pane_pipe_callback,
     periodic_codex_discovery,
     periodic_pending_check,
@@ -78,44 +79,6 @@ def _augment_path() -> None:
 _augment_path()
 
 
-async def _install_tmux_session_hook(port: int) -> bool:
-    """Bind a `session-created` hook in the user's tmux server so each
-    new tmux session POSTs to `/api/internal/tmux-discovered` and we
-    discover codex TUIs in ~50 ms instead of waiting on the 60 s poll.
-
-    `set-hook -g` (without `-a`) replaces any prior binding from us;
-    rerunning on every hub restart is idempotent. Most users don't have
-    a `session-created` hook of their own — if they do, this overwrites
-    it (consciously documented trade-off; the polling fallback covers
-    the failure case anyway).
-
-    `run-shell -b` runs curl in tmux's background subprocess pool so a
-    new-session command never blocks on the hub being slow / down.
-    `--max-time` bounds the curl wait if the hub is unreachable.
-    """
-    url = f"http://127.0.0.1:{port}/api/internal/tmux-discovered"
-    cmd = (
-        f'run-shell -b "curl -s --max-time 2 -X POST '
-        f'{url}?name=#{{session_name}}"'
-    )
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "set-hook", "-g", "session-created", cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
-    except Exception:
-        logger.exception("Failed to invoke tmux for set-hook")
-        return False
-    if proc.returncode != 0:
-        logger.warning(
-            "tmux set-hook session-created failed: %s",
-            err.decode(errors="replace").strip() if err else "<no stderr>",
-        )
-        return False
-    logger.info("Installed tmux session-created hook → %s", url)
-    return True
 
 
 def create_app(config: HubConfig) -> FastAPI:
@@ -139,12 +102,12 @@ def create_app(config: HubConfig) -> FastAPI:
             app.state.config = config
             mcp_set_db(conn)
             sweep_task = asyncio.create_task(periodic_sweep(conn))
-            # Codex discovery stays on a fast (3s) cadence — codex has
-            # no event hook so this is the only way to detect a new
-            # codex TUI in tmux. Approval-pending detection moves to
-            # push-based observability with a 60s polling fallback.
+            # Codex discovery: push (tmux session-created hook) is the
+            # fast path; this 60 s polling task is the safety net AND
+            # re-asserts the hook each tick to self-heal across tmux
+            # server restarts.
             codex_task = asyncio.create_task(
-                periodic_codex_discovery(conn, config.hub_id)
+                periodic_codex_discovery(conn, config.hub_id, config.port)
             )
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
             restore_task = asyncio.create_task(restore_on_startup(conn))
@@ -158,7 +121,7 @@ def create_app(config: HubConfig) -> FastAPI:
             set_pipe_manager(pipe_manager)
             app.state.pipe_manager = pipe_manager
             await attach_all_active_pipes(conn)
-            await _install_tmux_session_hook(config.port)
+            await install_tmux_session_hook(config.port, verbose=True)
             logger.info("Database initialized: %s", config.db_path)
             await start_bot(config, conn)
             yield

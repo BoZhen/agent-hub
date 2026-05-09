@@ -1415,20 +1415,67 @@ async def attach_all_active_pipes(conn: aiosqlite.Connection) -> int:
     return attached
 
 
+async def install_tmux_session_hook(port: int, *, verbose: bool = False) -> bool:
+    """Bind a `session-created` hook in the user's tmux server so each
+    new tmux session POSTs to `/api/internal/tmux-discovered` and we
+    discover codex TUIs in ~50 ms instead of waiting on the 60 s poll.
+
+    Idempotent: ``set-hook -g`` (no ``-a``) replaces any prior binding
+    from us. Run on every hub restart AND on every codex-discovery tick
+    so we self-heal when the tmux server is restarted (server lifecycle
+    is independent of the hub's — a fresh server starts with no hooks).
+
+    ``run-shell -b`` runs curl in tmux's background subprocess pool so
+    a new-session command never blocks on the hub being slow / down.
+    ``--max-time`` bounds the curl wait if the hub is unreachable.
+
+    ``verbose=True`` logs the install on success; default is silent so
+    the periodic re-install doesn't flood the journal.
+    """
+    url = f"http://127.0.0.1:{port}/api/internal/tmux-discovered"
+    cmd = (
+        f'run-shell -b "curl -s --max-time 2 -X POST '
+        f'{url}?name=#{{session_name}}"'
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "set-hook", "-g", "session-created", cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+    except Exception:
+        # tmux binary missing or otherwise unavailable. The polling
+        # fallback below still works; just log so the user knows push
+        # discovery is degraded.
+        logger.warning("tmux set-hook invocation failed (push discovery off)")
+        return False
+    if proc.returncode != 0:
+        # Most common cause: no tmux server running yet. We retry on
+        # every codex-discovery tick, so this self-heals as soon as
+        # the user starts their first tmux.
+        return False
+    if verbose:
+        logger.info("Installed tmux session-created hook → %s", url)
+    return True
+
+
 async def periodic_codex_discovery(
-    conn: aiosqlite.Connection, hub_id: str
+    conn: aiosqlite.Connection, hub_id: str, hub_port: int,
 ) -> None:
     """Polling fallback for codex discovery — scans all alive tmuxes
     every 60 s.
 
     Push (tmux ``session-created`` hook → ``/api/internal/tmux-discovered``)
     is the primary path and detects new codex panes within ~50 ms. This
-    loop is the safety net for anything push misses (hub down at the
-    moment of tmux creation, hook unset, etc.).
+    loop is the safety net for anything push misses, AND it re-asserts
+    the session-created hook each tick so a tmux server restart (which
+    drops global hooks) self-heals within ~60 s.
     """
     while True:
         try:
             await asyncio.sleep(60)
+            await install_tmux_session_hook(hub_port)
             await _discover_codex_tmux(conn, hub_id, _LOCAL_HOSTNAME)
         except asyncio.CancelledError:
             break
