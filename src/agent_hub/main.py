@@ -34,6 +34,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
+# watchfiles' "N changes detected" lines fire at every push tick — a
+# busy claude session emits dozens per minute and drowns out useful log
+# entries. WARNING+ is enough; we never need to see normal activity.
+logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
