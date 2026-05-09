@@ -20,6 +20,14 @@
   </script>
   <style>
     body { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; }
+    /* Phone-width scaling. Tailwind's text-xs / text-sm are 12-14 px,
+       which is hard to read on a 4-5" phone. Bumping html font-size
+       scales every rem-based Tailwind class proportionally without
+       touching individual classes. Only kicks in below the `sm:`
+       breakpoint so desktop sizing is unchanged. */
+    @media screen and (max-width: 639px) {
+      html { font-size: 18px; }
+    }
     .fade-in { animation: fadeIn 0.3s ease-in; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
     .status-active { color: #34d399; }
