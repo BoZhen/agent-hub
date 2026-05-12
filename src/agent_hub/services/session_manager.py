@@ -483,7 +483,8 @@ async def _list_alive_tmux_names() -> set[str]:
 # periodic pane snapshots. _soft_idle_pass (tool-agnostic) handles the
 # reverse when a codex pane truly sits still for 10 min.
 
-_CODEX_MODEL_RE = _re.compile(r"(gpt-[\w.-]+codex(?:\s+\w+)?)")
+_CODEX_MODEL_RE = _re.compile(r"(gpt-[\d.]+(?:-codex)?(?:\s+\w+)?)")
+_CODEX_GPT_RE = _re.compile(r"gpt-[\d.]")
 _CODEX_PANE_HASH: dict[str, str] = {}
 
 
@@ -497,16 +498,20 @@ def _is_codex_pane(pane_text: str) -> bool:
 
     Two independent signals; either is sufficient. The welcome box
     (`>_ OpenAI Codex (vX.Y.Z)`) is visible while the pane hasn't
-    scrolled past it. The status line — `gpt-X-codex ... · weekly N%`
-    — is always anchored at the bottom. Claude panes don't carry a
-    `weekly` token, so its presence in the tail plus any mention of
-    `codex` is a reliable fingerprint.
+    scrolled past it. The status line — `gpt-X[.Y][-codex] level · cwd
+    · Context N% used · Yh M% · weekly N%` — is always anchored at the
+    bottom. Codex 5.5 dropped the `-codex` suffix from the model name
+    (so `"codex" in tail` no longer holds for narrow panes that
+    truncate the trailing version), but the `gpt-X.Y` + `weekly` pair
+    on the same line remains a unique codex fingerprint — Claude
+    panes show neither.
     """
     if "OpenAI Codex" in pane_text:
         return True
-    lines = pane_text.splitlines()
-    tail = "\n".join(lines[-8:])
-    return "weekly" in tail and "codex" in tail.lower()
+    for line in pane_text.splitlines()[-8:]:
+        if "weekly" in line and _CODEX_GPT_RE.search(line):
+            return True
+    return False
 
 
 def _extract_codex_model(pane_text: str) -> str | None:
