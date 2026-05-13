@@ -410,10 +410,10 @@ def _pane_shows_working(pane_text: str) -> bool:
 
 
 async def _is_claude_thinking(tmux_name: str) -> bool:
-    pane_text = await _tmux_capture(tmux_name)
-    if pane_text is None:
+    panes = await _tmux_capture(tmux_name)
+    if not panes:
         return False
-    return _pane_shows_working(pane_text)
+    return any(_pane_shows_working(p) for p in panes)
 
 
 async def _soft_idle_pass(
@@ -496,20 +496,25 @@ def _hash_pane(text: str) -> str:
 def _is_codex_pane(pane_text: str) -> bool:
     """Detect if a tmux pane is running Codex TUI.
 
-    Two independent signals; either is sufficient. The welcome box
-    (`>_ OpenAI Codex (vX.Y.Z)`) is visible while the pane hasn't
-    scrolled past it. The status line — `gpt-X[.Y][-codex] level · cwd
-    · Context N% used · Yh M% · weekly N%` — is always anchored at the
-    bottom. Codex 5.5 dropped the `-codex` suffix from the model name
-    (so `"codex" in tail` no longer holds for narrow panes that
-    truncate the trailing version), but the `gpt-X.Y` + `weekly` pair
-    on the same line remains a unique codex fingerprint — Claude
-    panes show neither.
+    Pane width drives which tokens survive in the bottom status line:
+        - Wide panes (≥90 cols): `gpt-X.Y level · cwd · Context N% used
+          · Yh M% · weekly N% [· vX.Y.Z]` — every token visible.
+        - Narrow panes (~42 cols): only `gpt-X.Y level · cwd…` fits;
+          `weekly` and everything after it is truncated.
+    The unifying signal across both is `gpt-X.Y` plus the middle-dot
+    separator (U+00B7), which codex uses to delimit status segments;
+    Claude's status line uses `│` (U+2502) and never starts with
+    `gpt-`, so this pair is a Codex-only fingerprint. The welcome box
+    (`>_ OpenAI Codex`) is an additional fast path while it hasn't
+    scrolled off.
+
+    Caller passes one pane's text; checks the last 8 lines so a stray
+    `gpt- · …` mention in chat scrollback doesn't false-positive.
     """
     if "OpenAI Codex" in pane_text:
         return True
     for line in pane_text.splitlines()[-8:]:
-        if "weekly" in line and _CODEX_GPT_RE.search(line):
+        if _CODEX_GPT_RE.search(line) and "·" in line:
             return True
     return False
 
@@ -580,17 +585,21 @@ async def discover_codex_for_tmux(
         # Claude tmux — leave it alone.
         return False
 
-    pane = await _tmux_capture(name)
-    if pane is None:
+    panes = await _tmux_capture(name)
+    if not panes:
         return False
 
     # For brand-new tmux (not yet in DB) we need the codex signature
     # to decide whether this is even a codex session. Once recorded in
-    # DB as codex we trust that: the welcome-box / `weekly` status-line
+    # DB as codex we trust that: the welcome-box / status-line
     # signature can scroll off in narrow panes with a tall approval UI,
     # and we still want to track activity in that state.
-    if existing is None and not _is_codex_pane(pane):
+    # In a multi-pane session, pick the pane that actually looks like
+    # codex (user may keep codex in a non-active split).
+    codex_pane = next((p for p in panes if _is_codex_pane(p)), None)
+    if existing is None and codex_pane is None:
         return False
+    pane = codex_pane if codex_pane is not None else panes[0]
 
     new_hash = _hash_pane(pane)
 
@@ -724,17 +733,43 @@ async def periodic_sweep(conn: aiosqlite.Connection) -> None:
             logger.exception("Error in session sweep")
 
 
-async def _tmux_capture(name: str) -> str | None:
-    """Capture tmux pane content. Returns text or None if unavailable."""
+async def _tmux_capture(name: str) -> list[str] | None:
+    """Capture visible text per pane for a tmux session.
+
+    `tmux capture-pane -t <name>:` only sees the active pane, so when
+    a user splits a window (codex in pane 0, shell in pane 1) the AI
+    CLI is invisible to discovery and approval detection. We list
+    every pane via `tmux list-panes -s` and return one element per
+    pane so callers can run fingerprints / parsers per-pane and use
+    the *first* match — keeps pane-boundary semantics (e.g. "last 8
+    lines" really means each pane's tail, not the joined text's tail).
+
+    Returns the list of pane texts, or None if listing fails / the
+    session has no panes.
+    """
     proc = await asyncio.create_subprocess_exec(
-        "tmux", "capture-pane", "-t", f"{name}:", "-p",
+        "tmux", "list-panes", "-t", name, "-s",
+        "-F", "#{pane_id}",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
     stdout, _ = await proc.communicate()
     if proc.returncode != 0:
         return None
-    return stdout.decode("utf-8", errors="replace")
+    pane_ids = [p for p in stdout.decode().split() if p.startswith("%")]
+    if not pane_ids:
+        return None
+    parts: list[str] = []
+    for pid in pane_ids:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "capture-pane", "-t", pid, "-p",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        if proc.returncode == 0:
+            parts.append(out.decode("utf-8", errors="replace"))
+    return parts or None
 
 
 _APPROVAL_PATTERNS = [
@@ -1299,8 +1334,8 @@ async def parse_one(
         return
     db_tool = session.get("pending_tool")
 
-    pane_text = await _tmux_capture(tmux_name)
-    if pane_text is None:
+    panes = await _tmux_capture(tmux_name)
+    if not panes:
         # tmux not reachable — clear any stale pending state.
         if db_tool:
             _APPROVED_SUPPRESS.pop(session_id, None)
@@ -1309,10 +1344,20 @@ async def parse_one(
             await _broadcast_pending_clear(conn, session_id, tmux_name)
         return
 
-    if session.get("tool") == "codex":
-        parsed = _parse_codex_approval_prompt(pane_text)
-    else:
-        parsed = _parse_approval_prompt(pane_text)
+    # Approval prompts render in exactly one pane. Run per-pane and
+    # take the first match so split layouts (codex in pane 0, shell
+    # in pane 1) still surface a real prompt.
+    parser = (
+        _parse_codex_approval_prompt
+        if session.get("tool") == "codex"
+        else _parse_approval_prompt
+    )
+    parsed = None
+    for p in panes:
+        result = parser(p)
+        if result is not None:
+            parsed = result
+            break
 
     if parsed is None:
         if db_tool:

@@ -65,6 +65,30 @@ def _unsafe(stem: str) -> str:
     return stem.replace("%2F", "/")
 
 
+async def _list_pane_ids(tmux_name: str) -> list[str]:
+    """Return every `%<id>` pane in this tmux session.
+
+    Sessions with split windows have multiple panes; piping only the
+    active pane (via `-t name:`) misses codex/claude running in a
+    split. Returns an empty list if the session is gone or listing
+    failed.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "list-panes", "-t", tmux_name, "-s",
+            "-F", "#{pane_id}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    except Exception:
+        logger.exception("tmux list-panes failed for %s", tmux_name)
+        return []
+    if proc.returncode != 0:
+        return []
+    return [p for p in out.decode().split() if p.startswith("%")]
+
+
 @dataclass
 class PipeContext:
     tmux_name: str
@@ -188,15 +212,18 @@ class PanePipeManager:
             tmux_name = _unsafe(path.stem)
             if tmux_name in keep_tmux_names:
                 continue
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "tmux", "pipe-pane", "-t", f"{tmux_name}:",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.communicate()
-            except Exception:
-                pass
+            # Disable pipe-pane on every pane — the orphan may have
+            # been a multi-pane session piped from a prior hub run.
+            for pid in await _list_pane_ids(tmux_name):
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "tmux", "pipe-pane", "-t", pid,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc.communicate()
+                except Exception:
+                    pass
             try:
                 path.unlink(missing_ok=True)
                 cleaned += 1
@@ -216,29 +243,46 @@ class PanePipeManager:
             logger.exception("Cannot prepare pipe file %s", path)
             return False
 
+        pane_ids = await _list_pane_ids(tmux_name)
+        if not pane_ids:
+            logger.warning("No panes found for tmux=%s; skipping pipe", tmux_name)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
         # tmux pipe-pane -o: only-open. If a pipe is already attached
         # (e.g. left over from a prior hub instance writing to the same
         # path), this is a no-op — desirable, since data continues to
-        # flow into the file we just truncated.
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "tmux", "pipe-pane", "-o",
-                "-t", f"{tmux_name}:",
-                f"cat >> {path!s}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, err = await proc.communicate()
-        except Exception:
-            logger.exception("tmux pipe-pane invocation failed for %s", tmux_name)
-            return False
+        # flow into the file we just truncated. We enable a pipe on
+        # every pane so codex/claude running in a non-active split is
+        # still tracked; all writers append to one log via `cat >>`.
+        any_ok = False
+        for pid in pane_ids:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "pipe-pane", "-o",
+                    "-t", pid,
+                    f"cat >> {path!s}",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await proc.communicate()
+            except Exception:
+                logger.exception("tmux pipe-pane invocation failed for %s pane %s",
+                                 tmux_name, pid)
+                continue
+            if proc.returncode != 0:
+                logger.warning(
+                    "tmux pipe-pane returned %d for %s pane %s: %s",
+                    proc.returncode, tmux_name, pid,
+                    err.decode(errors="replace").strip() if err else "",
+                )
+                continue
+            any_ok = True
 
-        if proc.returncode != 0:
-            logger.warning(
-                "tmux pipe-pane returned %d for %s: %s",
-                proc.returncode, tmux_name,
-                err.decode(errors="replace").strip() if err else "",
-            )
+        if not any_ok:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -246,7 +290,8 @@ class PanePipeManager:
             return False
 
         self._pipes[tmux_name] = PipeContext(tmux_name=tmux_name, path=path)
-        logger.info("Opened pipe for tmux=%s → %s", tmux_name, path)
+        logger.info("Opened pipe for tmux=%s (%d pane(s)) → %s",
+                    tmux_name, len(pane_ids), path)
         return True
 
     async def _close_pipe(self, tmux_name: str) -> None:
@@ -255,16 +300,18 @@ class PanePipeManager:
             return
         if ctx.trailing_handle is not None and not ctx.trailing_handle.cancelled():
             ctx.trailing_handle.cancel()
-        # Toggle pipe off — best-effort (tmux may already be gone).
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "tmux", "pipe-pane", "-t", f"{tmux_name}:",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.communicate()
-        except Exception:
-            pass
+        # Toggle pipe off on every pane — best-effort (tmux may already
+        # be gone, or panes may have been closed since open).
+        for pid in await _list_pane_ids(tmux_name):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "tmux", "pipe-pane", "-t", pid,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.communicate()
+            except Exception:
+                pass
         try:
             ctx.path.unlink(missing_ok=True)
         except OSError:

@@ -64,8 +64,8 @@ async def _enrich_running(conn, session: dict) -> dict:
     # both emit this marker, so one check covers both tools.
     tmux_name = session.get("tmux_session")
     if tmux_name:
-        pane = await _tmux_capture(tmux_name)
-        if pane is None or not _pane_shows_working(pane):
+        panes = await _tmux_capture(tmux_name)
+        if not panes or not any(_pane_shows_working(p) for p in panes):
             return session
 
     session["running_tool"] = last.get("tool_name") or "Tool"
