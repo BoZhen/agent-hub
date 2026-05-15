@@ -88,6 +88,21 @@
         + New
       </button>
     </div>
+    <div class="shrink-0 flex items-center gap-2 mb-3 text-xs">
+      <span class="text-gray-500 uppercase tracking-wide mr-1">Filter:</span>
+      <button type="button" data-tool-filter="all"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-accent-light bg-accent/30 text-white font-semibold transition">
+        All
+      </button>
+      <button type="button" data-tool-filter="claude"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-gray-700/50 bg-surface-light text-gray-400 hover:text-white transition">
+        Claude
+      </button>
+      <button type="button" data-tool-filter="codex"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-gray-700/50 bg-surface-light text-gray-400 hover:text-white transition">
+        Codex
+      </button>
+    </div>
     <div class="session-scroll lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1 lg:-mr-1">
       <div id="tab-panel-native" class="space-y-2 sm:space-y-3">
         {% for s in sessions_native %}
@@ -414,6 +429,11 @@ async function ensureCardExists(sessionId) {
       } else {
         panel.prepend(newCard);
       }
+      // Re-apply the current tool filter so a freshly inserted card
+      // doesn't bypass the user's selection.
+      const f = localStorage.getItem(FILTER_KEY) || 'all';
+      const fam = newCard.dataset.toolFamily || 'other';
+      if (f !== 'all' && f !== fam) newCard.classList.add('hidden');
     }
   } catch (e) {
     console.error('ensureCardExists failed', e);
@@ -513,6 +533,42 @@ function escapeHtml(s) {
 }
 
 // Tab switching
+// ── Tool filter (All / Claude / Codex) ────────────────────────────
+const FILTER_KEY = 'agentHubToolFilter';
+
+function applyToolFilter(filter) {
+  // Apply across both native and tmux tab panels so the choice is
+  // global. Filtered-out cards get `tool-filtered` so we don't
+  // collide with other hidden states (e.g. parent collapse).
+  document.querySelectorAll('[id^="card-"]').forEach(card => {
+    const fam = card.dataset.toolFamily || 'other';
+    const show = filter === 'all' || filter === fam;
+    card.classList.toggle('hidden', !show);
+  });
+  document.querySelectorAll('.tool-filter-btn').forEach(btn => {
+    const active = btn.dataset.toolFilter === filter;
+    btn.classList.toggle('border-accent-light', active);
+    btn.classList.toggle('bg-accent/30', active);
+    btn.classList.toggle('text-white', active);
+    btn.classList.toggle('font-semibold', active);
+    btn.classList.toggle('border-gray-700/50', !active);
+    btn.classList.toggle('bg-surface-light', !active);
+    btn.classList.toggle('text-gray-400', !active);
+  });
+}
+
+document.querySelectorAll('.tool-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const f = btn.dataset.toolFilter;
+    localStorage.setItem(FILTER_KEY, f);
+    applyToolFilter(f);
+  });
+});
+
+// Apply saved filter on load (after cards exist) and re-apply when
+// the WS handler injects new cards via ensureCardExists.
+applyToolFilter(localStorage.getItem(FILTER_KEY) || 'all');
+
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const name = btn.dataset.tab;

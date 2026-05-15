@@ -1,110 +1,209 @@
 {% extends "base.html" %}
-{% import "_macros.html" as icons %}
+{% from "_session_card.html" import session_card %}
 {% block title %}Idle Sessions — Agent Hub{% endblock %}
+{% block main_width %}w-full max-w-none{% endblock %}
+{% block main_px %}px-2 sm:px-3{% endblock %}
+{% block body_class %}dash-page min-h-screen lg:h-screen lg:overflow-hidden flex flex-col{% endblock %}
+{% block main_py %}py-3 lg:py-0{% endblock %}
+{% block main_extra_class %}lg:flex-1 lg:min-h-0 lg:overflow-hidden flex flex-col{% endblock %}
+{% block nav %}{% endblock %}
 
 {% block content %}
-<div class="mb-4 sm:mb-6">
-  <a href="/" class="text-sm text-gray-400 hover:text-white transition py-2 inline-block">&larr; Dashboard</a>
-</div>
+<div id="dash-grid" class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:grid-rows-[auto_minmax(0,1fr)] gap-3 sm:gap-4 lg:flex-1 lg:min-h-0">
 
-<h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">
-  Idle Sessions ({{ sessions | length }})
-</h2>
+  <!-- LEFT ROW 1: nav -->
+  <nav class="lg:col-start-1 lg:row-start-1 shrink-0 border-b border-gray-700/50 py-3 flex items-center justify-between">
+    <a href="/" class="text-sm text-gray-400 hover:text-white transition">&larr; Dashboard</a>
+    <span class="text-sm font-semibold text-white">Idle Sessions ({{ sessions | length }})</span>
+  </nav>
 
-<div id="sessions-list" class="space-y-2 sm:space-y-3">
-  {% for s in sessions %}
-  {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
-  <div id="card-{{ s.session_id }}" class="{% if is_yolo %}yolo-card{% else %}bg-surface-light hover:bg-surface-lighter{% endif %} rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative">
-    <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
-      <span class="hidden sm:inline text-xs text-gray-500">{{ s.session_id[:12] }}</span>
-      <button type="button"
-              onclick="togglePin('{{ s.session_id }}', this)"
-              data-pinned="{{ 1 if s.pinned else 0 }}"
-              data-status="{{ s.status }}"
-              class="pin-btn p-0.5 {% if s.pinned %}text-accent-light hover:text-white{% else %}text-gray-600 hover:text-gray-300{% endif %} transition"
-              title="{% if s.pinned %}Unpin from dashboard{% else %}Pin to dashboard{% endif %}">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-        </svg>
+  <!-- LEFT ROW 2: filter + session list -->
+  <div id="sessions-pane" class="lg:col-start-1 lg:row-start-2 min-w-0 flex flex-col lg:min-h-0">
+    <div class="shrink-0 flex items-center gap-2 mb-3 text-xs">
+      <span class="text-gray-500 uppercase tracking-wide mr-1">Filter:</span>
+      <button type="button" data-tool-filter="all"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-accent-light bg-accent/30 text-white font-semibold transition">
+        All
+      </button>
+      <button type="button" data-tool-filter="claude"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-gray-700/50 bg-surface-light text-gray-400 hover:text-white transition">
+        Claude
+      </button>
+      <button type="button" data-tool-filter="codex"
+              class="tool-filter-btn px-2.5 py-1 rounded border border-gray-700/50 bg-surface-light text-gray-400 hover:text-white transition">
+        Codex
       </button>
     </div>
-    <div class="flex gap-3 pr-8">
-      <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5">
-        {{ icons.tool_icon(s.tool) }}
+    <div class="session-scroll lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-1 lg:-mr-1">
+      <div id="sessions-list" class="space-y-2 sm:space-y-3">
+        {% for s in sessions %}
+          {{ session_card(s, terminal_url, show_delete=True) }}
+        {% endfor %}
+        {% if not sessions %}
+        <div class="text-gray-500 text-sm py-8 text-center">No idle sessions.</div>
+        {% endif %}
       </div>
-      <div class="flex-1 min-w-0">
-        <a href="/sessions/{{ s.session_id }}" class="block">
-          <div class="flex items-center mb-1.5 sm:mb-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <span class="dot dot-idle"></span>
-              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
-              {% if s.tmux_session %}
-              <button type="button"
-                      onclick="event.preventDefault(); event.stopPropagation(); copyTmuxName('{{ s.tmux_session }}', this)"
-                      class="copy-tmux-btn p-0.5 text-gray-500 hover:text-white transition"
-                      title="Copy: tmux attach -t {{ s.tmux_session }}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-                </svg>
-              </button>
-              {% if s.tool and 'claude' in s.tool %}
-              <button type="button"
-                      onclick="event.preventDefault(); event.stopPropagation(); copyResumeCmd('{{ s.tmux_session }}', '{{ s.session_id }}', '{{ s.tool }}', this)"
-                      class="copy-resume-btn p-0.5 text-amber-500/70 hover:text-amber-300 transition"
-                      title="Copy: attach + claude --resume">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-              </button>
-              {% endif %}
-              <span class="text-xs text-gray-500">{{ s.hostname }}</span>
-              {% endif %}
-            </div>
-          </div>
-          <div class="text-xs sm:text-sm text-gray-300 truncate mb-1">{{ s.cwd }}</div>
-          {% if s.output_tokens and s.tool == 'claude' %}
-          <div class="flex items-center gap-3 text-xs text-gray-500 mb-1">
-            <span title="Output tokens">out: {{ "{:,}".format(s.output_tokens) }}</span>
-            <span title="Cache read tokens">cache: {{ "{:,}".format(s.cache_read_tokens) }}</span>
-          </div>
-          {% endif %}
-          <div class="flex items-center justify-between text-xs text-gray-500">
-            <span>{% if s.model %}{{ s.model }}{% else %}—{% endif %}</span>
-            <span>{{ s.last_seen_at[:16] }}</span>
-          </div>
-        </a>
-      </div>
-    </div>
-    <div class="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-700/20">
-      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
-         target="_blank"
-         class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
-        Terminal
-      </a>
-      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}
-      <button onclick="spawnSession('{{ s.session_id }}', this)"
-              class="text-xs px-2 py-1 rounded bg-purple-900/40 text-purple-200 hover:bg-purple-800/50 hover:text-white transition"
-              title="Spawn a fork: new tmux session, inherits this conversation">
-        Spawn
-      </button>
-      {% endif %}
-      <button onclick="deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)"
-         class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
-        Delete
-      </button>
     </div>
   </div>
-  {% endfor %}
-  {% if not sessions %}
-  <div class="text-gray-500 text-sm py-8 text-center">No idle sessions.</div>
-  {% endif %}
+
+  <!-- RIGHT: embedded preview pane (lg+) -->
+  <div id="preview-pane"
+       class="hidden lg:flex lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:my-3
+              lg:flex-col lg:min-h-0 bg-surface-light rounded-lg
+              border border-gray-700/30 overflow-hidden">
+    <div id="preview-header"
+         class="shrink-0 px-3 py-2 border-b border-gray-700/30 bg-surface-lighter/40
+                flex items-center gap-3 text-xs min-w-0">
+      <span id="preview-name" class="font-semibold text-white truncate shrink-0">—</span>
+      <span id="preview-model" class="text-accent-light truncate hidden shrink-0">—</span>
+      <span id="preview-cwd" class="text-gray-400 font-mono truncate flex-1 text-right">
+        Click a card to embed its terminal here
+      </span>
+      <button id="preview-close" type="button"
+              class="hidden text-gray-500 hover:text-white transition px-1 text-base leading-none shrink-0"
+              title="Close preview">&times;</button>
+    </div>
+    <div id="preview-body" class="flex-1 min-h-0 relative">
+      <div id="preview-empty"
+           class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm text-center px-4">
+        <div>
+          <div class="text-3xl mb-2 opacity-40">▢</div>
+          <div>Tap a card on the left to attach its terminal here. Typing a
+               command will reactivate the session — refresh to see it move
+               off the idle list.</div>
+        </div>
+      </div>
+      <iframe id="preview-iframe"
+              class="absolute inset-0 w-full h-full hidden"
+              title="Session terminal preview"
+              loading="lazy"
+              allow="clipboard-read; clipboard-write"
+              referrerpolicy="no-referrer"></iframe>
+    </div>
+  </div>
+
 </div>
+
+<style>
+  @media screen and (min-width: 600px) and (max-width: 1023px) and (min-aspect-ratio: 7/10) {
+    body.dash-page { height: 100vh; overflow: hidden; }
+    .dash-page main { flex: 1; min-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0; }
+    #dash-grid {
+      grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+      grid-template-rows: auto minmax(0,1fr);
+      flex: 1; min-height: 0;
+    }
+    #dash-grid > nav { grid-column: 1; grid-row: 1; }
+    #sessions-pane { grid-column: 1; grid-row: 2; min-height: 0; display: flex; flex-direction: column; }
+    #sessions-pane .session-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 0.25rem; margin-right: -0.25rem; }
+    #preview-pane { display: flex !important; grid-column: 2; grid-row: 1 / span 2; margin-block: 0.75rem; flex-direction: column; min-height: 0; }
+  }
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
 const TERMINAL_URL = "{{ terminal_url }}";
 
+// ── Tool filter ────────────────────────────────────────────────────
+const FILTER_KEY = 'agentHubToolFilter';
+
+function applyToolFilter(filter) {
+  document.querySelectorAll('#sessions-list > [id^="card-"]').forEach(card => {
+    const fam = card.dataset.toolFamily || 'other';
+    const show = filter === 'all' || filter === fam;
+    card.classList.toggle('hidden', !show);
+  });
+  document.querySelectorAll('.tool-filter-btn').forEach(btn => {
+    const active = btn.dataset.toolFilter === filter;
+    btn.classList.toggle('border-accent-light', active);
+    btn.classList.toggle('bg-accent/30', active);
+    btn.classList.toggle('text-white', active);
+    btn.classList.toggle('font-semibold', active);
+    btn.classList.toggle('border-gray-700/50', !active);
+    btn.classList.toggle('bg-surface-light', !active);
+    btn.classList.toggle('text-gray-400', !active);
+  });
+}
+
+document.querySelectorAll('.tool-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const f = btn.dataset.toolFilter;
+    localStorage.setItem(FILTER_KEY, f);
+    applyToolFilter(f);
+  });
+});
+
+applyToolFilter(localStorage.getItem(FILTER_KEY) || 'all');
+
+// ── Preview pane (clone of dashboard's behaviour) ────────────────
+const previewState = { sid: null };
+
+function previewSession(el) {
+  const card = el.closest('[id^="card-"]');
+  if (!card) return;
+  const footer = card.querySelector('[id^="actions-"]');
+  if (!footer) return;
+  const sid = footer.dataset.sid;
+  const tmux = footer.dataset.tmux;
+  if (!tmux) return;
+  const name = footer.dataset.name || sid.slice(0, 8);
+  const cwd = footer.dataset.cwd || '';
+  const model = footer.dataset.model || '';
+
+  const iframe = document.getElementById('preview-iframe');
+  const empty = document.getElementById('preview-empty');
+
+  if (previewState.sid !== sid) {
+    iframe.src = `${TERMINAL_URL}/?attach=${encodeURIComponent(tmux)}`;
+    previewState.sid = sid;
+  }
+  iframe.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  document.getElementById('preview-name').textContent = name;
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = cwd || '—';
+  cwdEl.classList.remove('text-right');
+  const modelEl = document.getElementById('preview-model');
+  if (model) {
+    modelEl.textContent = model;
+    modelEl.classList.remove('hidden');
+  } else {
+    modelEl.classList.add('hidden');
+  }
+  document.getElementById('preview-close').classList.remove('hidden');
+  highlightPreviewCard(sid);
+}
+
+function highlightPreviewCard(sid) {
+  document.querySelectorAll('.preview-active').forEach(el => {
+    el.classList.remove('preview-active', 'ring-2', 'ring-accent-light');
+  });
+  if (sid) {
+    const card = document.getElementById('card-' + sid);
+    if (card) card.classList.add('preview-active', 'ring-2', 'ring-accent-light');
+  }
+}
+
+function closePreview() {
+  const iframe = document.getElementById('preview-iframe');
+  iframe.src = 'about:blank';
+  iframe.classList.add('hidden');
+  document.getElementById('preview-empty').classList.remove('hidden');
+  document.getElementById('preview-name').textContent = '—';
+  document.getElementById('preview-model').classList.add('hidden');
+  const cwdEl = document.getElementById('preview-cwd');
+  cwdEl.textContent = 'Click a card to embed its terminal here';
+  cwdEl.classList.add('text-right');
+  document.getElementById('preview-close').classList.add('hidden');
+  previewState.sid = null;
+  highlightPreviewCard(null);
+}
+
+document.getElementById('preview-close').addEventListener('click', closePreview);
+
+// ── Card-action handlers (kept inline; idle pages reload after most ops) ──
 function spawnSession(sessionId, btn) {
   const origText = btn.textContent;
   btn.disabled = true;
@@ -176,6 +275,7 @@ function deleteSession(sessionId, hasTmux, btn) {
         btn.disabled = false;
         return;
       }
+      if (previewState.sid === sessionId) closePreview();
       const card = document.getElementById('card-' + sessionId);
       if (card) card.remove();
     })
@@ -184,6 +284,12 @@ function deleteSession(sessionId, hasTmux, btn) {
       btn.textContent = 'Delete';
       btn.disabled = false;
     });
+}
+
+function approveSession(sessionId, always, btn) {
+  // Idle cards should never show Approve, but keep the function defined
+  // so the macro doesn't reference a missing global.
+  alert('Approve not available on idle sessions');
 }
 </script>
 {% endblock %}

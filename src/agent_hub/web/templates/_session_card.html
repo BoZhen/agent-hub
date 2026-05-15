@@ -1,10 +1,12 @@
 {% import "_macros.html" as icons %}
 
-{% macro session_card(s, terminal_url) %}
+{% macro session_card(s, terminal_url, show_delete=False) %}
   {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
+  {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if (s.tool or '') in ('codex', 'omx-yolo') or (s.tool or '').startswith('omx') else 'other') %}
   <div class="{% if is_yolo %}yolo-card{% else %}bg-surface-light hover:bg-surface-lighter{% endif %} rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}{% if s.parent_session_id %} subagent-card ml-6 border-l-2 border-l-purple-500/50{% endif %}"
        id="card-{{ s.session_id }}"
        data-parent-sid="{{ s.parent_session_id or '' }}"
+       data-tool-family="{{ tool_family }}"
        {% if s.tmux_session %}onclick="previewSession(this)"{% endif %}>
     <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
       <span class="hidden sm:inline text-xs text-gray-500">{{ s.hostname }}</span>
@@ -141,6 +143,12 @@
         Approve &rarr;
       </a>
         {% endif %}
+      {% endif %}
+      {% if show_delete %}
+      <button onclick="event.stopPropagation(); deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)"
+              class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
+        Delete
+      </button>
       {% endif %}
     </div>
   </div>
