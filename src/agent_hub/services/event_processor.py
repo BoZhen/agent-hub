@@ -27,6 +27,24 @@ async def process_event(
     tmux_session = payload.get("_tmux_session")
     cli_tool = payload.get("_tool", "claude")
 
+    # If this is the first event for a brand-new sid arriving without
+    # tmux_session (because only SessionStart carries it explicitly,
+    # and `claude --resume X --fork-session` never fires SessionStart
+    # for the fork's own sid), try to claim a pending fork-spawn by
+    # cwd. Without this, the row lands with tmux_session=NULL and the
+    # card falls back to showing hostname.
+    if not tmux_session and cwd:
+        existing = await db.get_session(conn, session_id)
+        if existing is None:
+            matched = session_manager.consume_pending_fork(cwd)
+            if matched:
+                tmux_session = matched
+                payload["_tmux_session"] = matched
+                logger.info(
+                    "Claimed pending fork: sid=%s tmux=%s cwd=%s",
+                    session_id, matched, cwd,
+                )
+
     # Ensure session exists (auto-create on first event)
     await session_manager.ensure_session(
         conn,
@@ -71,9 +89,30 @@ async def process_event(
         payload=json.dumps(sanitized, ensure_ascii=False),
     )
 
-    # Store tmux session name if provided (from SessionStart hook)
+    # Store tmux session name if provided (from SessionStart hook).
+    # Guard against overwriting an active session's tmux when a stray
+    # hook arrives from a different tmux. Most common culprit:
+    # `claude --resume X --fork-session` fires SessionStart with the
+    # *resumed* sid X under the new fork tmux *before* claude generates
+    # the fork's own sid — without the guard, X's row gets its
+    # tmux_session field clobbered, severing the dashboard card from
+    # X's still-alive tmux. We only overwrite when the current tmux
+    # is empty, identical to the new one, or actually dead (the user
+    # legitimately resumed elsewhere after their old tmux died).
     if tmux_session:
-        await db.update_session_tmux(conn, session_id, tmux_session)
+        existing = await db.get_session(conn, session_id)
+        current = existing.get("tmux_session") if existing else None
+        if not current or current == tmux_session:
+            await db.update_session_tmux(conn, session_id, tmux_session)
+        else:
+            alive_names = await session_manager._list_alive_tmux_names()
+            if current not in alive_names:
+                await db.update_session_tmux(conn, session_id, tmux_session)
+            else:
+                logger.info(
+                    "Ignoring tmux change for %s: current %s alive (new %s)",
+                    session_id, current, tmux_session,
+                )
 
     # Pending state is now managed entirely by periodic_pending_check
     # via tmux capture-pane (ground truth). No event-driven pending here.

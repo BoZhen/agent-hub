@@ -459,6 +459,31 @@ function togglePin(sessionId, btn) {
     });
 }
 
+function spawnSession(sessionId, btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Spawning…';
+  fetch(`/api/sessions/${sessionId}/spawn`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        alert('Spawn failed: ' + (err.detail || 'unknown'));
+        btn.textContent = origText;
+        btn.disabled = false;
+        return;
+      }
+      const data = await r.json();
+      btn.textContent = '✓ ' + data.name;
+      window.open(`${TERMINAL_URL}/?attach=${encodeURIComponent(data.name)}`, '_blank');
+      setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+    })
+    .catch(e => {
+      alert('Error: ' + e.message);
+      btn.textContent = origText;
+      btn.disabled = false;
+    });
+}
+
 function approveSession(sessionId, always, btn) {
   const url = `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : '');
   btn.textContent = 'Sent!';

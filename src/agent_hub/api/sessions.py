@@ -314,6 +314,111 @@ async def approve_session(
     return {"ok": True, "tmux_session": tmux_name, "always": always}
 
 
+class SpawnRequest(BaseModel):
+    name: str | None = None  # default: <source>-fork-N
+
+
+@router.post("/sessions/{session_id}/spawn")
+async def spawn_session(request: Request, session_id: str, body: SpawnRequest):
+    """Spawn a new tmux session running a Claude fork that inherits the
+    source session's conversation history.
+
+    Equivalent to `tmux new -d -s <new> -c <cwd> claude --resume <sid>
+    --fork-session`. The source session is not touched — its claude
+    process keeps running in its own tmux. Only Claude sources are
+    supported; codex has no scriptable fork CLI.
+    """
+    import os
+    import re
+    from pathlib import Path
+
+    from agent_hub.api.tmux import (
+        _resolve_command,
+        _tmux_ls,
+        _valid_tmux_name,
+    )
+    from agent_hub.services.session_manager import (
+        mark_hub_launched,
+        register_pending_fork,
+    )
+
+    conn = request.app.state.db
+    src = await db.get_session(conn, session_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tool = src.get("tool") or ""
+    if "claude" not in tool:
+        raise HTTPException(
+            status_code=400,
+            detail="Spawn only supports Claude sessions; codex fork has no scriptable CLI yet",
+        )
+    if src.get("transferred"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot spawn from a remote (transferred) session — fork must run on the source machine",
+        )
+    src_cwd = src.get("cwd")
+    if not src_cwd:
+        raise HTTPException(status_code=400, detail="Source session has no cwd recorded")
+    cwd_path = Path(src_cwd).expanduser()
+    try:
+        resolved_cwd = cwd_path.resolve(strict=True)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail=f"Source cwd no longer exists: {src_cwd}")
+    if not resolved_cwd.is_dir():
+        raise HTTPException(status_code=400, detail=f"Source cwd is not a directory: {src_cwd}")
+    if not os.access(resolved_cwd, os.R_OK | os.X_OK):
+        raise HTTPException(status_code=400, detail=f"Source cwd is not accessible: {src_cwd}")
+
+    cmd_path = _resolve_command("claude")
+    if not cmd_path:
+        raise HTTPException(status_code=400, detail="claude binary not found in PATH")
+
+    existing_sessions = await _tmux_ls()
+    existing_names = {s["name"] for s in existing_sessions}
+
+    if body.name:
+        name = body.name.strip().replace("–", "-").replace("—", "-")
+        if not _valid_tmux_name(name):
+            raise HTTPException(
+                status_code=400,
+                detail="tmux name must be 1-64 ASCII letters/digits/underscore/hyphen",
+            )
+        if name in existing_names:
+            raise HTTPException(status_code=409, detail=f"tmux session '{name}' already exists")
+    else:
+        base = src.get("tmux_session") or "fork"
+        base = re.sub(r"[^a-zA-Z0-9_-]+", "-", base).strip("-") or "fork"
+        if len(base) > 55:
+            base = base[:55].rstrip("-") or "fork"
+        i = 1
+        while f"{base}-fork-{i}" in existing_names:
+            i += 1
+        name = f"{base}-fork-{i}"
+
+    claude_args = ["--resume", session_id, "--fork-session"]
+    if "yolo" in tool:
+        claude_args.append("--dangerously-skip-permissions")
+
+    tmux_args = [
+        "tmux", "new-session", "-d", "-s", name, "-c", str(resolved_cwd),
+        cmd_path, *claude_args,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *tmux_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
+        raise HTTPException(status_code=500, detail=f"tmux new-session failed: {err}")
+
+    mark_hub_launched(name, "claude-spawn")
+    register_pending_fork(name, str(resolved_cwd))
+    return {"name": name, "cwd": str(resolved_cwd), "source_session_id": session_id}
+
+
 class PinRequest(BaseModel):
     pinned: bool
 

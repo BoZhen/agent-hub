@@ -39,6 +39,40 @@ def mark_hub_launched(tmux_name: str, command: str = "") -> None:
     _HUB_LAUNCHED_TMUX[tmux_name] = (now, command)
 
 
+# Pending fork-spawn map: when /spawn launches `claude --resume X
+# --fork-session` inside a new tmux, claude's --fork-session generates
+# a *fresh* session_id Y in-process — it never fires a SessionStart
+# hook for Y (only for the resumed sid X, with the *new* tmux, which
+# the event_processor guard correctly ignores). The first event
+# carrying Y is UserPromptSubmit / Stop / PreToolUse — all wired as
+# plain HTTP hooks without the `tmux_session` query param, so Y's
+# row lands with tmux_session=NULL. We close the loop here: spawn
+# remembers (fork_tmux, cwd, ts); the first event-driven creation
+# of a new sid whose cwd matches claims one entry and back-fills
+# tmux_session for that row.
+_PENDING_FORK_SPAWNS: list[tuple[str, str, float]] = []
+_PENDING_FORK_TTL = 300.0
+
+
+def register_pending_fork(fork_tmux: str, cwd: str) -> None:
+    _PENDING_FORK_SPAWNS.append((fork_tmux, cwd, time.time()))
+
+
+def consume_pending_fork(cwd: str) -> str | None:
+    """Pop the oldest pending fork entry whose cwd matches and is not
+    expired. Returns the fork tmux name, or None."""
+    now = time.time()
+    _PENDING_FORK_SPAWNS[:] = [
+        item for item in _PENDING_FORK_SPAWNS if now - item[2] <= _PENDING_FORK_TTL
+    ]
+    for i, entry in enumerate(_PENDING_FORK_SPAWNS):
+        tmux_name, c, _ = entry
+        if c == cwd:
+            _PENDING_FORK_SPAWNS.pop(i)
+            return tmux_name
+    return None
+
+
 # Suppression table for Hub-initiated approvals: when the user clicks
 # Approve/Always, `approve_session` sends keys to tmux and records the
 # approved signature here. The periodic pending-check then skips

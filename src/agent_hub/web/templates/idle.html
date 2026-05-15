@@ -81,6 +81,13 @@
          class="text-xs px-2 py-1 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
         Terminal
       </a>
+      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}
+      <button onclick="spawnSession('{{ s.session_id }}', this)"
+              class="text-xs px-2 py-1 rounded bg-purple-900/40 text-purple-200 hover:bg-purple-800/50 hover:text-white transition"
+              title="Spawn a fork: new tmux session, inherits this conversation">
+        Spawn
+      </button>
+      {% endif %}
       <button onclick="deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)"
          class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
         Delete
@@ -96,6 +103,33 @@
 
 {% block scripts %}
 <script>
+const TERMINAL_URL = "{{ terminal_url }}";
+
+function spawnSession(sessionId, btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Spawning…';
+  fetch(`/api/sessions/${sessionId}/spawn`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        alert('Spawn failed: ' + (err.detail || 'unknown'));
+        btn.textContent = origText;
+        btn.disabled = false;
+        return;
+      }
+      const data = await r.json();
+      btn.textContent = '✓ ' + data.name;
+      window.open(`${TERMINAL_URL}/?attach=${encodeURIComponent(data.name)}`, '_blank');
+      setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+    })
+    .catch(e => {
+      alert('Error: ' + e.message);
+      btn.textContent = origText;
+      btn.disabled = false;
+    });
+}
+
 function togglePin(sessionId, btn) {
   const wasPinned = btn.dataset.pinned === '1';
   const newPinned = !wasPinned;

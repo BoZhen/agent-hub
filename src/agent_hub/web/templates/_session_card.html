@@ -113,6 +113,13 @@
          class="text-xs px-2.5 py-1 rounded bg-gradient-to-b from-red-800 to-red-950 text-white border border-red-950 shadow-sm hover:from-red-700 hover:to-red-900 transition font-semibold">
         Terminal
       </a>
+      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}
+      <button onclick="event.stopPropagation(); spawnSession('{{ s.session_id }}', this)"
+              class="spawn-btn text-xs px-2.5 py-1 rounded bg-gradient-to-b from-purple-700 to-purple-900 text-white border border-purple-950 shadow-sm hover:from-purple-600 hover:to-purple-800 transition font-semibold"
+              title="Spawn a fork: new tmux session, inherits this conversation">
+        Spawn
+      </button>
+      {% endif %}
       {% if s.pending_tool %}
         {% if s.tmux_session %}
       <button onclick="event.stopPropagation(); approveSession('{{ s.session_id }}', false, this)"
