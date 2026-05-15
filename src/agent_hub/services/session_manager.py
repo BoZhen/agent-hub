@@ -677,7 +677,16 @@ async def discover_codex_for_tmux(
 
     sid = existing["session_id"]
     old_hash = _CODEX_PANE_HASH.get(sid)
-    if new_hash != old_hash:
+    if old_hash is None:
+        # First time we see this session in this hub run. The in-memory
+        # hash map resets on every hub restart, so without this guard
+        # the first poll after restart treats every codex pane as
+        # "changed" and refreshes last_seen_at — falsely reactivating
+        # rows that were already idle and resetting the soft-idle
+        # cutoff on actives. Only record the baseline this round;
+        # subsequent polls compare against it.
+        _CODEX_PANE_HASH[sid] = new_hash
+    elif new_hash != old_hash:
         _CODEX_PANE_HASH[sid] = new_hash
         if existing["status"] == "idle":
             await db.update_session_status(conn, sid, "active")
