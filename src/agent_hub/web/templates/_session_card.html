@@ -116,10 +116,10 @@
         Terminal
       </a>
       {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}
-      <button onclick="event.stopPropagation(); spawnSession('{{ s.session_id }}', this)"
-              class="spawn-btn text-xs px-2.5 py-1 rounded bg-gradient-to-b from-purple-700 to-purple-900 text-white border border-purple-950 shadow-sm hover:from-purple-600 hover:to-purple-800 transition font-semibold"
-              title="Spawn a fork: new tmux session, inherits this conversation">
-        Spawn
+      <button onclick="event.stopPropagation(); forkSession('{{ s.session_id }}', '{{ s.tmux_session }}', this)"
+              class="fork-btn text-xs px-2.5 py-1 rounded bg-gradient-to-b from-purple-700 to-purple-900 text-white border border-purple-950 shadow-sm hover:from-purple-600 hover:to-purple-800 transition font-semibold"
+              title="Fork into a new tmux session that inherits this conversation">
+        Fork
       </button>
       {% endif %}
       {% if s.pending_tool %}

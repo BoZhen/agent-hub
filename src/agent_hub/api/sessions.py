@@ -314,14 +314,14 @@ async def approve_session(
     return {"ok": True, "tmux_session": tmux_name, "always": always}
 
 
-class SpawnRequest(BaseModel):
+class ForkRequest(BaseModel):
     name: str | None = None  # default: <source>-fork-N
 
 
-@router.post("/sessions/{session_id}/spawn")
-async def spawn_session(request: Request, session_id: str, body: SpawnRequest):
-    """Spawn a new tmux session running a Claude fork that inherits the
-    source session's conversation history.
+@router.post("/sessions/{session_id}/fork")
+async def fork_session(request: Request, session_id: str, body: ForkRequest):
+    """Fork a Claude session into a fresh tmux that inherits the source
+    session's conversation history.
 
     Equivalent to `tmux new -d -s <new> -c <cwd> claude --resume <sid>
     --fork-session`. The source session is not touched — its claude
@@ -355,7 +355,7 @@ async def spawn_session(request: Request, session_id: str, body: SpawnRequest):
     if src.get("transferred"):
         raise HTTPException(
             status_code=400,
-            detail="Cannot spawn from a remote (transferred) session — fork must run on the source machine",
+            detail="Cannot fork a remote (transferred) session — the fork must run on the source machine",
         )
     src_cwd = src.get("cwd")
     if not src_cwd:
@@ -414,7 +414,7 @@ async def spawn_session(request: Request, session_id: str, body: SpawnRequest):
         err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
         raise HTTPException(status_code=500, detail=f"tmux new-session failed: {err}")
 
-    mark_hub_launched(name, "claude-spawn")
+    mark_hub_launched(name, "claude-fork")
     register_pending_fork(name, str(resolved_cwd))
     return {"name": name, "cwd": str(resolved_cwd), "source_session_id": session_id}
 

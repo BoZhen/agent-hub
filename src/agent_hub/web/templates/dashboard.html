@@ -479,15 +479,20 @@ function togglePin(sessionId, btn) {
     });
 }
 
-function spawnSession(sessionId, btn) {
+function forkSession(sessionId, tmuxName, btn) {
+  if (!confirm(`Fork "${tmuxName}" into a new tmux session?\n\n` +
+               `A copy of this conversation will start in a fresh tmux. ` +
+               `The original keeps running unaffected.`)) {
+    return;
+  }
   const origText = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Spawning…';
-  fetch(`/api/sessions/${sessionId}/spawn`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+  btn.textContent = 'Forking…';
+  fetch(`/api/sessions/${sessionId}/fork`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
     .then(async r => {
       if (!r.ok) {
         const err = await r.json().catch(() => ({detail: r.statusText}));
-        alert('Spawn failed: ' + (err.detail || 'unknown'));
+        alert('Fork failed: ' + (err.detail || 'unknown'));
         btn.textContent = origText;
         btn.disabled = false;
         return;
