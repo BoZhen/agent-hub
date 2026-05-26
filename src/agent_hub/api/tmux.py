@@ -79,6 +79,10 @@ def _extra_command_dirs(home: Path | None = None) -> list[str]:
     node_versions = root / ".nvm" / "versions" / "node"
     if node_versions.is_dir():
         dirs.extend(sorted(node_versions.glob("*/bin"), reverse=True))
+    # fnm uses a different layout: ~/.fnm/node-versions/<ver>/installation/bin
+    fnm_versions = root / ".fnm" / "node-versions"
+    if fnm_versions.is_dir():
+        dirs.extend(sorted(fnm_versions.glob("*/installation/bin"), reverse=True))
     return [str(path) for path in dirs if path.is_dir()]
 
 
