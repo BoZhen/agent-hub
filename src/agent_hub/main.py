@@ -52,9 +52,16 @@ logger = logging.getLogger(__name__)
 def _augment_path() -> None:
     """Add common user-local bin dirs to PATH so shutil.which finds
     `claude`, `omx`, etc. even when the hub runs under systemd-user
-    (which doesn't inherit the interactive shell's PATH). Skip dirs
-    that don't exist or are already present."""
-    extras = [
+    (which doesn't inherit the interactive shell's PATH).
+
+    Also crucially seeds the PATH that hub-launched tmux sessions
+    inherit. Without nvm/fnm node bins here, claude/codex hooks that
+    shell out to ``node`` fail with "node: not found" inside those
+    tmuxes. Skip dirs that don't exist or are already present.
+    """
+    from pathlib import Path
+    home = Path.home()
+    extras: list[str] = [
         os.path.expanduser("~/.local/bin"),
         os.path.expanduser("~/.bun/bin"),
         os.path.expanduser("~/.cargo/bin"),
@@ -64,6 +71,16 @@ def _augment_path() -> None:
         "/home/linuxbrew/.linuxbrew/bin",
         "/usr/local/bin",
     ]
+    # nvm layout: ~/.nvm/versions/node/<ver>/bin/{node,npm,...}
+    nvm_versions = home / ".nvm" / "versions" / "node"
+    if nvm_versions.is_dir():
+        extras.extend(str(p) for p in sorted(nvm_versions.glob("*/bin"), reverse=True))
+    # fnm layout: ~/.fnm/node-versions/<ver>/installation/bin/{node,npm,...}
+    fnm_versions = home / ".fnm" / "node-versions"
+    if fnm_versions.is_dir():
+        extras.extend(
+            str(p) for p in sorted(fnm_versions.glob("*/installation/bin"), reverse=True)
+        )
     current = os.environ.get("PATH", "")
     parts = current.split(os.pathsep) if current else []
     added: list[str] = []
