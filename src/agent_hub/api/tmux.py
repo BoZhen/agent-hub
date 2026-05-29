@@ -231,6 +231,15 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
     tmux_args = [
         "tmux", "new-session", "-d", "-s", name, "-c", str(resolved),
     ]
+    # Pin the hub's augmented PATH onto the new session. Without this,
+    # `tmux new-session -d` inherits the long-running tmux server's
+    # PATH (set when the user first ran tmux outside the hub), not
+    # the hub process's. claude/codex hooks inside the pane then can't
+    # find user-installed node, omx, etc. -e is per-session, so other
+    # tmux sessions are unaffected.
+    hub_path = os.environ.get("PATH", "")
+    if hub_path:
+        tmux_args.extend(["-e", f"PATH={hub_path}"])
     if cmd_path:
         tmux_args.append(cmd_path)
         tmux_args.extend(_COMMAND_ARGS.get(req.command or "", []))

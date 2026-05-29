@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -400,10 +401,14 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
     if "yolo" in tool:
         claude_args.append("--dangerously-skip-permissions")
 
-    tmux_args = [
-        "tmux", "new-session", "-d", "-s", name, "-c", str(resolved_cwd),
-        cmd_path, *claude_args,
-    ]
+    # Pin hub's augmented PATH so the forked tmux pane inherits
+    # node/nvm/fnm dirs even when the long-running tmux server's PATH
+    # predates them (see tmux.py for the same rationale).
+    tmux_args = ["tmux", "new-session", "-d", "-s", name, "-c", str(resolved_cwd)]
+    hub_path = os.environ.get("PATH", "")
+    if hub_path:
+        tmux_args.extend(["-e", f"PATH={hub_path}"])
+    tmux_args.extend([cmd_path, *claude_args])
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,
         stdout=asyncio.subprocess.PIPE,
