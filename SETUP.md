@@ -161,7 +161,7 @@ curl http://127.0.0.1:7700/api/terminals    # Web Terminal API
 }
 ```
 
-替换 `TAILSCALE_IP` 为 Hub 主机的 Tailscale IP（如 `100.64.0.1`）。
+替换 `TAILSCALE_IP` 为 Hub 主机的 Tailscale IP（如 `100.x.y.z`）。
 
 ### 2.3 MCP Server 注册
 
@@ -318,7 +318,7 @@ omx setup           # 会生成 ~/.codex/hooks.json 和 ~/.codex/config.toml
 ```bash
 # Hub 主机:默认 http://127.0.0.1:7800,无需任何配置
 # 辅助机 (.bashrc / .zshrc / fish config.fish):
-export AGENT_HUB_URL="http://100.64.0.1:7800"   # 替换为 Hub 主机的 Tailscale IP
+export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Tailscale IP
 ```
 
 **关键区别**:和 Claude Code 的 HTTP hook 不同,codex hook **全部是 command 类型**(bash + curl),所以**没有 loopback 127.0.0.1 限制** —— 辅助机可以直接让 wrapper curl 到 Tailscale IP,不需要像 Claude 辅助机那样额外搭一套全 command-type 的 hook。
