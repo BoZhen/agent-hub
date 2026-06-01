@@ -39,7 +39,15 @@ uv run agent-hub serve --hub-id <hub-id>
 - API docs: `http://localhost:7800/api/docs`
 - MCP SSE: `http://localhost:7800/mcp/sse`
 
-## 接入方式
+## 远程访问（Tailscale）
+
+Hub 监听 `0.0.0.0`，但无需把端口暴露到公网。推荐用 [Tailscale](https://tailscale.com/) 组建私有网络，在任意设备上通过 Hub 主机的 Tailscale IP 直接访问：
+
+- 手机上打开 `http://<TAILSCALE_IP>:7800` 即可随时查看会话、远程审批
+- 跨机器访问：辅助机设置 `export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"` 后即可把事件推送到 Hub
+- 全程走 Tailscale 加密隧道，不开放任何公网端口，比端口转发更安全
+
+详细配置见 `SETUP.md`。
 
 ### Claude Code
 
