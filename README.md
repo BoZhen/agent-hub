@@ -44,10 +44,17 @@ uv run agent-hub serve --hub-id <hub-id>
 Hub 监听 `0.0.0.0`，但无需把端口暴露到公网。推荐用 [Tailscale](https://tailscale.com/) 组建私有网络，在任意设备上通过 Hub 主机的 Tailscale IP 直接访问：
 
 - 手机上打开 `http://<TAILSCALE_IP>:7800` 即可随时查看会话、远程审批
+- 嵌入式终端（端口 7700）同样经 Tailscale 访问，可直接在手机上接入 tmux
 - 跨机器访问：辅助机设置 `export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"` 后即可把事件推送到 Hub
 - 全程走 Tailscale 加密隧道，不开放任何公网端口，比端口转发更安全
 
 详细配置见 `SETUP.md`。
+
+## Web Terminal（嵌入式终端）
+
+Dashboard 右侧的嵌入式终端由独立的伴生服务 **[web-terminal](https://github.com/BoZhen/webterminal)** 提供（默认端口 7700），负责把 tmux 会话以持久化终端的形式渲染到浏览器中。Hub 通过 iframe 嵌入它，用于终端预览与远程审批。
+
+该服务需单独部署，安装方式见其仓库说明与本仓库 `SETUP.md` 的「Web Terminal」一节。
 
 ### Claude Code
 

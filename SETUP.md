@@ -59,7 +59,7 @@ loginctl enable-linger $USER
 
 ### 1.3 Web Terminal（tmux 后端）
 
-Web Terminal 是独立项目（`~/Git/web-terminal`），提供 tmux 持久化终端访问。
+Web Terminal 是独立项目（<https://github.com/BoZhen/webterminal>），提供 tmux 持久化终端访问。
 
 ```bash
 # 注册为 systemd 用户服务，端口 7700
