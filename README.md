@@ -97,4 +97,4 @@ export OMX_DISABLE_HUD=1
 
 ## License
 
-本项目以 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
+[MIT](LICENSE)
