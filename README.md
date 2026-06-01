@@ -1,5 +1,7 @@
 # Agent Hub
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服务，用于集中查看会话状态、事件时间线、审批状态与 tmux 终端入口。
 
 ## 界面预览
@@ -92,3 +94,7 @@ export OMX_DISABLE_HUD=1
 项目主代码位于 `src/agent_hub/`，测试位于 `tests/`。
 
 如需理解系统架构、模块分层、tmux 设计、状态机与接口关系，请直接阅读 `DESIGN.md`。
+
+## License
+
+本项目以 [MIT License](LICENSE) 开源，可自由使用、修改与分发。
