@@ -48,6 +48,8 @@ Hub 监听 `0.0.0.0`，但无需把端口暴露到公网。推荐用 [Tailscale]
 - 跨机器访问：辅助机设置 `export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"` 后即可把事件推送到 Hub
 - 全程走 Tailscale 加密隧道，不开放任何公网端口，比端口转发更安全
 
+> 如果你有自己的云服务器，也可以用 [Nebula](https://github.com/slackhq/nebula) 自建 lighthouse 作为替代。中转节点掌握在自己手里，延迟更可控、通常更快。Hub 监听 `0.0.0.0`，对 Tailscale / Nebula 等任意私有网段都是开箱即用的。
+
 详细配置见 `SETUP.md`。
 
 ## Web Terminal（嵌入式终端）
