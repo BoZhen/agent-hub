@@ -38,7 +38,7 @@ existing mode state before making changes.
 • Calling
   └ omx_memory.project_memory_read({"secti
         on":"all","workingDirectory":"/
-        home/bosonzhou/codex"})
+        home/user/codex"})
 
 
   Field 1/1

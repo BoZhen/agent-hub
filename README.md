@@ -82,6 +82,14 @@ export OMX_DISABLE_HUD=1
 
 建议将该环境变量写入你的 shell 配置后，重新启动 omx session。已有的旧 tmux / omx 会话如果没有继承这个环境变量，仍可能继续显示 HUD。
 
+## 会话跟踪范围（仅 tmux）
+
+Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体，因此**只跟踪运行在 tmux 中的会话**。
+
+在 tmux 之外启动的 CLI 会话——例如通过 Claude Agent SDK / headless 模式把 `claude` / `codex` 当子进程运行的 GUI 控制台——会被 Hub 主动忽略：它们没有可供 attach / 审批 / 状态探测的 tmux pane，记录下来也只会变成无法被清理的 `idle` 僵尸。这类会话由各自的控制台自行管理，与 Agent Hub 并行共存、互不干扰。
+
+> 即便全局 hooks 会对机器上所有 CLI 会话触发，Hub 也会在事件入口直接丢弃这些没有 tmux 的会话，因此无需为它们单独关闭 hook，也不会把数据库越喂越大。
+
 ## 常用页面
 
 - `/`：主 Dashboard

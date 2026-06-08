@@ -27,15 +27,19 @@ async def process_event(
     tmux_session = payload.get("_tmux_session")
     cli_tool = payload.get("_tool", "claude")
 
-    # If this is the first event for a brand-new sid arriving without
-    # tmux_session (because only SessionStart carries it explicitly,
-    # and `claude --resume X --fork-session` never fires SessionStart
-    # for the fork's own sid), try to claim a pending fork-spawn by
-    # cwd. Without this, the row lands with tmux_session=NULL and the
-    # card falls back to showing hostname.
-    if not tmux_session and cwd:
+    # Resolve / gate sessions that arrive without a tmux name. Only the
+    # SessionStart hook carries tmux_session explicitly; every other
+    # (HTTP) hook posts tmux-less, so a row that already exists is left
+    # alone here and keeps its stored tmux.
+    if not tmux_session:
         existing = await db.get_session(conn, session_id)
-        if existing is None:
+
+        # First event for a brand-new sid arriving without tmux_session
+        # (e.g. `claude --resume X --fork-session` never fires
+        # SessionStart for the fork's own sid) — try to claim a pending
+        # fork-spawn by cwd so the row gets its real tmux back-filled
+        # instead of landing with tmux_session=NULL.
+        if cwd and existing is None:
             matched = session_manager.consume_pending_fork(cwd)
             if matched:
                 tmux_session = matched
@@ -44,6 +48,36 @@ async def process_event(
                     "Claimed pending fork: sid=%s tmux=%s cwd=%s",
                     session_id, matched, cwd,
                 )
+
+        # Ignore tmux-less (console / headless SDK) sessions entirely.
+        # Agent Hub is a tmux-centric control plane: with no tmux it can
+        # neither attach, approve, nor sweep the row, so a tmux-less
+        # session can only ever linger as a permanent "idle" zombie (the
+        # dead-tmux sweep in session_manager only inspects rows WHERE
+        # tmux_session IS NOT NULL). Tools like claude-console /
+        # codex-console drive `claude`/`codex` as plain subprocesses
+        # outside tmux, so every one of their hook events arrives
+        # tmux-less — we drop them at the door.
+        #
+        # The gate fires when this session has no tmux *anywhere*: no row
+        # yet, OR an existing row whose tmux_session is still NULL. The
+        # latter also stops legacy console rows from being *revived* —
+        # without it, a still-alive console session's next event would
+        # find its row and update_session_activity() would flip it back
+        # to "active". It stays safe for real sessions because (a) a
+        # tmux-backed row has a non-NULL tmux_session so its later
+        # tmux-less tool events still flow, (b) real tmux SessionStarts
+        # always carry the name, and (c) hub-forked sessions were
+        # back-filled just above. Also keeps hub.db from growing on a
+        # console event stream we cannot act on.
+        if not tmux_session and (
+            existing is None or not existing["tmux_session"]
+        ):
+            logger.debug(
+                "Ignoring tmux-less session %s (%s) — console/headless, "
+                "not tracked", session_id, event_type,
+            )
+            return
 
     # Ensure session exists (auto-create on first event)
     await session_manager.ensure_session(
