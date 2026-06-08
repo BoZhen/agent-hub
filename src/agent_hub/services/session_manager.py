@@ -764,12 +764,49 @@ async def sweep_stale_sessions(
     return swept
 
 
-async def periodic_sweep(conn: aiosqlite.Connection) -> None:
-    """Background task: sweep every 60 seconds."""
+async def _sweep_old_stopped(
+    conn: aiosqlite.Connection, retention_days: int
+) -> int:
+    """Delete stopped sessions older than the retention window.
+
+    Stopped is terminal in the Hub's model — the tmux is gone and
+    restore-on-startup only revives active/idle — so once a stopped row
+    ages past the window it is pure clutter (this is what lets the old
+    `opus-web-terminal-0`-style test runs and any other finished session
+    pile up indefinitely). Deleting the row is safe: Claude/Codex
+    transcripts persist on disk independently, so a later `--resume`
+    still works and re-registers the session. ``retention_days <= 0``
+    disables pruning (keep forever).
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=retention_days)
+    ).isoformat()
+    deleted = await db.delete_stopped_sessions_older_than(conn, cutoff)
+    if deleted:
+        logger.info(
+            "Stopped-retention sweep: deleted %d stopped session(s) "
+            "older than %dd",
+            deleted, retention_days,
+        )
+    return deleted
+
+
+async def periodic_sweep(
+    conn: aiosqlite.Connection, stopped_retention_days: int = 0
+) -> None:
+    """Background task: sweep every 60 seconds.
+
+    ``stopped_retention_days`` (from HubConfig) controls how long
+    finished sessions are kept before being auto-pruned; 0 keeps them
+    forever.
+    """
     while True:
         try:
             await asyncio.sleep(60)
             await sweep_stale_sessions(conn)
+            await _sweep_old_stopped(conn, stopped_retention_days)
         except asyncio.CancelledError:
             break
         except Exception:

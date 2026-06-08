@@ -300,6 +300,34 @@ async def delete_stopped_sessions(db: aiosqlite.Connection) -> int:
     return len(ids)
 
 
+async def delete_stopped_sessions_older_than(
+    db: aiosqlite.Connection, cutoff_iso: str
+) -> int:
+    """Delete stopped sessions (and their events) last stopped before
+    ``cutoff_iso`` (an ISO-8601 UTC timestamp). Falls back to
+    last_seen_at / started_at for legacy rows that predate the
+    ``stopped_at`` column so they still age out. Returns the count
+    removed."""
+    cursor = await db.execute(
+        "SELECT session_id FROM sessions "
+        "WHERE status = 'stopped' "
+        "AND COALESCE(stopped_at, last_seen_at, started_at) < ?",
+        (cutoff_iso,),
+    )
+    ids = [r["session_id"] for r in await cursor.fetchall()]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    await db.execute(
+        f"DELETE FROM events WHERE session_id IN ({placeholders})", ids
+    )
+    await db.execute(
+        f"DELETE FROM sessions WHERE session_id IN ({placeholders})", ids
+    )
+    await db.commit()
+    return len(ids)
+
+
 # ── Event CRUD ────────────────────────────────────────────────
 
 

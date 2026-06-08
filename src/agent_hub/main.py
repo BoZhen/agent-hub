@@ -118,7 +118,9 @@ def create_app(config: HubConfig) -> FastAPI:
             app.state.db = conn
             app.state.config = config
             mcp_set_db(conn)
-            sweep_task = asyncio.create_task(periodic_sweep(conn))
+            sweep_task = asyncio.create_task(
+                periodic_sweep(conn, config.stopped_retention_days)
+            )
             # Codex discovery: push (tmux session-created hook) is the
             # fast path; this 60 s polling task is the safety net AND
             # re-asserts the hook each tick to self-heal across tmux
@@ -227,6 +229,14 @@ def cli():
 
     if args.command == "serve":
         tg_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
+        retention_raw = os.environ.get("AGENT_HUB_STOPPED_RETENTION_DAYS")
+        try:
+            retention_days = (
+                int(retention_raw) if retention_raw is not None
+                else HubConfig.stopped_retention_days
+            )
+        except ValueError:
+            retention_days = HubConfig.stopped_retention_days
         config = HubConfig(
             hub_id=args.hub_id,
             host=args.host,
@@ -234,6 +244,7 @@ def cli():
             db_path=args.db,
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
             telegram_chat_id=int(tg_chat_id_raw) if tg_chat_id_raw else None,
+            stopped_retention_days=retention_days,
         )
         app = create_app(config)
         ssl_kwargs = {}

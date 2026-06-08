@@ -90,6 +90,15 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 > 即便全局 hooks 会对机器上所有 CLI 会话触发，Hub 也会在事件入口直接丢弃这些没有 tmux 的会话，因此无需为它们单独关闭 hook，也不会把数据库越喂越大。
 
+## 历史会话自动清理
+
+`stopped`（已结束）的会话是终态——其 tmux 已不存在，restore 也只恢复 active/idle——留着只是历史杂物。Hub 在每次 sweep 时会**自动删除停止时间超过保留期的 stopped 会话及其事件**：
+
+- 由环境变量 `AGENT_HUB_STOPPED_RETENTION_DAYS` 控制，默认 **14** 天；设为 `0` 则永久保留、不自动清理。
+- 删除的只是 Hub 的记录；Claude / Codex 的 transcript 仍在本地磁盘，日后 `--resume` 不受影响。
+
+> 想立刻整理已堆积的旧记录，也可以在 Dashboard 的 `/stopped` 页一键 Clear。
+
 ## 常用页面
 
 - `/`：主 Dashboard

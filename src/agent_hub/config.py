@@ -10,3 +10,9 @@ class HubConfig:
     terminal_port: int = 7700
     telegram_bot_token: str | None = None
     telegram_chat_id: int | None = None
+    # Auto-prune stopped sessions (and their events) older than this many
+    # days on each sweep. Stopped sessions are terminal in the Hub's model
+    # (tmux gone; restore only revives active/idle), so old ones are pure
+    # clutter — Claude/Codex transcripts live on disk independently, so a
+    # later `--resume` still works. 0 disables pruning (keep forever).
+    stopped_retention_days: int = 14
