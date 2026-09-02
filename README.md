@@ -7,20 +7,24 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 ## 界面预览
 
 <p align="center">
-  <img src="figs/computer-view.png" alt="桌面端 Dashboard" width="90%">
+  <img src="figs/modern-desktop.png" alt="桌面端 Agent Hub 工作台" width="90%">
 </p>
-<p align="center"><em>桌面端 Dashboard：左列会话卡片 + 右列嵌入式终端</em></p>
+<p align="center"><em>桌面端：Needs Action + 项目/Session 导航 + 原生 TUI 工作区</em></p>
 
 <p align="center">
-  <img src="figs/phone-view.jpg" alt="移动端视图" width="30%">
+  <img src="figs/modern-phone-sessions.png" alt="移动端 Session 导航" width="28%">
+  <img src="figs/modern-phone-terminal.png" alt="移动端原生 TUI" width="28%">
 </p>
-<p align="center"><em>移动端：单列布局，方便在手机上查看并审批</em></p>
+<p align="center"><em>移动端：Session 与全屏 Terminal 双模式，保留触控特殊键</em></p>
 
 ## 核心能力
 
 - 统一管理 Claude Code 与 Codex CLI 会话
 - 记录会话事件并在 Dashboard 中实时展示
 - 基于 tmux 进行远程审批与终端接入
+- 项目分组、Needs Action 与浏览器工作集标签
+- 5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
+- 手机端独立 Session/Terminal 模式
 - 通过 MCP SSE 暴露查询接口
 - 支持 Telegram 待审批通知
 
@@ -55,6 +59,8 @@ Hub 监听 `0.0.0.0`，但无需把端口暴露到公网。推荐用 [Tailscale]
 ## Web Terminal（嵌入式终端）
 
 Dashboard 右侧的嵌入式终端由独立的伴生服务 **[web-terminal](https://github.com/BoZhen/webterminal)** 提供（默认端口 7700），负责把 tmux 会话以持久化终端的形式渲染到浏览器中。Hub 通过 iframe 嵌入它，用于终端预览与远程审批。
+
+现代工作台通过 `embed=1`、`theme=<id>` 与受限的父子页面生命周期消息协调 Web Terminal。主题切换、连接状态与移动端可见性会同步，但终端输入仍只走 Web Terminal 自己的 PTY/WebSocket 通道。
 
 该服务需单独部署，安装方式见其仓库说明与本仓库 `SETUP.md` 的「Web Terminal」一节。
 

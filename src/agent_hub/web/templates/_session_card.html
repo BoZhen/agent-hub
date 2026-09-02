@@ -3,153 +3,66 @@
 {% macro session_card(s, terminal_url, show_delete=False) %}
   {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
   {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if (s.tool or '') in ('codex', 'omx-yolo') or (s.tool or '').startswith('omx') else 'other') %}
-  <div class="{% if is_yolo %}yolo-card{% else %}bg-surface-light hover:bg-surface-lighter{% endif %} rounded-lg p-3 sm:p-4 border border-gray-700/30 transition relative{% if s.tmux_session %} cursor-pointer{% endif %}{% if s.parent_session_id %} subagent-card ml-6 border-l-2 border-l-purple-500/50{% endif %}"
+  {% set session_name = s.tmux_session or s.hostname %}
+  <div class="session-row{% if s.pending_tool %} is-waiting{% endif %}{% if is_yolo %} yolo-card{% endif %}{% if s.parent_session_id %} subagent-card{% endif %}"
        id="card-{{ s.session_id }}"
        data-parent-sid="{{ s.parent_session_id or '' }}"
        data-tool-family="{{ tool_family }}"
-       {% if s.tmux_session %}onclick="previewSession(this)"{% endif %}>
-    <div class="absolute top-3 sm:top-4 right-3 sm:right-4 flex items-center gap-2 z-10">
-      <span class="hidden sm:inline text-xs text-gray-500">{{ s.hostname }}</span>
-      <button type="button"
-              onclick="event.stopPropagation(); togglePin('{{ s.session_id }}', this)"
-              data-pinned="{{ 1 if s.pinned else 0 }}"
-              data-status="{{ s.status }}"
-              class="pin-btn p-0.5 {% if s.pinned %}text-accent-light hover:text-white{% else %}text-gray-600 hover:text-gray-300{% endif %} transition"
-              title="{% if s.pinned %}Unpin from dashboard{% else %}Pin to dashboard{% endif %}">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A5.921 5.921 0 0 1 5 6.708V2.277a2.77 2.77 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354z"/>
-        </svg>
-      </button>
-    </div>
-    <div class="flex gap-3 pr-8">
-      <div class="shrink-0 w-9 h-9 sm:w-10 sm:h-10 mt-0.5">
-        {{ icons.tool_icon(s.tool) }}
-      </div>
-      <div class="flex-1 min-w-0 flex flex-col">
-      <div class="flex-1 min-w-0">
-        <div class="block">
-          <div class="flex items-center mb-1.5 sm:mb-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <span class="dot dot-{{ s.status }}" id="dot-{{ s.session_id }}"></span>
-              <span class="font-semibold text-white text-sm sm:text-base">{{ s.tmux_session or s.hostname }}</span>
-              {% if s.tmux_session %}
-              <button type="button"
-                      onclick="event.stopPropagation(); copyTmuxName('{{ s.tmux_session }}', this)"
-                      class="copy-tmux-btn p-0.5 text-gray-500 hover:text-white transition"
-                      title="Copy: tmux attach -t {{ s.tmux_session }}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-                </svg>
-              </button>
-              {% if s.tool and 'claude' in s.tool %}
-              <button type="button"
-                      onclick="event.stopPropagation(); copyResumeCmd('{{ s.tmux_session }}', '{{ s.session_id }}', '{{ s.tool }}', this)"
-                      class="copy-resume-btn p-0.5 text-amber-500/70 hover:text-amber-300 transition"
-                      title="Copy: attach + claude --resume">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>
-              </button>
-              {% endif %}
-              {% endif %}
-              {% if s.parent_session_id %}
-              <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-900/40 text-purple-300 border border-purple-500/30 uppercase tracking-wide">subagent</span>
-              {% endif %}
-              {% if s.pending_tool %}
-              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-900/40 text-yellow-400 animate-pulse"
-                    id="waiting-{{ s.session_id }}">waiting: {{ s.pending_tool }}</span>
-              {% elif s.running_tool %}
-              <span class="text-xs px-1.5 py-0.5 rounded-full bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
-                    id="running-{{ s.session_id }}">⚡ Running {{ s.running_tool }} ({{ s.running_elapsed_label }})</span>
-              {% endif %}
-            </div>
-          </div>
-          {% if s.pending_detail %}
-          <div class="text-xs text-yellow-300/70 font-mono truncate mb-1 pl-4"
-               id="detail-{{ s.session_id }}">{{ s.pending_detail }}</div>
+       data-project="{{ s.cwd | basename }}"
+       data-cwd="{{ s.cwd }}"
+       data-host="{{ s.hostname }}"
+       data-session-name="{{ session_name }}"
+       data-model="{{ s.model or '' }}"
+       data-status="{{ 'waiting' if s.pending_tool else s.status }}"
+       data-pending="{{ 1 if s.pending_tool else 0 }}"
+       data-tmux="{{ s.tmux_session or '' }}">
+    <button type="button" class="session-select"{% if s.tmux_session %} onclick="previewSession(this)"{% else %} disabled{% endif %}
+            aria-label="Open {{ session_name }} terminal">
+      <span class="session-tool" aria-hidden="true">{{ icons.tool_icon(s.tool) }}</span>
+      <span class="session-copy">
+        <span class="session-title-line">
+          <span class="dot dot-{{ 'waiting' if s.pending_tool else s.status }}" id="dot-{{ s.session_id }}"></span>
+          <span class="session-name">{{ session_name }}</span>
+          <span data-role="badges">
+          {% if s.parent_session_id %}<span class="session-state">sub</span>{% endif %}
+          {% if s.pending_tool %}<span class="session-state" id="waiting-{{ s.session_id }}">Waiting</span>{% endif %}
+          </span>
+        </span>
+        <span class="session-meta">{{ s.cwd | basename }} · {{ s.hostname }}{% if s.model %} · {{ s.model }}{% endif %}</span>
+        <span data-role="session-detail">
+          {% if s.pending_detail %}<span class="session-detail" id="detail-{{ s.session_id }}">{{ s.pending_detail }}</span>{% endif %}
+          {% if s.pending_always_label %}<span class="session-detail" id="always-label-{{ s.session_id }}" title="{{ s.pending_always_label }}">Always → <span class="always-label-text">{{ s.pending_always_label }}</span></span>{% endif %}
+        </span>
+        <span id="events-{{ s.session_id }}">
+          {% if s.recent_events %}
+            {% set e = s.recent_events[0] %}
+            <span class="session-event"><span data-role="event-type">{{ e.event_type }}</span> · {{ e.summary or '—' }}</span>
+          {% else %}
+            <span class="session-event events-empty">{% if s.tool == 'codex' %}codex · native terminal state{% else %}no recent event{% endif %}</span>
           {% endif %}
-          {% if s.pending_always_label %}
-          <div class="text-xs text-emerald-300/60 truncate mb-1 pl-4"
-               id="always-label-{{ s.session_id }}"
-               title="{{ s.pending_always_label }}">
-            <span class="text-gray-500">Always →</span> {{ s.pending_always_label }}
-          </div>
-          {% endif %}
-        </div>
-      </div>
-      <div class="mt-2 pt-2 border-t border-gray-700/30">
-        <div id="events-{{ s.session_id }}" class="space-y-1.5">
-          {% for e in s.recent_events or [] %}
-          <div class="text-xs leading-tight">
-            <div class="flex items-center gap-2">
-              <span class="text-accent-light">{{ e.event_type }}</span>
-              <span class="text-gray-500">{{ e.created_at[11:19] }}</span>
-            </div>
-            <div class="text-gray-400 truncate">{{ e.summary or '—' }}</div>
-          </div>
-          {% endfor %}
-          {% if not s.recent_events %}
-          <div class="events-empty text-xs text-gray-600">
-            {% if s.tool == 'codex' %}codex — no event stream{% else %}no events yet{% endif %}
-          </div>
-          {% endif %}
-        </div>
-      </div>
-      </div>
-    </div>
-    <div class="flex items-center justify-center gap-2 flex-wrap mt-2 pt-2 border-t border-gray-700/20"
+        </span>
+      </span>
+      <span class="session-state" data-role="state-label">
+        {% if s.pending_tool %}Waiting{% elif s.running_tool %}Running{% else %}{{ s.status }}{% endif %}
+      </span>
+    </button>
+    <div class="session-actions"
          id="actions-{{ s.session_id }}"
          data-tmux="{{ s.tmux_session or '' }}"
          data-cwd="{{ s.cwd }}"
-         data-name="{{ s.tmux_session or s.hostname }}"
+         data-name="{{ session_name }}"
          data-model="{{ s.model or '' }}"
          data-sid="{{ s.session_id }}">
-      <a href="/sessions/{{ s.session_id }}"
-         onclick="event.stopPropagation()"
-         class="detail-btn text-xs px-2.5 py-1 rounded bg-gradient-to-b from-gray-100 to-gray-300 text-gray-900 border border-gray-400 shadow-sm hover:from-white hover:to-gray-200 transition font-semibold">
-        Detail
-      </a>
-      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
-         target="_blank"
-         onclick="event.stopPropagation()"
-         class="text-xs px-2.5 py-1 rounded bg-gradient-to-b from-red-800 to-red-950 text-white border border-red-950 shadow-sm hover:from-red-700 hover:to-red-900 transition font-semibold">
-        Terminal
-      </a>
-      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}
-      <button onclick="event.stopPropagation(); forkSession('{{ s.session_id }}', '{{ s.tmux_session }}', this)"
-              class="fork-btn text-xs px-2.5 py-1 rounded bg-gradient-to-b from-purple-700 to-purple-900 text-white border border-purple-950 shadow-sm hover:from-purple-600 hover:to-purple-800 transition font-semibold"
-              title="Fork into a new tmux session that inherits this conversation">
-        Fork
-      </button>
+      {% if s.pending_tool and s.tmux_session %}
+      <button type="button" onclick="event.stopPropagation(); approveSession('{{ s.session_id }}', false, this)" class="approve-btn action-btn approve">Approve</button>
+      {% if s.pending_always_label %}<button type="button" onclick="event.stopPropagation(); approveSession('{{ s.session_id }}', true, this)" class="always-btn action-btn always" title="{{ s.pending_always_label }}">Always</button>{% endif %}
       {% endif %}
-      {% if s.pending_tool %}
-        {% if s.tmux_session %}
-      <button onclick="event.stopPropagation(); approveSession('{{ s.session_id }}', false, this)"
-         class="approve-btn text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-        Approve
-      </button>
-          {% if s.pending_always_label %}
-      <button onclick="event.stopPropagation(); approveSession('{{ s.session_id }}', true, this)"
-         class="always-btn text-xs px-2 py-1 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse"
-         title="{{ s.pending_always_label }}">
-        Always
-      </button>
-          {% endif %}
-        {% else %}
-      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}"
-         target="_blank"
-         onclick="event.stopPropagation()"
-         class="text-xs px-2 py-1 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-        Approve &rarr;
-      </a>
-        {% endif %}
-      {% endif %}
-      {% if show_delete %}
-      <button onclick="event.stopPropagation(); deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)"
-              class="ml-auto text-xs px-2 py-1 rounded bg-red-900/40 text-red-300 hover:bg-red-800/50 hover:text-white transition">
-        Delete
-      </button>
-      {% endif %}
+      <button type="button" onclick="event.stopPropagation(); togglePin('{{ s.session_id }}', this)"
+              data-pinned="{{ 1 if s.pinned else 0 }}" data-status="{{ s.status }}" class="pin-btn action-btn" title="{% if s.pinned %}Unpin{% else %}Pin{% endif %}">☆</button>
+      <a href="/sessions/{{ s.session_id }}" onclick="event.stopPropagation()" class="detail-btn action-btn" title="Session details">···</a>
+      <a href="{{ terminal_url }}/?{% if s.tmux_session %}attach={{ s.tmux_session }}{% else %}name=hub-{{ s.session_id[:8] }}&cwd={{ s.cwd }}{% endif %}" target="_blank" onclick="event.stopPropagation()" class="action-btn" title="Open standalone terminal">↗</a>
+      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}<button type="button" onclick="event.stopPropagation(); forkSession('{{ s.session_id }}', '{{ s.tmux_session }}', this)" class="fork-btn action-btn" title="Fork session">⑂</button>{% endif %}
+      {% if show_delete %}<button type="button" onclick="event.stopPropagation(); deleteSession('{{ s.session_id }}', {{ 'true' if s.tmux_session else 'false' }}, this)" class="action-btn danger">Delete</button>{% endif %}
     </div>
   </div>
 {% endmacro %}

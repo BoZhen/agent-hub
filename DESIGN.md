@@ -466,6 +466,9 @@ Codex 支持分为两个层次：
 
 ## 11. Web 界面设计
 
+> 本节记录当前已经实现的 Web 界面。下一版产品定位、信息架构、视觉语言与交互约束，
+> 以本文末尾的“Agent Hub 产品与界面设计契约”为准；两者冲突时，后者优先。
+
 ### 11.1 页面组成
 
 当前 Web 层包含以下主要页面：
@@ -677,3 +680,252 @@ Agent Hub 的核心设计可以概括为：
 - 以 **MCP** 作为对其他 Agent 的可编程接口
 
 该设计优先服务于单机/私有网络中的高效会话管理场景，强调低侵入、可恢复与可观测。
+
+---
+
+# Agent Hub 产品与界面设计契约
+
+## Source of truth
+
+- Status: Active；现有界面尚未全部实现本契约。
+- Last refreshed: 2026-09-02
+- Primary product surfaces: 会话导航、Needs Action 队列、工作集标签、原生 Terminal 工作区、Session Inspector、归档与 tmux 管理、移动端 Session/Terminal 双模式。
+- Canonical rule: 本节是产品与 UI/UX 决策的主依据；前文技术架构继续有效，`UI_REDESIGN_COLOR_HIERARCHY.md` 作为配色与层级的实现参考。
+- Product priority: 先定稿视觉设计与交互逻辑，再进入实现稳定化；当前服务只运行在可信内网，统一认证、TLS 与公网防护不是首期设计或实现的阻塞项。
+- Evidence reviewed:
+  - 当前 Agent Hub：`README.md`、`src/agent_hub/web/templates/`、`src/agent_hub/web/routes.py`、`figs/computer-view.png`、`figs/phone-view.jpg`、`UI_REDESIGN_COLOR_HIERARCHY.md`
+  - Claude Console：同级仓库的 `DESIGN.md`、`README.zh-CN.md`、`claude_console.py` 与 `figs/` 截图
+  - Codex Console：同级仓库的 `DESIGN.md`、`README.zh-CN.md`、`codex_console.py` 与 `docs/codex-console-overview.png`
+  - Web Terminal：同级仓库的 `README.md`、`webterminald.py` 与 `figs/view.jpg`
+
+Observed facts:
+
+- Claude Console 与 Codex Console 都以“项目侧栏 + Session 工作集标签 + 主内容区 + 紧凑状态”为核心外壳，并把对话、工具、Plan 与变更重新渲染为浏览器原生组件。
+- Agent Hub 当前采用左侧卡片列表、右侧 Web Terminal iframe 的 `1/3 : 2/3` 布局，已经保留 Claude Code/Codex CLI 原生 TUI；这是区别于两个 Console 的核心能力。
+- Web Terminal 当前通过 `?attach=<tmux>` 建立独立 WebSocket/PTY/tmux client，支持移动端虚拟键盘，但没有 `postMessage`、嵌入模式或主题同步协议。
+
+Design inference:
+
+- Agent Hub 不应复制两个 Console 的聊天渲染层。应借用它们成熟的工作台外壳和状态语义，把原生 TUI 提升为主画布，把 Hub 定位为跨 CLI、跨项目、跨主机的会话控制平面。
+
+## Brand
+
+- Personality: 安静、技术化、运维感、低噪音；像可靠的工作台，不像营销 Dashboard。
+- Trust signals: 当前选中的 session 清晰可见；状态与连接性明确；原生 TUI 始终可达；关闭视图与终止进程严格区分；危险操作有明确边界。
+- Signature: **Native TUI, modern workspace**。现代化发生在终端周围，不覆盖、仿制或弱化 Claude Code/Codex CLI 自己的界面。
+- Avoid: 紫色大底、金属渐变按钮、持续发光的大面积卡片、全局等宽字体、装饰性图表、把终端降级成详情弹窗，以及重新实现一套聊天 Console。
+
+## Product goals
+
+- Goals:
+  - 在修改主界面实现前，先形成可评审、可截图验证的桌面/平板/手机视觉基线和完整交互状态表。
+  - 在一个浏览器工作台中发现、筛选、切换和控制 Claude Code、Codex CLI 与普通 tmux 会话。
+  - 让用户在桌面和移动端都能以最少步骤进入原生 TUI，并完成审批、查看状态和恢复工作。
+  - 吸收两个 Console 的项目分组、工作集标签、状态语义和响应式导航，但保留 tmux/Web Terminal 作为交互真相来源。
+  - 把 Needs Action 与异常连接置于普通 activity 之上，降低同时运行多个 agent 时的注意力成本。
+- Non-goals:
+  - 不解析并重新渲染完整对话、Markdown、Plan、diff 或工具卡片。
+  - 不替代 Claude Console、Codex Console 或 CLI 自身的会话管理能力。
+  - 不在本轮现代化中引入 SPA、前端构建链或新的 UI 框架。
+  - 不把 Agent Hub 扩展成公网多租户平台或通用任务编排器。
+  - 不把统一认证、TLS、跨公网访问和企业级安全治理作为首期 UI 定稿条件；部署边界仍限定为可信内网。
+- Success signals:
+  - 桌面端从任意 waiting session 到可操作 TUI 不超过一次选择或一次主操作。
+  - Session 切换、关闭工作集标签和浏览器断线都不会结束底层 tmux/CLI 进程。
+  - 常见桌面尺寸下一屏可扫描至少 10 个 session 行，waiting 项不会落到首屏之外。
+  - 390px 宽手机上，用户可以在 Session 列表与全屏 Terminal 之间明确切换，Terminal 不与缩小的桌面侧栏争夺空间。
+  - 状态不只依赖颜色；键盘、触控和屏幕阅读器均能识别当前 session、连接状态与危险操作。
+
+## Personas and jobs
+
+- Primary personas: 同时运行多个 Claude/Codex 任务的开发者、研究者和单人运维者。
+- User jobs:
+  - 快速回答“哪个 agent 需要我、哪个仍在工作、哪个已经停了”。
+  - 按项目找到 session，并把常用 session 放进当前工作集。
+  - 不离开浏览器就进入原生 TUI，继续使用 CLI 的全部键盘能力和视觉反馈。
+  - 在手机上完成查看、审批、短输入和紧急接管。
+  - 在需要排障时查看事件、模型、cwd、host、tmux 与连接信息。
+- Key contexts of use: 桌面长期工作台；平板横屏监控；手机纵屏审批与短时终端接管；Tailscale/Nebula 等可信私网访问。
+
+## Information architecture
+
+- Primary navigation:
+  - `Needs Action`：全局置顶，只收 waiting、连接失败和需要恢复的 session。
+  - `Projects`：按项目组织 live、idle/pinned 与历史入口，host/hub 作为次级 badge，而不是第一层导航。
+  - `Open sessions`：主工作区上方的浏览器工作集标签；标签关闭只关闭视图，不终止 session。
+  - `Utilities`：Stopped、raw tmux、设置与诊断进入低权重区域。
+- Core routes/screens:
+  - `/`：统一工作台，承担导航、注意力队列、工作集和 Terminal。
+  - `/sessions/{id}`：深链接与 Inspector 的完整降级页，不再是日常切换的必经路径。
+  - `/tmux`：底层 tmux 管理页，保持辅助工具定位。
+  - `/idle`、`/stopped`：短期保留兼容；长期可收敛为导航筛选或归档视图。
+- Content hierarchy: `Needs Action > selected native TUI > running/live evidence > idle/pinned > stopped/raw tmux`。
+
+Desktop target:
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ Agent Hub   host/connection     search              utilities       │
+├──────────────────────┬───────────────────────────────────────────────┤
+│ Needs Action         │ [session A] [session B] [session C]           │
+│ ───────────────────  ├───────────────────────────────────────────────┤
+│ Projects             │ selected session / status / cwd       actions│
+│  project A           ├───────────────────────────────────────────────┤
+│   ● session A        │                                               │
+│   ◐ session B        │            Web Terminal iframe                │
+│  project B           │          native Claude/Codex TUI              │
+│   ○ session C        │                                               │
+│                      │                                               │
+│ Archive / raw tmux   │                                               │
+└──────────────────────┴───────────────────────────────────────────────┘
+```
+
+- Content density: 左侧使用 40–52px 的 session row，而不是重复的大卡片；详细事件进入 hover/展开摘要或 Inspector。
+- Selection model: session row 负责选择；行内主按钮只在 Needs Action 时出现。普通状态下，整行进入 Terminal，危险操作进入菜单。
+
+## Design principles
+
+- Native TUI is the canvas: Terminal 是主工作区和最终真相来源，不是附件、预览或详情按钮。
+- Fleet navigation, not chat reconstruction: Hub 负责跨 session 的发现、状态、切换和控制；对话重排交给两个 Console。
+- Separate view from process: “Close tab”“Detach view”“End session”“Kill tmux”必须使用不同文案、位置和危险等级。
+- Attention over activity: waiting、恢复失败和断线可抢占视觉注意力；普通 active/busy 只提供稳定状态，不持续闪烁。
+- Progressive disclosure: session 行先回答身份、状态和当前动作；模型、cwd、事件、token 与底层信息进入 Inspector。
+- Keyboard ownership is explicit: Terminal 聚焦后，按键默认属于原生 TUI；Hub 全局快捷键不得截获常见 CLI/tmux 组合。
+- Design the experience before hardening it: 先通过视觉基线、交互原型和状态表确定产品形态，再处理重连、嵌入协议与部署加固；稳定性工作不得反过来主导或稀释 UI 方向。
+- Preserve native behavior during implementation: 视觉升级不能以丢失 tmux 状态、误杀 session、破坏移动端键盘或降低终端可读性为代价。
+- Tradeoffs: 第一阶段接受切换标签时重新连接 Web Terminal；在 Web Terminal 提供安全的 suspend/resume 协议前，不用多个隐藏 iframe 冒险改变 tmux 尺寸或持有过多 client。
+
+## Visual language
+
+- Color:
+  - 以 `UI_REDESIGN_COLOR_HIERARCHY.md` 的 Graphite Ops Console 色板为基础。
+  - 中性 canvas/panel 构成层级，`#5CC8FF` 只用于品牌、选择与 focus。
+  - green/blue/amber/gray/red 只表达 active/running/waiting/idle/danger；waiting 允许轻量动画，但必须支持 reduced motion。
+  - 主题建立在同一套语义 token 上，交付五套暗色与五套亮色：Graphite、Midnight、Nord、Tokyo Night、Mocha；Paper、Solarized、One Light、Rosé Dawn、Latte。
+  - Graphite 是默认主题和批准视觉参考；用户选择持久化到浏览器，并同步给嵌入式 Web Terminal。
+- Typography: UI chrome 使用系统 sans-serif；路径、命令、session id 与技术 metadata 使用 monospace；Terminal 字体由 Web Terminal 自己管理。
+- Spacing/layout rhythm: 4px 基础单位，常用间距 8/12/16px；列表紧凑，主画布尽量无内层装饰边距。
+- Shape/radius/elevation: 6–10px 圆角，边框和背景亮度优先于阴影；Terminal 容器只做必要边界，不做悬浮卡片。
+- Motion: 仅用于新状态、抽屉与连接反馈；无无限循环 glow；遵循 `prefers-reduced-motion`。
+- Imagery/iconography: 复用工具 logo 或简洁线性图标；状态必须同时有文字/形状，不用 logo 大小承担层级。
+
+## Components
+
+- Existing components to reuse:
+  - FastAPI/Jinja2 页面与 WebSocket 增量事件。
+  - Web Terminal 的 `?attach=<tmux>` 嵌入和移动端虚拟键盘。
+  - 现有 session/tmux API、审批、restore、fork、pin、统计与事件摘要。
+  - 当前 Dashboard 的左右分屏和 iframe 选择逻辑作为迁移基础。
+- New/changed components:
+  - `AppShell`：统一 top bar、连接状态、全局搜索/过滤和 utility 入口。
+  - `AttentionQueue`：waiting、orphan、terminal disconnected 的紧凑置顶列表。
+  - `ProjectSessionNavigator`：项目分组、host badge、收藏与 dense session rows。
+  - `WorkspaceTabs`：当前浏览器的 session 工作集；切换与关闭不改变底层进程。
+  - `TerminalStage`：明确的 connecting/connected/disconnected/ended/attach-failed 状态，以及 standalone fallback。
+  - `SessionInspector`：metadata、最近事件和次级操作的右侧抽屉或窄屏 sheet。
+  - `MobileModeSwitch`：Sessions 与 Terminal 两个全屏模式，而不是缩小桌面双栏。
+  - `ThemePicker`：按 Dark/Light 分类展示十套主题的名称与色板缩略图，切换后即时更新 Hub chrome 与 Web Terminal。
+- Variants and states:
+  - Session: needs-action、running、ready/idle、unread、disconnected、ended、selected。
+  - Terminal: empty、connecting、connected、reconnecting、attach-failed、session-ended。
+  - Tab: selected、background-running、background-needs-action、stale。
+- Token/component ownership:
+  - 在 Agent Hub 内使用语义 CSS custom properties 与语义组件类，逐步退出直接颜色类和金属渐变。
+  - 第一阶段允许与现有 Tailwind CDN 并存，但不新增前端依赖；稳定后再决定是否移除 CDN。
+  - Web Terminal 继续拥有 xterm、移动键盘、字体与终端内部主题；Hub 不通过 CSS 假装控制跨源 iframe 内容。
+
+## Accessibility
+
+- Target standard: 实用的 WCAG 2.1 AA，优先覆盖导航、审批、状态和危险操作。
+- Keyboard/focus behavior:
+  - Workspace tabs 使用 `tablist/tab` 语义、方向键导航、`aria-selected` 与可见 focus。
+  - Session row、Approve、Inspector 与菜单可通过键盘到达。
+  - iframe 有明确 `title`；从导航进入 Terminal 与返回导航都有显式动作。
+  - Terminal 聚焦时不截获 CLI 常用组合；Hub 快捷键只在父页面聚焦时生效。
+- Contrast/readability: 所有状态以文字/图形和颜色共同表达；正文与交互控件满足 AA 对比度；不以低对比灰字承载当前动作。
+- Screen-reader semantics: live 状态更新使用节制的 `aria-live`；waiting 通知优先，普通事件流不连续播报。
+- Reduced motion and sensory considerations: waiting pulse、进入动画和抽屉动画均可关闭；不得依靠闪烁表达唯一信息。
+
+## Responsive behavior
+
+- Supported breakpoints/devices:
+  - Desktop `>= 1024px`：固定/可调宽导航 + Terminal 主画布。
+  - Tablet `700–1023px`：抽屉式导航 + Terminal，横屏保留可选窄导航。
+  - Phone `< 700px`：Sessions 与 Terminal 分屏切换；选中 session 后 Terminal 全屏。
+- Layout adaptations:
+  - Terminal 高度使用动态 viewport 与 safe-area；不通过全局增大 `html` 字号放大所有控件。
+  - 手机上详情进入 bottom sheet，危险操作不与主 Terminal 键盘栏争夺底部空间。
+  - 返回 Session 列表时不结束 tmux；重新进入 Terminal 时明确显示 reconnecting。
+- Touch/hover differences: 主触控目标至少约 44px；hover 信息在触控端必须有 Inspector 或菜单替代；Web Terminal 的虚拟键盘保持独立控制权。
+
+## Interaction states
+
+- Loading: 首屏先渲染 shell 与 session rows；Terminal 以明确的 connecting 状态等待 iframe，不用空白黑框。
+- Empty: 没有 live session 时解释如何创建/导入 tmux；没有选中 session 时显示轻量快捷入口，不展示装饰性空面板。
+- Error: attach 失败显示原因、Retry、Open standalone 和返回 Sessions；不得静默关闭工作集标签。
+- Success: 审批发送后立即进入“sent/waiting for CLI”过渡态，以 pane/WebSocket 真值确认后再清除。
+- Disabled: ended/stopped session 不可输入；恢复、删除和 kill 使用不同按钮与文案。
+- Offline/slow network: 保留导航、工作集与最后状态；WebSocket 和 Terminal 连接分别显示，不把 Hub 数据连接成功误报为 Terminal 已连接。
+
+## Content voice
+
+- Tone: 简短、操作化、可验证；优先回答“现在是谁、正在做什么、是否需要我”。
+- Terminology:
+  - `Session`：一个 Claude/Codex 工作会话。
+  - `Terminal`：该 session 的原生 TUI 视图。
+  - `Open/Close tab`：只改变浏览器工作集。
+  - `End session`：结束 CLI 会话。
+  - `Kill tmux`：不可恢复地终止底层 tmux；仅在底层管理上下文使用。
+  - `Needs Action`：需要用户审批、恢复或处理连接异常。
+- Microcopy rules: 不把 `Preview` 用作主 Terminal 入口；不使用含糊的 `Delete` 同时表示删记录与杀进程；状态文案描述当前事实，不描述系统猜测。
+
+## Implementation constraints
+
+- Framework/styling system: 保持 FastAPI + Jinja2 + vanilla JavaScript；不引入 SPA 或前端构建步骤。采用语义 CSS tokens 和小型可复用模板 partial。
+- Design-token constraints: Agent Hub chrome 与 Web Terminal 各自拥有主题；跨端口 iframe 不能靠父页面 CSS 同步。主题同步必须通过明确的 Web Terminal URL/`postMessage` 协议实现。
+- Performance constraints:
+  - Session 更新继续使用 WebSocket 局部更新，不因单条事件重载列表或 Terminal。
+  - 第一阶段只维持一个 active Web Terminal iframe；工作集标签保存浏览器导航状态。
+  - 多 iframe keep-alive 必须等待 Web Terminal 支持 suspend/visibility/resize 协议，并验证不会因隐藏尺寸或多个 tmux client 改变 TUI 布局。
+- Compatibility constraints:
+  - 保持 `?attach=<tmux>`、移动虚拟键盘、tmux persistence、approve/always、restore、fork 和现有深链接可用。
+  - 关闭标签、切换过滤器、收起导航和浏览器断线均不得 kill/detach 底层 tmux。
+  - Web Terminal 当前无嵌入通信协议；Hub 第一阶段只能把 iframe load/error 与 Hub WebSocket 状态作为外部信号，不能宣称知道 xterm 内部 ready 状态。
+  - 当前发布假设是个人使用的可信内网，首期沿用现有访问边界，不要求先完成统一认证或 TLS 改造。
+  - 如果未来改变为公网、共享网络或多用户访问，统一认证、受控 origin、TLS 与访问审计立即升级为发布阻塞项。
+- Test/screenshot expectations:
+  - 保留现有 Python 回归测试，并补充 session selection、tab close vs process end、waiting priority、iframe URL、WebSocket reconnect 的前端行为测试。
+  - 每个 UI 迭代至少验证 1440px desktop、1024px tablet、390×844 phone，以及键盘-only/reduced-motion。
+  - Terminal 验收必须包含 Claude Code TUI、Codex CLI TUI、tmux 多窗口、移动软键盘和虚拟键盘，不只验证空 shell。
+
+Design-freeze gate:
+
+- 至少形成一套 1440px desktop、1024px tablet 和 390×844 phone 的高保真基线；三者必须来自同一套 token 与组件系统。
+- 明确 session 选择、打开/关闭标签、waiting 审批、Terminal 聚焦、返回列表、重连、结束 session 和 kill tmux 的逐步交互。
+- 为 Session、Tab、Terminal、Needs Action、Inspector 和移动 mode switch 列出默认、hover/focus、selected、loading、empty、error、disabled 状态。
+- 确认信息密度、导航宽度、Terminal 占比、字体层级、状态色、按钮优先级和手机触控尺寸，不把这些留给实现阶段临场决定。
+- 使用真实 Claude Code/Codex CLI TUI 截图验证 Terminal 主画布，而不是用空黑框或 lorem ipsum 代替。
+- 所有会改变页面骨架的 open question 已解决；只影响后期能力的 Web Terminal 协议与安全增强可以延后。
+
+Recommended delivery sequence:
+
+1. **Phase 0 — Visual and interaction freeze**：先制作桌面/平板/手机高保真参考与关键流程原型，评审信息架构、视觉层级、状态和文案；不修改生产 UI。
+2. **Phase 1 — Hub UI implementation**：按已批准基线实现语义 tokens、dense navigator、Needs Action、WorkspaceTabs、单 iframe TerminalStage、Inspector 和手机双模式；继续复用现有 API 与 Web Terminal。
+3. **Phase 2 — Interaction stability**：补齐刷新恢复、WebSocket/iframe 重连、焦点与快捷键边界、状态一致性和视觉回归；只在确有体验收益时扩展 Web Terminal embed/visibility 协议。
+4. **Phase 3 — Deployment hardening when needed**：仅在访问边界超出可信内网时实施统一认证、TLS、受控 origin、审计与速率限制。
+
+Phase 1 implementation acceptance gate:
+
+- 原生 Claude/Codex TUI 在桌面和手机均完整可操作。
+- Session 标签只管理视图，任何关闭/切换动作都不结束进程。
+- waiting session 始终优先可见且能一次进入审批上下文。
+- 没有新增运行时依赖或前端构建链。
+- 当前 API、MCP、Telegram、restore/fork 与 WebSocket 行为没有回归。
+
+## Open questions
+
+- [x] 首期导航默认采用 `project → session`，host/hub 作为 badge；未来可以增加按 host/time/status 切换分组，不阻塞页面骨架。
+- [ ] 是否需要修改 `web-terminal` 建立 embed/主题/连接状态协议；owner: product + web-terminal；impact: TerminalStage 精确状态与 tab keep-alive；不阻塞 Phase 0/1。
+- [x] 统一 Basic Auth/反向代理入口延后；当前可信内网假设下不阻塞视觉与交互改版，访问边界变化时重新评审。
+- [x] 首版交付五暗五亮十套主题；Graphite 为默认与视觉验收基线，其他主题共享相同组件语义并纳入对比度抽检。
+- [ ] `/agent` Monitor 页面在现代化后保留、降级为诊断页或移除；owner: product；impact: 顶部导航与产品边界。
