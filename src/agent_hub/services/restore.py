@@ -88,7 +88,7 @@ def _resume_hint_command(tool: str, session_id: str) -> str:
     if tool.startswith("claude"):
         return f"claude --resume {session_id}"
     if tool == "omx-yolo":
-        return "omx resume --last --madmax --xhigh"
+        return "omx resume --last --madmax"
     if tool in ("codex", "omx"):
         # codex session_id stored in hub is synthetic (codex-{name}-{ts}),
         # so we can't pass it as a UUID. Hint the user toward omx's

@@ -103,14 +103,11 @@
     <h2 id="nc-title">New session</h2>
     <div class="field">
       <label>Tool</label>
-      <div class="choice-grid" id="nc-tools">
-        <button type="button" class="choice" data-tool="claude-opus" title="claude --model opus">Claude Opus</button>
-        <button type="button" class="choice" data-tool="claude-sonnet" title="claude --model sonnet">Claude Sonnet</button>
-        <button type="button" class="choice" data-tool="codex" title="omx">Codex</button>
-        <button type="button" class="choice is-danger" data-tool="claude-yolo" title="claude --dangerously-skip-permissions">Claude, no prompts</button>
-        <button type="button" class="choice is-danger" data-tool="omx-yolo" title="omx --madmax --xhigh">Codex, no prompts</button>
-        <button type="button" class="choice" data-tool="" title="Empty tmux with a shell">Shell only</button>
+      <div class="choice-grid choice-grid-2" id="nc-tools">
+        <button type="button" class="choice" data-tool="claude-yolo" title="claude --dangerously-skip-permissions">Claude Code</button>
+        <button type="button" class="choice" data-tool="omx-yolo" title="omx --madmax">Codex</button>
       </div>
+      <p class="field-hint">Default model. Permission prompts are skipped, so the agent runs without waiting for approval.</p>
     </div>
     <div class="field">
       <label for="nc-name">Name</label>

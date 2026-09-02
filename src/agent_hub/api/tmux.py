@@ -11,41 +11,33 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+# The launcher offers exactly two things: Claude Code or Codex (via omx),
+# each with the tool's default model and with permission prompts skipped.
+# The keys double as the session's `tool` value once hooks report in, so
+# restore.py can rebuild the same flags on resume; keep them stable.
 _ALLOWED_COMMANDS = {
-    "claude-sonnet",
-    "claude-opus",
     "claude-yolo",
-    "codex",
     "omx-yolo",
 }
 
 # Maps a virtual command key → the actual binary name that gets resolved
-# via shutil.which. Keys not listed here are resolved as-is.
+# via shutil.which.
 _COMMAND_BIN: dict[str, str] = {
-    "claude-sonnet": "claude",
-    "claude-opus": "claude",
     "claude-yolo": "claude",
-    "codex": "omx",
     "omx-yolo": "omx",
 }
 
-# Extra args appended after the resolved command path. Lets virtual command
-# keys inject model selectors / dangerous-mode flags while keeping a flat
-# allowlist.
+# Extra args appended after the resolved command path.
 _COMMAND_ARGS: dict[str, list[str]] = {
-    "claude-sonnet": ["--model", "sonnet"],
-    "claude-opus": ["--model", "opus"],
     "claude-yolo": ["--dangerously-skip-permissions"],
-    "omx-yolo": ["--madmax", "--xhigh"],
+    "omx-yolo": ["--madmax"],
 }
 
-# Auto-name prefix override for virtual command keys. Commands not
-# listed here fall back to the key itself. Used to shorten the auto-
-# generated tmux name: "claude-sonnet-<workdir>-N" is too long, but
-# "sonnet-<workdir>-N" / "opus-<workdir>-N" still disambiguate.
+# Auto-name prefix for the generated tmux name: "claude-<workdir>-N" and
+# "codex-<workdir>-N".
 _NAME_PREFIX: dict[str, str] = {
-    "claude-sonnet": "sonnet",
-    "claude-opus": "opus",
+    "claude-yolo": "claude",
+    "omx-yolo": "codex",
 }
 
 logger = logging.getLogger(__name__)

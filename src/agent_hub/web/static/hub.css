@@ -292,6 +292,9 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .field { margin-bottom: 12px; }
 .field > label { display: block; margin-bottom: 5px; color: var(--muted); font-size: var(--fs-1); }
 .choice-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.choice-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.choice-grid-2 .choice { height: 40px; font-size: var(--fs-2); }
+.field-hint { margin: 6px 0 0; color: var(--muted); font-size: var(--fs-1); line-height: 1.45; }
 .choice { height: 32px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); color: var(--text-2); font-size: var(--fs-1); }
 .choice:hover { color: var(--text); border-color: var(--border-strong); }
 .choice.is-active { border-color: var(--brand); color: var(--text); background: color-mix(in srgb, var(--brand) 12%, var(--panel)); }

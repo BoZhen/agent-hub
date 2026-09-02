@@ -865,7 +865,7 @@ window.addEventListener('agenthub:theme', event => {
 /* New session dialog                                                  */
 /* ------------------------------------------------------------------ */
 let ncBrowsePath = null;
-let ncTool = 'claude-opus';
+let ncTool = 'claude-yolo';
 function ncSetTool(tool) {
   ncTool = tool;
   document.querySelectorAll('#nc-tools .choice').forEach(el => el.classList.toggle('is-active', el.dataset.tool === tool));
@@ -904,7 +904,7 @@ function ncRenderDirList(data) {
 function ncOpen() {
   ncClearError();
   $('nc-name').value = '';
-  ncSetTool('claude-opus');
+  ncSetTool('claude-yolo');
   $('modal-new').hidden = false;
   ncBrowse(ncBrowsePath || '').catch(e => ncShowError(e.message));
   setTimeout(() => $('nc-name').focus(), 30);
@@ -921,7 +921,7 @@ async function ncCreate() {
   const create = $('nc-create');
   create.classList.add('is-busy');
   try {
-    const data = await api('POST', '/api/tmux/new', {name: name || null, cwd: ncBrowsePath, command: ncTool || null});
+    const data = await api('POST', '/api/tmux/new', {name: name || null, cwd: ncBrowsePath, command: ncTool});
     ncClose();
     toast(`Started ${data.name}`, 'success');
     await openRawTmux(data.name);
