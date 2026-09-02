@@ -1,249 +1,155 @@
 {% extends "base.html" %}
 {% import "_macros.html" as icons %}
-{% block title %}{{ session.hostname }}:{{ session.cwd | basename }} — Agent Hub{% endblock %}
+{% block title %}{{ session.tmux_session or session.hostname }} — Agent Hub{% endblock %}
+{% block page_title %}{{ session.tmux_session or session.hostname }}{% endblock %}
+{% block page_actions %}
+  {% if session.tmux_session %}<a class="btn" href="/?session={{ session.session_id }}"><svg class="icon"><use href="#i-terminal"/></svg>Open terminal</a>{% endif %}
+{% endblock %}
 
 {% block content %}
-<div class="mb-4 sm:mb-6">
-  <a href="/" class="text-sm text-gray-400 hover:text-white transition py-2 inline-block">&larr; Dashboard</a>
-</div>
+{% set status = 'waiting' if session.pending_tool else ('running' if session.running_tool else session.status) %}
+{% set labels = {'waiting': 'Waiting', 'running': 'Running', 'active': 'Active', 'idle': 'Idle', 'stopped': 'Ended'} %}
+<div class="page">
+  <section class="card">
+    <div class="session-head">
+      <span class="session-tool" aria-hidden="true">{{ icons.tool_icon(session.tool) }}</span>
+      <h1>{{ session.tmux_session or session.hostname }}</h1>
+      <span class="dot dot-{{ status }}" id="dot-{{ session.session_id }}"></span>
+      <span class="session-state" id="state-{{ session.session_id }}">{% if session.running_tool %}Running {{ session.running_tool }} for {{ session.running_elapsed_label }}{% else %}{{ labels.get(status, status) }}{% endif %}</span>
+    </div>
 
-<!-- Session header -->
-<div class="bg-surface-light rounded-lg p-3 sm:p-5 border border-gray-700/30 mb-4 sm:mb-6">
-  <div class="flex items-start gap-3 sm:gap-4 mb-3">
-  <div class="shrink-0 w-10 h-10 sm:w-12 sm:h-12 mt-1">
-    {{ icons.tool_icon(session.tool) }}
-  </div>
-  <div class="flex-1 min-w-0 flex items-center gap-2 sm:gap-3 flex-wrap">
-    <span class="dot dot-{{ session.status }}"></span>
-    <h1 class="text-lg sm:text-xl font-bold text-white truncate">{{ session.tmux_session or session.hostname }}</h1>
-    {% if session.tmux_session %}
-    <span class="text-xs sm:text-sm text-gray-500">{{ session.hostname }}</span>
-    {% endif %}
     {% if session.pending_tool %}
-    <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0 bg-yellow-900/40 text-yellow-400 animate-pulse"
-          id="waiting-{{ session.session_id }}">waiting: {{ session.pending_tool }}</span>
-    {% elif session.running_tool %}
-    <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0 bg-yellow-400/20 text-yellow-200 font-semibold border border-yellow-400/50"
-          id="running-{{ session.session_id }}">⚡ Running {{ session.running_tool }} ({{ session.running_elapsed_label }})</span>
-    {% else %}
-    <span class="text-xs sm:text-sm px-2 py-0.5 rounded-full shrink-0
-      {% if session.status == 'active' %}bg-green-900/40 text-green-400
-      {% elif session.status == 'idle' %}bg-sky-900/40 text-sky-300
-      {% else %}bg-gray-700/40 text-gray-400{% endif %}
-    ">{{ session.status }}</span>
+    <div class="pending-box" id="pending-{{ session.session_id }}">
+      <strong>Waiting for approval</strong> · {{ session.pending_tool }}{% if session.pending_detail %}<br>{{ session.pending_detail }}{% endif %}
+      {% if session.pending_always_label %}<br><span class="mono">Always: {{ session.pending_always_label }}</span>{% endif %}
+    </div>
     {% endif %}
-  </div>
-  </div>
-  {% if session.pending_detail %}
-  <div class="text-xs sm:text-sm text-yellow-300/70 font-mono truncate mb-2 ml-5"
-       id="detail-{{ session.session_id }}">{{ session.pending_detail }}</div>
-  {% endif %}
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 sm:gap-y-2 gap-x-8 text-xs sm:text-sm">
-    <div class="truncate">
-      <span class="text-gray-500">Dir:</span>
-      <span class="text-gray-200">{{ session.cwd }}</span>
-    </div>
-    <div>
-      <span class="text-gray-500">Model:</span>
-      <span class="text-gray-200">{{ session.model or '—' }}</span>
-    </div>
-    <div>
-      <span class="text-gray-500">Started:</span>
-      <span class="text-gray-200">{{ session.started_at[11:19] }}</span>
-    </div>
-    <div>
-      <span class="text-gray-500">Active:</span>
-      <span class="text-gray-200">{{ session.last_seen_at[11:19] }}</span>
-    </div>
-    <div class="hidden sm:block">
-      <span class="text-gray-500">Session ID:</span>
-      <span class="text-gray-200 font-mono text-xs">{{ session.session_id }}</span>
-    </div>
-    <div class="hidden sm:block">
-      <span class="text-gray-500">Hub:</span>
-      <span class="text-gray-200">{{ session.hub_id }}</span>
-    </div>
-  </div>
-  <!-- Action buttons -->
-  <div class="mt-3 pt-2 border-t border-gray-700/20 flex items-center gap-2"
-       id="actions-{{ session.session_id }}"
-       data-tmux="{{ session.tmux_session or '' }}"
-       data-cwd="{{ session.cwd }}">
-    <a href="{{ terminal_url }}/?{% if session.tmux_session %}attach={{ session.tmux_session }}{% else %}name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}{% endif %}"
-       target="_blank"
-       class="text-xs px-3 py-1.5 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 hover:text-white transition">
-      Terminal
-    </a>
-    {% if session.pending_tool %}
-      {% if session.tmux_session %}
-    <button onclick="approveSession('{{ session.session_id }}', false, this)"
-       class="approve-btn text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-      Approve
-    </button>
-      {% else %}
-    <a href="{{ terminal_url }}/?{% if session.tmux_session %}attach={{ session.tmux_session }}{% else %}name=hub-{{ session.session_id[:8] }}&cwd={{ session.cwd }}{% endif %}"
-       target="_blank"
-       class="approve-link text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse">
-      Approve &rarr;
-    </a>
+
+    <dl class="kv kv-wide" style="margin-top:12px">
+      <dt>Directory</dt><dd>{{ session.cwd }}</dd>
+      <dt>Host</dt><dd>{{ session.hostname }}</dd>
+      <dt>Model</dt><dd>{{ session.model or '—' }}</dd>
+      <dt>tmux</dt><dd>{{ session.tmux_session or '—' }}</dd>
+      <dt>Started</dt><dd>{{ (session.started_at|string)[:19]|replace('T', ' ') }}</dd>
+      <dt>Last seen</dt><dd>{{ (session.last_seen_at|string)[:19]|replace('T', ' ') }}</dd>
+      {% if session.output_tokens %}<dt>Tokens</dt><dd>out {{ "{:,}".format(session.output_tokens) }} · cache {{ "{:,}".format(session.cache_read_tokens) }}</dd>{% endif %}
+      <dt>Session id</dt><dd>{{ session.session_id }}</dd>
+      <dt>Hub</dt><dd>{{ session.hub_id }}</dd>
+    </dl>
+
+    <div class="actions-row" id="actions-{{ session.session_id }}" data-tmux="{{ session.tmux_session or '' }}" data-cwd="{{ session.cwd }}">
+      {% if session.pending_tool and session.tmux_session %}
+      <button type="button" class="btn btn-approve approve-btn" data-always="0">Approve</button>
+      {% if session.pending_always_label %}<button type="button" class="btn btn-always always-btn" data-always="1" title="{{ session.pending_always_label }}">Always</button>{% endif %}
       {% endif %}
-    {% endif %}
-  </div>
-</div>
-
-<!-- Event timeline -->
-<h2 class="text-xs sm:text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2 sm:mb-3">Events</h2>
-<div id="event-timeline" class="space-y-0.5 sm:space-y-1">
-  {% for e in events %}
-  <div class="flex flex-col sm:flex-row sm:items-start gap-0.5 sm:gap-3 py-1.5 px-2 sm:px-3 rounded hover:bg-surface-light/50 transition text-sm">
-    <div class="flex items-center justify-between sm:contents">
-      <span class="shrink-0 sm:w-24 sm:order-2">
-        {% if e.event_type == 'PreToolUse' %}
-          <span class="text-blue-400">{{ e.tool_name or 'Tool' }}</span>
-        {% elif e.event_type == 'PostToolUse' %}
-          <span class="text-green-400">{{ e.tool_name or 'Tool' }} &#10003;</span>
-        {% elif e.event_type == 'PostToolUseFailure' %}
-          <span class="text-red-400">{{ e.tool_name or 'Tool' }} &#10007;</span>
-        {% elif e.event_type == 'UserPromptSubmit' %}
-          <span class="text-purple-400">User</span>
-        {% elif e.event_type == 'Stop' %}
-          <span class="text-yellow-400">Stop</span>
-        {% elif e.event_type == 'SessionStart' %}
-          <span class="text-cyan-400">Start</span>
-        {% else %}
-          <span class="text-gray-400">{{ e.event_type }}</span>
-        {% endif %}
-      </span>
-      <span class="text-gray-600 sm:text-gray-500 text-xs whitespace-nowrap sm:w-36 sm:pt-0.5 sm:order-1">
-        <span class="sm:hidden">{{ e.created_at[11:16] }}</span>
-        <span class="hidden sm:inline">{{ e.created_at[:19] }}</span>
-      </span>
+      {% if session.tmux_session %}
+      <a class="btn" href="{{ terminal_url }}/?attach={{ session.tmux_session }}" target="_blank"><svg class="icon"><use href="#i-external"/></svg>Terminal in a new tab</a>
+      {% endif %}
     </div>
-    <span class="text-gray-400 sm:text-gray-300 text-xs sm:text-sm break-words sm:truncate sm:order-3">{{ e.summary or '—' }}</span>
-  </div>
-  {% endfor %}
-  {% if not events %}
-  <div class="text-gray-500 text-sm py-8 text-center">No events recorded.</div>
-  {% endif %}
-</div>
+  </section>
 
-{% if events | length >= limit %}
-<div class="mt-4 text-center">
-  <a href="/sessions/{{ session.session_id }}?offset={{ offset + limit }}&limit={{ limit }}"
-     class="text-sm text-accent-light hover:text-white transition py-2 inline-block">Load more &darr;</a>
+  <section class="card">
+    <h2>Events</h2>
+    <ul class="timeline timeline-page" id="event-timeline">
+      {% for e in events %}
+      <li>
+        <time datetime="{{ e.created_at }}">{{ (e.created_at|string)[:19]|replace('T', ' ') }}</time>
+        <span class="ev {% if e.event_type == 'PreToolUse' %}ev-pre{% elif e.event_type == 'PostToolUse' %}ev-post{% elif e.event_type == 'PostToolUseFailure' %}ev-fail{% elif e.event_type == 'UserPromptSubmit' %}ev-user{% elif e.event_type == 'Stop' %}ev-stop{% else %}ev-start{% endif %}">
+          {%- if e.event_type in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure') -%}{{ e.tool_name or 'Tool' }}{% if e.event_type == 'PostToolUse' %} done{% elif e.event_type == 'PostToolUseFailure' %} failed{% endif %}
+          {%- elif e.event_type == 'UserPromptSubmit' -%}Prompt
+          {%- elif e.event_type == 'Stop' -%}Idle
+          {%- elif e.event_type == 'SessionStart' -%}Started
+          {%- else -%}{{ e.event_type }}{%- endif -%}
+        </span>
+        <span class="sum">{{ e.summary or '—' }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if not events %}<div class="timeline-empty">No events recorded.</div>{% endif %}
+    {% if events | length >= limit %}
+    <div class="load-more"><a class="btn" href="/sessions/{{ session.session_id }}?offset={{ offset + limit }}&limit={{ limit }}">Older events</a></div>
+    {% endif %}
+  </section>
 </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-const sessionId = "{{ session.session_id }}";
+(() => {
+  const H = window.AgentHub;
+  const sessionId = "{{ session.session_id }}";
+  const actions = document.getElementById('actions-' + sessionId);
 
-function updateApproveButtons(sid, pendingTool, tmuxSession, hasAlways) {
-  const actions = document.getElementById('actions-' + sid);
-  if (!actions) return;
-  if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
-  const tmux = actions.dataset.tmux;
-
-  actions.querySelectorAll('.approve-btn, .always-btn, .approve-link').forEach(el => el.remove());
-
-  if (!pendingTool) return;
-
-  if (tmux) {
-    const approveBtn = document.createElement('button');
-    approveBtn.className = 'approve-btn text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
-    approveBtn.textContent = 'Approve';
-    approveBtn.onclick = function() { approveSession(sid, false, this); };
-    actions.appendChild(approveBtn);
-
-    if (hasAlways !== false) {
-      const alwaysBtn = document.createElement('button');
-      alwaysBtn.className = 'always-btn text-xs px-3 py-1.5 rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/50 hover:text-white transition animate-pulse';
-      alwaysBtn.textContent = 'Always';
-      alwaysBtn.onclick = function() { approveSession(sid, true, this); };
-      actions.appendChild(alwaysBtn);
+  function eventClass(type) {
+    return {PreToolUse: 'ev-pre', PostToolUse: 'ev-post', PostToolUseFailure: 'ev-fail', UserPromptSubmit: 'ev-user', Stop: 'ev-stop'}[type] || 'ev-start';
+  }
+  function eventVerb(data) {
+    const tn = data.tool_name || 'Tool';
+    switch (data.event_type) {
+      case 'PreToolUse': return tn;
+      case 'PostToolUse': return tn + ' done';
+      case 'PostToolUseFailure': return tn + ' failed';
+      case 'UserPromptSubmit': return 'Prompt';
+      case 'Stop': return 'Idle';
+      case 'SessionStart': return 'Started';
+      default: return data.event_type;
     }
-  } else {
-    const cwd = actions.dataset.cwd || '';
-    const prefix = sid.substring(0, 8);
-    const link = document.createElement('a');
-    link.href = `http://${location.hostname}:7700/?name=hub-${prefix}&cwd=${encodeURIComponent(cwd)}`;
-    link.target = '_blank';
-    link.className = 'approve-link text-xs px-3 py-1.5 rounded bg-yellow-900/50 text-yellow-300 hover:bg-yellow-800/50 hover:text-white transition animate-pulse';
-    link.innerHTML = 'Approve &rarr;';
-    actions.appendChild(link);
-  }
-}
-
-function onWsMessage(data) {
-  if (data.type === 'pending' && data.session_id === sessionId) {
-    updateApproveButtons(sessionId, data.pending_tool, data.tmux_session, data.has_always);
-    return;
   }
 
-  if (data.type !== 'event' || data.session_id !== sessionId) return;
-
-  const timeline = document.getElementById('event-timeline');
-  const placeholder = timeline.querySelector('.text-center');
-  if (placeholder) placeholder.remove();
-
-  const el = document.createElement('div');
-  el.className = 'flex flex-col sm:flex-row sm:items-start gap-0.5 sm:gap-3 py-1.5 px-2 sm:px-3 rounded hover:bg-surface-light/50 transition text-sm fade-in';
-
-  const now = new Date();
-  const timeShort = now.toTimeString().slice(0, 5);
-  const timeFull = now.toISOString().slice(0, 19);
-
-  let typeHtml;
-  const tn = data.tool_name || 'Tool';
-  switch(data.event_type) {
-    case 'PreToolUse': typeHtml = `<span class="text-blue-400">${tn}</span>`; break;
-    case 'PostToolUse': typeHtml = `<span class="text-green-400">${tn} &#10003;</span>`; break;
-    case 'PostToolUseFailure': typeHtml = `<span class="text-red-400">${tn} &#10007;</span>`; break;
-    case 'UserPromptSubmit': typeHtml = `<span class="text-purple-400">User</span>`; break;
-    case 'Stop': typeHtml = `<span class="text-yellow-400">Stop</span>`; break;
-    case 'SessionStart': typeHtml = `<span class="text-cyan-400">Start</span>`; break;
-    default: typeHtml = `<span class="text-gray-400">${data.event_type}</span>`;
+  async function approve(always, btn) {
+    btn.classList.add('is-busy');
+    btn.textContent = 'Sending…';
+    try {
+      const data = await H.api('POST', `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : ''));
+      if (!data.ok) throw new Error(data.detail || 'Approve failed');
+      H.toast('Approval sent to the terminal', 'success');
+      renderApprove(null);
+      document.getElementById('pending-' + sessionId)?.remove();
+    } catch (e) {
+      H.toast(e.message, 'error');
+      btn.classList.remove('is-busy');
+      btn.textContent = always ? 'Always' : 'Approve';
+    }
   }
 
-  el.innerHTML = `
-    <div class="flex items-center justify-between sm:contents">
-      <span class="shrink-0 sm:w-24 sm:order-2">${typeHtml}</span>
-      <span class="text-gray-600 sm:text-gray-500 text-xs whitespace-nowrap sm:w-36 sm:pt-0.5 sm:order-1">
-        <span class="sm:hidden">${timeShort}</span>
-        <span class="hidden sm:inline">${timeFull}</span>
-      </span>
-    </div>
-    <span class="text-gray-400 sm:text-gray-300 text-xs sm:text-sm break-words sm:truncate sm:order-3">${escapeHtml(data.summary || '—')}</span>
-  `;
-  timeline.prepend(el);
-}
+  function renderApprove(pendingTool, hasAlways, alwaysLabel) {
+    actions.querySelectorAll('.approve-btn, .always-btn').forEach(el => el.remove());
+    if (!pendingTool || !actions.dataset.tmux) return;
+    const a = document.createElement('button');
+    a.type = 'button'; a.className = 'btn btn-approve approve-btn'; a.textContent = 'Approve';
+    a.addEventListener('click', () => approve(false, a));
+    actions.prepend(a);
+    if (hasAlways !== false) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn btn-always always-btn'; b.textContent = 'Always';
+      if (alwaysLabel) b.title = alwaysLabel;
+      b.addEventListener('click', () => approve(true, b));
+      a.after(b);
+    }
+  }
+  actions.querySelectorAll('.approve-btn, .always-btn').forEach(btn => btn.addEventListener('click', () => approve(btn.dataset.always === '1', btn)));
 
-function approveSession(sessionId, always, btn) {
-  const url = `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : '');
-  btn.textContent = 'Sent!';
-  btn.classList.remove('animate-pulse');
-  fetch(url, {method: 'POST'})
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok) {
-        updateApproveButtons(sessionId, null);
-        // Clear waiting badge and detail in header
-        const badge = document.getElementById('waiting-' + sessionId);
-        if (badge) badge.remove();
-        const detail = document.getElementById('detail-' + sessionId);
-        if (detail) detail.remove();
-      } else {
-        alert(data.detail || 'Approve failed');
-      }
-    })
-    .catch(e => alert('Error: ' + e.message));
-}
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+  window.onWsMessage = data => {
+    if (data.session_id !== sessionId) return;
+    if (data.type === 'pending') {
+      if (data.tmux_session !== undefined) actions.dataset.tmux = data.tmux_session || '';
+      renderApprove(data.pending_tool, data.has_always, data.always_label);
+      const dot = document.getElementById('dot-' + sessionId);
+      const state = document.getElementById('state-' + sessionId);
+      if (dot) dot.className = 'dot ' + (data.pending_tool ? 'dot-waiting' : 'dot-active');
+      if (state) state.textContent = data.pending_tool ? 'Waiting' : 'Active';
+      return;
+    }
+    if (data.type !== 'event') return;
+    const timeline = document.getElementById('event-timeline');
+    document.querySelector('.timeline-empty')?.remove();
+    const li = document.createElement('li');
+    const now = new Date();
+    li.innerHTML = `<time>${now.toISOString().slice(0, 19).replace('T', ' ')}</time><span class="ev ${eventClass(data.event_type)}">${H.escapeHtml(eventVerb(data))}</span><span class="sum">${H.escapeHtml(data.summary || '—')}</span>`;
+    timeline.prepend(li);
+    const dot = document.getElementById('dot-' + sessionId);
+    if (dot && data.status) dot.className = 'dot dot-' + data.status;
+  };
+})();
 </script>
 {% endblock %}

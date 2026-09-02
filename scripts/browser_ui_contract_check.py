@@ -114,7 +114,7 @@ def main() -> int:
             "(() => {"
             "const pending=[...document.querySelectorAll('.session-row[data-pending=\"1\"]')];"
             "const without=pending.filter(card => !card.dataset.tmux).length;"
-            "return {without, details:document.querySelectorAll('#needs-list a[href^=\"/sessions/\"]').length, approves:document.querySelectorAll('#needs-list .approve').length};"
+            "return {without, details:document.querySelectorAll('#needs-list [data-action=\"inspect\"]').length, approves:document.querySelectorAll('#needs-list .btn-approve').length};"
             "})()"
         )
         assert no_tmux["details"] == no_tmux["without"], no_tmux
@@ -137,12 +137,12 @@ def main() -> int:
             "(async () => {"
             "const original=previewState.sid;"
             "const second=[...document.querySelectorAll('.session-row')].find(card=>card.id!==('card-'+original));"
-            "const footer=second.querySelector('[id^=actions-]');const previousTmux=second.dataset.tmux;const previousFooterTmux=footer.dataset.tmux;second.dataset.tmux=previewState.tmux;footer.dataset.tmux=previewState.tmux;previewSession(second);previewSession(document.getElementById('card-'+original));"
+            "const previousTmux=second.dataset.tmux;second.dataset.tmux=previewState.tmux;previewSession(second);previewSession(document.getElementById('card-'+original));"
             "const first=document.querySelector('#workspace-tabs [role=tab]');first.focus();first.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));"
             "await new Promise(resolve=>requestAnimationFrame(resolve));"
             "const selected=document.querySelector('#workspace-tabs [role=tab][aria-selected=\"true\"]');"
             "const result={focused:document.activeElement===selected,active:document.activeElement?.dataset?.sid||null,selected:selected?.dataset?.sid||null};"
-            "closeWorkspaceTab(second.id.slice(5));second.dataset.tmux=previousTmux;footer.dataset.tmux=previousFooterTmux;await new Promise(resolve=>requestAnimationFrame(resolve));return result;"
+            "closeWorkspaceTab(second.id.slice(5));second.dataset.tmux=previousTmux;await new Promise(resolve=>requestAnimationFrame(resolve));return result;"
             "})()"
         )
         assert arrow_focus["focused"] and arrow_focus["active"] == arrow_focus["selected"], arrow_focus

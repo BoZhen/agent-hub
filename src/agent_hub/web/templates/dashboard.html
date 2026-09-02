@@ -1,1007 +1,136 @@
 {% extends "base.html" %}
 {% from "_session_card.html" import session_card %}
-{% block title %}Dashboard — Agent Hub{% endblock %}
-{% block main_width %}w-full max-w-none{% endblock %}
-{% block main_px %}px-2 sm:px-3{% endblock %}
-{% block body_class %}dash-page min-h-screen lg:h-screen lg:overflow-hidden flex flex-col{% endblock %}
-{% block main_py %}py-3 lg:py-0{% endblock %}
-{% block main_extra_class %}lg:flex-1 lg:min-h-0 lg:overflow-hidden flex flex-col{% endblock %}
+{% block title %}Agent Hub{% endblock %}
 {% block nav %}{% endblock %}
-{% block head %}
-<style>
-  .dash-page main { width: 100%; max-width: none; padding: 0 !important; margin: 0; }
-  #workspace-shell { height: 100dvh; display: grid; grid-template-columns: 286px minmax(0,1fr); grid-template-rows: 50px minmax(0,1fr); background: var(--canvas); overflow: hidden; }
-  .appbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 92%, transparent); min-width: 0; }
-  .brand { display:flex; align-items:center; gap:10px; min-width: 170px; font-size: 15px; font-weight: 750; letter-spacing: -.01em; white-space:nowrap; }
-  .brand-mark { width: 20px; height: 20px; display:grid; place-items:center; border:1px solid var(--border-strong); border-radius:6px; color:var(--brand); font-family:monospace; }
-  .appbar-spacer { flex:1; }
-  .connection-chip, .appbar-link, .theme-trigger { display:flex; align-items:center; gap:7px; min-height:30px; padding:0 9px; border:1px solid transparent; border-radius:6px; color:var(--text-2); font-size:12px; }
-  .appbar-link:hover, .theme-trigger:hover { background:var(--panel-2); border-color:var(--border); color:var(--text); }
-  .theme-wrap { position:relative; }
-  .theme-popover { position:absolute; z-index:80; right:0; top:38px; width:290px; padding:10px; border:1px solid var(--border); border-radius:9px; background:var(--panel); box-shadow:var(--shadow); }
-  .theme-popover[hidden] { display:none; }
-  .theme-heading { margin:5px 4px 7px; color:var(--muted); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
-  .theme-grid { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
-  .theme-option { display:flex; align-items:center; gap:8px; min-width:0; padding:7px; border:1px solid transparent; border-radius:6px; color:var(--text-2); font-size:11px; text-align:left; }
-  .theme-option:hover, .theme-option.is-active { background:var(--panel-2); border-color:var(--border-strong); color:var(--text); }
-  .theme-option.is-active { box-shadow:inset 2px 0 0 var(--brand); }
-  .theme-swatches { display:flex; }
-  .theme-swatch { width:10px; height:16px; border:1px solid rgba(127,127,127,.22); }
-  .theme-swatch:first-child { border-radius:4px 0 0 4px; }.theme-swatch:last-child { border-radius:0 4px 4px 0; }
-  .navigator { grid-column:1; grid-row:2; display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--border); background:var(--panel); }
-  .nav-toolbar { padding:10px 10px 8px; border-bottom:1px solid var(--border); }
-  .summary-line { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:11px; }
-  .summary-line strong { color:var(--text-2); font-size:12px; }
-  .nav-section { padding:9px 8px 4px; }
-  .nav-section-header { display:flex; align-items:center; justify-content:space-between; min-height:28px; padding:0 4px; color:var(--text-2); font-size:11px; font-weight:750; text-transform:uppercase; letter-spacing:.07em; }
-  .needs-list { display:flex; flex-direction:column; gap:4px; max-height:156px; overflow:auto; }
-  .needs-empty { padding:7px 8px; color:var(--muted); font-size:11px; }
-  .needs-item { display:grid; grid-template-columns:8px minmax(0,1fr) auto; gap:8px; align-items:center; padding:7px 8px; border:1px solid color-mix(in srgb,var(--waiting) 34%,var(--border)); border-radius:6px; background:color-mix(in srgb,var(--waiting) 7%,var(--panel)); }
-  .needs-main { min-width:0; cursor:pointer; }.needs-title { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:650; }.needs-detail { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:10px; }
-  .nav-controls { display:flex; align-items:center; gap:5px; padding:7px 10px; border-block:1px solid var(--border); }
-  .segmented { display:flex; gap:2px; padding:2px; border-radius:6px; background:var(--canvas); }
-  .segmented button { padding:4px 7px; border-radius:4px; color:var(--muted); font-size:11px; }
-  .segmented button.is-active { background:var(--panel-2); color:var(--text); }
-  .nav-scroll { flex:1; min-height:0; overflow:auto; padding:6px; }
-  .project-group { margin-bottom:5px; }
-  .project-header { display:flex; align-items:center; gap:7px; width:100%; padding:7px 8px; color:var(--text-2); font-size:12px; font-weight:650; text-align:left; }
-  .project-header:hover { color:var(--text); }.project-count { margin-left:auto; color:var(--muted); font-size:10px; }
-  .project-list { display:flex; flex-direction:column; gap:2px; }
-  .nav-empty { padding:28px 12px; color:var(--muted); font-size:11px; text-align:center; }
-  .navigator-footer { display:flex; align-items:center; gap:5px; padding:8px; border-top:1px solid var(--border); }
-  .navigator-footer a, .navigator-footer button { min-height:28px; padding:0 8px; border:1px solid transparent; border-radius:5px; color:var(--muted); font-size:10px; }
-  .navigator-footer a:hover, .navigator-footer button:hover { background:var(--panel-2); border-color:var(--border); color:var(--text); }
-  .navigator-footer .new-session { margin-left:auto; background:var(--brand); color:#06131b; font-weight:750; }
-  .workspace { grid-column:2; grid-row:2; min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--canvas); }
-  .workspace-tabs-bar { min-height:42px; display:flex; align-items:center; gap:8px; padding:0 10px; border-bottom:1px solid var(--border); background:var(--panel); }
-  .workspace-label { flex-shrink:0; color:var(--muted); font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.07em; }
-  .workspace-tabs { display:flex; align-self:stretch; min-width:0; flex:1; overflow:auto hidden; scrollbar-width:none; }
-  .workspace-tab { display:flex; align-items:stretch; max-width:220px; min-width:120px; border-inline:1px solid transparent; color:var(--text-2); font-size:11px; }
-  .workspace-tab-main { min-width:0; flex:1; display:flex; align-items:center; gap:7px; padding:0 7px 0 9px; }
-  .workspace-tab:hover { background:var(--panel-2); color:var(--text); }.workspace-tab.is-active { background:var(--canvas); border-color:var(--border); border-bottom-color:var(--canvas); color:var(--text); box-shadow:inset 0 2px 0 var(--brand); }
-  .workspace-tab-name { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.workspace-tab-close { flex-shrink:0;padding:0 8px;color:var(--muted);font-size:14px; }.workspace-tab-close:hover,.workspace-tab-close:focus-visible{color:var(--danger);background:color-mix(in srgb,var(--danger) 8%,transparent)}
-  .workspace-context { min-height:42px; display:flex; align-items:center; gap:10px; padding:0 12px; border-bottom:1px solid var(--border); background:var(--panel-2); font-size:10px; }
-  .context-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); font-size:12px; font-weight:700; }.context-meta { min-width:0; overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted); }.context-spacer{flex:1}.context-action{padding:5px 8px;border:1px solid var(--border);border-radius:5px;color:var(--text-2)}.context-action:hover{color:var(--text);border-color:var(--border-strong)}
-  .mobile-back { display:none; }
-  .terminal-stage { position:relative; flex:1; min-height:0; margin:10px; border:1px solid var(--border); border-radius:7px; overflow:hidden; background:var(--terminal-bg); }
-  .terminal-stage.is-connected { border-color:var(--brand); }
-  .terminal-empty { position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:12px;text-align:center;padding:24px; }.terminal-empty-mark{width:36px;height:36px;margin:0 auto 10px;display:grid;place-items:center;border:1px solid var(--border);border-radius:8px;color:var(--brand);font-family:monospace}.terminal-empty strong{display:block;color:var(--text-2);margin-bottom:4px}
-  #preview-iframe { position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--terminal-bg); }
-  #preview-iframe.hidden { display:none; }
-  .mobile-nav-toggle { display:none; }
-  @media (max-width:1023px) { #workspace-shell{grid-template-columns:250px minmax(0,1fr)} .brand{min-width:140px} }
-  @media (max-width:699px) {
-    #workspace-shell{display:block;height:100dvh}.appbar{height:48px;padding:0 8px;gap:7px}.brand{min-width:0;font-size:14px}.brand-mark{display:none}.appbar-link{display:none}.appbar>.summary-line{display:none}.connection-chip{margin-left:auto;padding-inline:5px}.theme-trigger{padding:0 6px}.theme-trigger #theme-label{display:none}.mobile-nav-toggle{display:grid;place-items:center;width:28px;height:30px;color:var(--text-2)}
-    .navigator{position:absolute;inset:48px 0 0;display:flex;border-right:0}.workspace{position:absolute;inset:48px 0 0;display:none}.dash-page[data-mobile-mode="terminal"] .appbar{display:none}.dash-page[data-mobile-mode="terminal"] .navigator{display:none}.dash-page[data-mobile-mode="terminal"] .workspace{display:flex;inset:0}
-    .workspace-tabs-bar{display:none}.workspace-context{min-height:46px;padding:0 8px;gap:6px}.mobile-back{display:inline-flex;align-items:center;gap:4px;padding:6px;color:var(--brand);font-size:10px}.context-name{flex:1;font-size:11px}.context-meta,#preview-detail,#preview-close{display:none!important}#preview-standalone{flex-shrink:0;padding:5px 7px;font-size:0}#preview-standalone::after{content:'↗';font-size:14px}.context-spacer{display:none}.terminal-stage{margin:0;border-inline:0;border-bottom:0;border-radius:0}.theme-popover{position:fixed;top:50px;right:8px;left:8px;width:auto}.nav-scroll{padding-bottom:calc(58px + env(safe-area-inset-bottom))}.session-event{display:none}.session-meta{font-size:10.5px}.session-select{grid-template-columns:18px minmax(0,1fr) auto;padding-block:8px}.session-actions{right:4px}.session-row:not(:focus-within):not(.is-waiting) .session-actions{display:none}
-  }
-</style>
-{% endblock %}
 
 {% block content %}
-<div id="workspace-shell">
-  <header class="appbar">
-    <button type="button" class="mobile-nav-toggle" onclick="setMobileMode('sessions')" aria-label="Open sessions">☰</button>
-    <a href="/" class="brand"><span class="brand-mark">&gt;_</span><span>Agent Hub</span></a>
-    <span class="connection-chip"><span class="dot dot-stopped" id="ws-dot"></span><span id="ws-label">connecting</span></span>
-    <span class="summary-line"><span>Active <strong id="stat-active">{{ stats.active_sessions }}</strong></span><span>Waiting <strong id="stat-waiting">{{ stats.waiting_sessions }}</strong></span></span>
-    <span id="stat-idle" hidden>{{ stats.idle_sessions }}</span><span id="stat-stopped" hidden>{{ stats.stopped_sessions }}</span>
-    <span class="appbar-spacer"></span>
-    <a class="appbar-link" href="/agent">Monitor</a><a class="appbar-link" href="/tmux">Raw tmux</a>
-    <div class="theme-wrap">
-      <button type="button" class="theme-trigger" id="theme-button" aria-expanded="false">◐ <span id="theme-label">Theme</span></button>
-      <div class="theme-popover" id="theme-panel" hidden><div id="theme-options"></div></div>
+<div class="shell" id="shell">
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-mark">&gt;_</span>Agent Hub</a>
+    <span class="conn"><span class="dot dot-idle" id="ws-dot"></span><span id="ws-label">Connecting</span></span>
+    <div class="stats">
+      <span class="stat"><span class="dot dot-active"></span><strong id="stat-active">{{ stats.active_sessions }}</strong> active</span>
+      <span class="stat{% if not stats.waiting_sessions %} is-zero{% endif %}" id="stat-waiting-wrap"><span class="dot dot-waiting"></span><strong id="stat-waiting">{{ stats.waiting_sessions }}</strong> waiting</span>
+    </div>
+    <span class="topbar-spacer"></span>
+    <div class="topbar-actions">
+      <div style="position:relative">
+        <button type="button" class="btn btn-ghost" id="theme-button" aria-haspopup="true" aria-expanded="false" title="Theme"><svg class="icon"><use href="#i-contrast"/></svg><span id="theme-label" class="desktop-only">Graphite</span></button>
+        <div class="popover theme-panel" id="theme-panel" hidden style="right:0;top:34px"></div>
+      </div>
+      <div style="position:relative">
+        <button type="button" class="btn btn-ghost icon-btn" id="utility-button" aria-haspopup="true" aria-expanded="false" aria-label="More"><svg class="icon"><use href="#i-more"/></svg></button>
+        <div class="popover" id="utility-menu" hidden style="right:0;top:34px">
+          <a class="menu-item" href="/agent"><svg class="icon"><use href="#i-chat"/></svg>Monitor assistant</a>
+          <a class="menu-item" href="/api/docs" target="_blank"><svg class="icon"><use href="#i-book"/></svg>API reference</a>
+          <div class="menu-sep"></div>
+          <button type="button" class="menu-item danger" data-action="clear-stopped"><svg class="icon"><use href="#i-trash"/></svg>Clear ended sessions</button>
+        </div>
+      </div>
     </div>
   </header>
 
-  <aside class="navigator" aria-label="Sessions">
-    <div class="nav-toolbar"><div class="summary-line"><strong>Workspace</strong><span>{{ sessions_native|length + sessions_from_tmux|length }} visible sessions</span></div></div>
-    <section class="nav-section" id="needs-section">
-      <div class="nav-section-header"><span>Needs Action</span><span id="needs-count">0</span></div>
-      <div class="needs-list" id="needs-list"></div>
-    </section>
-    <div class="nav-controls">
-      <div class="segmented" aria-label="Session source"><button type="button" data-tab="native" class="tab-btn is-active">Sessions</button><button type="button" data-tab="tmux" class="tab-btn">From tmux</button></div>
-      <div class="segmented" aria-label="Tool filter"><button type="button" data-tool-filter="all" class="tool-filter-btn is-active">All</button><button type="button" data-tool-filter="claude" class="tool-filter-btn">Claude</button><button type="button" data-tool-filter="codex" class="tool-filter-btn">Codex</button></div>
+  <aside class="sidebar" aria-label="Sessions">
+    <div class="sidebar-tools">
+      <label class="input-icon"><svg class="icon"><use href="#i-search"/></svg><input class="input" id="session-search" type="search" placeholder="Filter" aria-label="Filter sessions" title="Filter sessions (Ctrl+K)" autocomplete="off"></label>
+      <div class="segmented" role="group" aria-label="Tool"><button type="button" data-tool-filter="all" class="is-active">All</button><button type="button" data-tool-filter="claude">Claude</button><button type="button" data-tool-filter="codex">Codex</button></div>
     </div>
-    <div class="nav-scroll">
-      <div class="nav-section-header"><span>Projects</span><span>⌕</span></div>
-      <div id="tab-panel-native">
-        {% for s in sessions_native %}{{ session_card(s, terminal_url) }}{% endfor %}
-        {% if not sessions_native %}<div class="nav-empty">No active sessions. Parked sessions remain available under Idle.</div>{% endif %}
+    <div class="sidebar-scroll">
+      <section class="attention" id="needs-section" hidden>
+        <div class="attention-head"><span class="dot dot-waiting"></span>Needs your action<span class="count" id="needs-count">0</span></div>
+        <div id="needs-list"></div>
+      </section>
+
+      <div id="live-panel">
+        {% for s in sessions %}{{ session_card(s, terminal_url) }}{% endfor %}
       </div>
-      <div id="tab-panel-tmux" class="hidden">
-        {% for s in sessions_from_tmux %}{{ session_card(s, terminal_url) }}{% endfor %}
-        {% if not sessions_from_tmux %}<div class="nav-empty">No sessions transferred from raw tmux.</div>{% endif %}
-      </div>
+      <div class="sidebar-empty" id="live-empty"{% if sessions %} hidden{% endif %}><strong>No live sessions</strong>Start one below, or open a tmux session from the groups underneath.</div>
+
+      <section class="group is-archive" id="group-idle" data-collapsed="1" data-lazy="idle">
+        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Idle</span><span class="group-count" id="stat-idle">{{ stats.idle_sessions }}</span></button>
+        <div class="group-body" id="panel-idle"><div class="group-loading">Loading</div></div>
+      </section>
+      <section class="group is-archive" id="group-stopped" data-collapsed="1" data-lazy="stopped">
+        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Ended</span><span class="group-count" id="stat-stopped">{{ stats.stopped_sessions }}</span></button>
+        <div class="group-body" id="panel-stopped"><div class="group-loading">Loading</div></div>
+      </section>
+      <section class="group is-archive" id="group-tmux" data-collapsed="1" data-lazy="tmux">
+        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Other tmux</span><span class="group-count" id="stat-tmux"></span></button>
+        <div class="group-body" id="panel-tmux"><div class="group-loading">Loading</div></div>
+      </section>
     </div>
-    <footer class="navigator-footer"><a href="/idle">Idle</a><a href="/stopped">Archive</a><button id="btn-restore-all" type="button" class="hidden">Restore <span id="orphan-count">0</span></button><button id="btn-new-claude" type="button" class="new-session">＋ New</button></footer>
+    <footer class="sidebar-foot">
+      <button type="button" class="btn btn-primary" id="btn-new-claude" data-action="new-session"><svg class="icon"><use href="#i-plus"/></svg>New session</button>
+    </footer>
   </aside>
 
-  <section class="workspace" aria-label="Terminal workspace">
-    <div class="workspace-tabs-bar"><span class="workspace-label">Open Sessions</span><div class="workspace-tabs" id="workspace-tabs" role="tablist"></div><button type="button" class="context-action" onclick="document.getElementById('btn-new-claude').click()" title="New session">＋</button></div>
-    <div class="workspace-context" id="preview-header">
-      <button type="button" class="mobile-back" onclick="setMobileMode('sessions')">‹ Sessions</button>
-      <span class="dot dot-stopped" id="terminal-status-dot"></span><span class="context-name" id="preview-name">No session selected</span><span class="context-meta" id="preview-model"></span><span class="context-meta font-mono" id="preview-cwd">Choose a session to attach its native TUI</span><span class="context-spacer"></span>
-      <a id="preview-detail" class="context-action hidden" href="#">Details</a><a id="preview-standalone" class="context-action hidden" href="#" target="_blank">Open ↗</a><button id="preview-close" type="button" class="context-action hidden" title="Close view">Close view</button>
+  <section class="workspace" aria-label="Terminal">
+    <div class="tabbar">
+      <div class="tabs" id="workspace-tabs" role="tablist" aria-label="Open sessions"></div>
+      <div class="tab-context" id="tab-context"><span id="preview-model" hidden></span><span id="preview-cwd"></span></div>
+      <div class="tabbar-end">
+        <button type="button" class="btn btn-ghost icon-btn" id="preview-detail" data-action="inspect-current" title="Session details" hidden><svg class="icon"><use href="#i-info"/></svg></button>
+        <a class="btn btn-ghost icon-btn" id="preview-standalone" href="#" target="_blank" title="Open in a new tab" hidden><svg class="icon"><use href="#i-external"/></svg></a>
+        <button type="button" class="btn btn-ghost icon-btn" data-action="new-session" title="New session"><svg class="icon"><use href="#i-plus"/></svg></button>
+      </div>
     </div>
-    <div class="terminal-stage" id="preview-pane">
-      <div class="terminal-empty" id="preview-empty"><div><div class="terminal-empty-mark">&gt;_</div><strong>Native TUI workspace</strong><span>Select a Claude Code or Codex CLI session from the navigator.</span></div></div>
-      <iframe id="preview-iframe" class="hidden" title="Native session terminal" loading="eager" allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer"></iframe>
+    <div class="mobile-strip">
+      <button type="button" class="btn btn-ghost" data-action="mobile-sessions"><svg class="icon"><use href="#i-chevron-left"/></svg>Sessions</button>
+      <span class="dot dot-stopped" id="terminal-status-dot"></span>
+      <span class="strip-name" id="preview-name">No session</span>
+      <button type="button" class="btn btn-ghost icon-btn" data-action="inspect-current" aria-label="Session details"><svg class="icon"><use href="#i-info"/></svg></button>
+    </div>
+    <div class="stage" id="preview-pane" data-conn="idle">
+      <div class="stage-empty" id="preview-empty">
+        <div>
+          <h2>Pick a session</h2>
+          <p>Its terminal opens here, exactly as it runs inside tmux.</p>
+          <button type="button" class="btn" data-action="new-session"><svg class="icon"><use href="#i-plus"/></svg>New session</button>
+        </div>
+      </div>
+      <iframe id="preview-iframe" class="hidden" title="Session terminal" allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer"></iframe>
+      <div class="stage-status"><span id="stage-status-text"></span></div>
+      <aside class="drawer" id="inspector" aria-label="Session details" aria-hidden="true">
+        <div class="drawer-head"><span class="drawer-title" id="inspector-title">Details</span><button type="button" class="btn btn-ghost icon-btn" data-action="close-inspector" aria-label="Close details"><svg class="icon"><use href="#i-x"/></svg></button></div>
+        <div class="drawer-body" id="inspector-body"></div>
+      </aside>
     </div>
   </section>
 </div>
 
-<!-- Modal: new agent session (tmux + claude|codex) -->
-<div id="modal-new-claude" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4">
-  <div class="bg-surface-light rounded-lg p-4 sm:p-6 w-full max-w-lg border border-gray-700/50 max-h-[90vh] overflow-y-auto">
-    <h2 class="text-base sm:text-lg font-bold text-white mb-3">New Session</h2>
-
-    <label class="block text-xs text-gray-400 mb-1">Tool</label>
-    <div class="grid grid-cols-3 gap-2 mb-2">
-      <button id="nc-tool-claude-sonnet" type="button"
-              title="claude --model sonnet"
-              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        Sonnet
-      </button>
-      <button id="nc-tool-claude-opus" type="button"
-              title="claude --model opus"
-              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        Opus
-      </button>
-      <button id="nc-tool-codex" type="button"
-              title="omx (launches codex + HUD pane with resize hooks pinned to 3 rows)"
-              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        Codex
-      </button>
+<div class="modal-backdrop" id="modal-new" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nc-title">
+    <h2 id="nc-title">New session</h2>
+    <div class="field">
+      <label>Tool</label>
+      <div class="choice-grid" id="nc-tools">
+        <button type="button" class="choice" data-tool="claude-opus" title="claude --model opus">Claude Opus</button>
+        <button type="button" class="choice" data-tool="claude-sonnet" title="claude --model sonnet">Claude Sonnet</button>
+        <button type="button" class="choice" data-tool="codex" title="omx">Codex</button>
+        <button type="button" class="choice is-danger" data-tool="claude-yolo" title="claude --dangerously-skip-permissions">Claude, no prompts</button>
+        <button type="button" class="choice is-danger" data-tool="omx-yolo" title="omx --madmax --xhigh">Codex, no prompts</button>
+        <button type="button" class="choice" data-tool="" title="Empty tmux with a shell">Shell only</button>
+      </div>
     </div>
-    <div class="grid grid-cols-2 gap-2 mb-3">
-      <button id="nc-tool-claude-yolo" type="button"
-              title="claude --dangerously-skip-permissions (YOLO)"
-              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        Claude YOLO
-      </button>
-      <button id="nc-tool-omx-yolo" type="button"
-              title="omx --madmax --xhigh (YOLO, xhigh reasoning)"
-              class="nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition">
-        omx YOLO
-      </button>
+    <div class="field">
+      <label for="nc-name">Name</label>
+      <input class="input" id="nc-name" type="text" placeholder="Leave empty to generate one" autocomplete="off">
     </div>
-
-    <label class="block text-xs text-gray-400 mb-1">Name (leave empty for auto)</label>
-    <input id="nc-name" type="text" placeholder="auto-generated"
-           class="w-full bg-surface text-gray-200 text-sm rounded px-3 py-2 border border-gray-700/50 focus:border-accent focus:outline-none mb-3">
-
-    <label class="block text-xs text-gray-400 mb-1">Working directory</label>
-    <div id="nc-breadcrumb" class="flex items-center gap-1 flex-wrap text-xs text-gray-400 mb-2"></div>
-    <div id="nc-dir-list" class="bg-surface rounded border border-gray-700/50 max-h-64 overflow-y-auto mb-4"></div>
-
-    <div class="flex items-center justify-end gap-2">
-      <button id="nc-cancel" type="button"
-              class="text-xs px-3 py-1.5 rounded bg-gray-700/50 text-gray-300 hover:bg-gray-600/50 transition">
-        Cancel
-      </button>
-      <button id="nc-create" type="button"
-              class="text-xs px-3 py-1.5 rounded bg-accent hover:bg-accent-light text-white font-semibold transition">
-        Create
-      </button>
+    <div class="field">
+      <label for="nc-path">Working directory</label>
+      <input class="input mono" id="nc-path" type="text" placeholder="/absolute/path" autocomplete="off" spellcheck="false">
+      <div class="crumbs" id="nc-breadcrumb" style="margin-top:6px"></div>
+      <div class="dirlist" id="nc-dir-list"></div>
     </div>
-    <div id="nc-error" class="text-xs text-red-400 mt-2 hidden"></div>
+    <div class="form-error" id="nc-error" hidden></div>
+    <div class="modal-foot">
+      <button type="button" class="btn" id="nc-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="nc-create">Create session</button>
+    </div>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script>
-const TERMINAL_URL = "{{ terminal_url }}";
-const TERMINAL_ORIGIN = new URL(TERMINAL_URL, location.href).origin;
-const TERMINAL_EVENT_TYPES = new Set(['webterminal:ready', 'webterminal:connected', 'webterminal:disconnected', 'webterminal:focus']);
-
-function updateWaitingBadge(sessionId, pendingTool, pendingDetail) {
-  const card = document.getElementById('card-' + sessionId);
-  if (!card) return;
-  const existing = document.getElementById('waiting-' + sessionId);
-  const existingDetail = document.getElementById('detail-' + sessionId);
-  const dot = document.getElementById('dot-' + sessionId);
-
-  const badgeHost = card.querySelector('[data-role="badges"]');
-  const detailHost = card.querySelector('[data-role="session-detail"]');
-  const stateLabel = card.querySelector('[data-role="state-label"]');
-  if (pendingTool) {
-    card.dataset.pending = '1';
-    card.dataset.status = 'waiting';
-    card.classList.add('is-waiting');
-    if (dot) dot.className = 'dot dot-waiting';
-    if (existing) {
-      existing.textContent = 'Waiting';
-    } else {
-      const badge = document.createElement('span');
-      badge.id = 'waiting-' + sessionId;
-      badge.className = 'session-state';
-      badge.textContent = 'Waiting';
-      if (badgeHost) badgeHost.appendChild(badge);
-    }
-    if (stateLabel) stateLabel.textContent = 'Waiting';
-    if (pendingDetail) {
-      if (existingDetail) {
-        existingDetail.textContent = pendingDetail;
-      } else {
-        const detail = document.createElement('span');
-        detail.id = 'detail-' + sessionId;
-        detail.className = 'session-detail';
-        detail.textContent = pendingDetail;
-        if (detailHost) detailHost.prepend(detail);
-      }
-    }
-  } else {
-    card.dataset.pending = '0';
-    card.dataset.status = 'active';
-    card.classList.remove('is-waiting');
-    if (dot) dot.className = 'dot dot-active';
-    if (existing) existing.remove();
-    if (existingDetail) existingDetail.remove();
-    if (stateLabel) stateLabel.textContent = 'Active';
-  }
-  renderNeedsAction();
-  renderWorkspaceTabs();
-}
-
-function updateAlwaysLabel(sessionId, alwaysLabel) {
-  const card = document.getElementById('card-' + sessionId);
-  if (!card) return;
-  const existing = document.getElementById('always-label-' + sessionId);
-  if (alwaysLabel) {
-    if (existing) {
-      existing.title = alwaysLabel;
-      existing.querySelector('.always-label-text').textContent = alwaysLabel;
-    } else {
-      const el = document.createElement('span');
-      el.id = 'always-label-' + sessionId;
-      el.className = 'session-detail';
-      el.title = alwaysLabel;
-      el.innerHTML = 'Always → <span class="always-label-text"></span>';
-      el.querySelector('.always-label-text').textContent = alwaysLabel;
-      const host = card.querySelector('[data-role="session-detail"]');
-      if (host) host.appendChild(el);
-    }
-  } else if (existing) {
-    existing.remove();
-  }
-}
-
-function updateApproveButtons(sessionId, pendingTool, tmuxSession, hasAlways, alwaysLabel) {
-  const actions = document.getElementById('actions-' + sessionId);
-  if (!actions) return;
-  if (tmuxSession !== undefined) actions.dataset.tmux = tmuxSession || '';
-  const tmux = actions.dataset.tmux;
-
-  actions.querySelectorAll('.approve-btn, .always-btn, .approve-link').forEach(el => el.remove());
-
-  if (!pendingTool) return;
-
-  if (tmux) {
-    const approveBtn = document.createElement('button');
-    approveBtn.className = 'approve-btn action-btn approve';
-    approveBtn.textContent = 'Approve';
-    approveBtn.onclick = function(ev) { ev.stopPropagation(); approveSession(sessionId, false, this); };
-    actions.appendChild(approveBtn);
-
-    if (hasAlways !== false) {
-      const alwaysBtn = document.createElement('button');
-      alwaysBtn.className = 'always-btn action-btn always';
-      alwaysBtn.textContent = 'Always';
-      if (alwaysLabel) alwaysBtn.title = alwaysLabel;
-      alwaysBtn.onclick = function(ev) { ev.stopPropagation(); approveSession(sessionId, true, this); };
-      actions.appendChild(alwaysBtn);
-    }
-  } else {
-    const cwd = actions.dataset.cwd || '';
-    const prefix = sessionId.substring(0, 8);
-    const link = document.createElement('a');
-    link.href = `http://${location.hostname}:7700/?name=hub-${prefix}&cwd=${encodeURIComponent(cwd)}`;
-    link.target = '_blank';
-    link.className = 'approve-link action-btn approve';
-    link.innerHTML = 'Approve &rarr;';
-    link.onclick = function(ev) { ev.stopPropagation(); };
-    actions.appendChild(link);
-  }
-}
-
-function onWsMessage(data) {
-  // Handle pending tool updates from background task
-  if (data.type === 'pending') {
-    updateWaitingBadge(data.session_id, data.pending_tool, data.pending_detail);
-    updateAlwaysLabel(data.session_id, data.pending_tool ? data.always_label : null);
-    updateApproveButtons(data.session_id, data.pending_tool, data.tmux_session, data.has_always, data.always_label);
-    const el = document.getElementById('stat-waiting');
-    if (el) el.textContent = data.waiting_count;
-    renderNeedsAction();
-    return;
-  }
-
-  if (data.type !== 'event') return;
-
-  const card = document.getElementById('card-' + data.session_id);
-  if (!card) {
-    // New session we haven't rendered yet — fetch its card HTML and
-    // insert it into the right panel. The server-rendered card already
-    // contains the latest events + correct dot, so no further update
-    // needed for this event; subsequent events will find the card.
-    ensureCardExists(data.session_id);
-  } else {
-    // Route event into the card's mini-list.
-    const eventsEl = document.getElementById('events-' + data.session_id);
-    if (eventsEl) eventsEl.innerHTML = `<span class="session-event fade-in"><span data-role="event-type">${escapeHtml(data.event_type)}</span> · ${escapeHtml(data.summary || '—')}</span>`;
-
-    // Update session card dot
-    const dot = document.getElementById('dot-' + data.session_id);
-    if (dot) dot.className = 'dot dot-' + data.status;
-    card.dataset.status = data.status || 'active';
-    const stateLabel = card.querySelector('[data-role="state-label"]');
-    if (stateLabel && card.dataset.pending !== '1') stateLabel.textContent = data.status || 'active';
-    renderWorkspaceTabs();
-  }
-
-  // Update stats
-  fetch('/api/stats').then(r => r.json()).then(s => {
-    document.getElementById('stat-active').textContent = s.active_sessions;
-    document.getElementById('stat-waiting').textContent = s.waiting_sessions;
-    document.getElementById('stat-idle').textContent = s.idle_sessions;
-    document.getElementById('stat-stopped').textContent = s.stopped_sessions;
-  }).catch(() => {});
-}
-
-const _cardFetches = new Set();
-async function ensureCardExists(sessionId) {
-  if (_cardFetches.has(sessionId)) return;
-  if (document.getElementById('card-' + sessionId)) return;
-  _cardFetches.add(sessionId);
-  try {
-    const res = await fetch(`/partials/session-card/${sessionId}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    if (document.getElementById('card-' + sessionId)) return;
-    const panelId = data.transferred ? 'tab-panel-tmux' : 'tab-panel-native';
-    const panel = document.getElementById(panelId);
-    if (!panel) return;
-    // Drop the "No sessions" placeholder if it's the only child.
-    const placeholder = panel.querySelector('.nav-empty');
-    if (placeholder) placeholder.remove();
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = data.html.trim();
-    const newCard = wrapper.firstElementChild;
-    if (newCard) {
-      newCard.classList.add('fade-in');
-      panel.appendChild(newCard);
-      // Re-apply the current tool filter so a freshly inserted card
-      // doesn't bypass the user's selection.
-      const f = localStorage.getItem(FILTER_KEY) || 'all';
-      const fam = newCard.dataset.toolFamily || 'other';
-      if (f !== 'all' && f !== fam) newCard.classList.add('hidden');
-      rebuildProjectGroups(panel);
-      renderNeedsAction();
-    }
-  } catch (e) {
-    console.error('ensureCardExists failed', e);
-  } finally {
-    _cardFetches.delete(sessionId);
-  }
-}
-
-function togglePin(sessionId, btn) {
-  const wasPinned = btn.dataset.pinned === '1';
-  const newPinned = !wasPinned;
-  btn.disabled = true;
-  fetch(`/api/sessions/${sessionId}/pin`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({pinned: newPinned}),
-  })
-    .then(async r => {
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({detail: r.statusText}));
-        alert('Pin failed: ' + (err.detail || 'unknown'));
-        btn.disabled = false;
-        return;
-      }
-      btn.dataset.pinned = newPinned ? '1' : '0';
-      btn.title = newPinned ? 'Unpin from dashboard' : 'Pin to dashboard';
-      btn.textContent = newPinned ? '★' : '☆';
-      btn.disabled = false;
-      // If we just unpinned an idle session on the main dashboard,
-      // it no longer belongs here — drop the card for visual honesty.
-      if (!newPinned && btn.dataset.status === 'idle' && location.pathname === '/') {
-        if (previewState.sid === sessionId) closePreview();
-        const card = document.getElementById('card-' + sessionId);
-        if (card) card.remove();
-      }
-    })
-    .catch(e => {
-      alert('Error: ' + e.message);
-      btn.disabled = false;
-    });
-}
-
-function forkSession(sessionId, tmuxName, btn) {
-  if (!confirm(`Fork "${tmuxName}" into a new tmux session?\n\n` +
-               `A copy of this conversation will start in a fresh tmux. ` +
-               `The original keeps running unaffected.`)) {
-    return;
-  }
-  const origText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Forking…';
-  fetch(`/api/sessions/${sessionId}/fork`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
-    .then(async r => {
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({detail: r.statusText}));
-        alert('Fork failed: ' + (err.detail || 'unknown'));
-        btn.textContent = origText;
-        btn.disabled = false;
-        return;
-      }
-      const data = await r.json();
-      btn.textContent = '✓ ' + data.name;
-      window.open(`${TERMINAL_URL}/?attach=${encodeURIComponent(data.name)}`, '_blank');
-      setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
-    })
-    .catch(e => {
-      alert('Error: ' + e.message);
-      btn.textContent = origText;
-      btn.disabled = false;
-    });
-}
-
-function approveSession(sessionId, always, btn) {
-  const url = `/api/sessions/${sessionId}/approve` + (always ? '?always=true' : '');
-  btn.textContent = 'Sent!';
-  btn.classList.remove('animate-pulse');
-  fetch(url, {method: 'POST'})
-    .then(r => r.json())
-    .then(data => {
-      if (data.ok) {
-        // Optimistic UI: clear badge, always label, and buttons
-        // immediately. The server also broadcasts {pending_tool:null}
-        // via WebSocket, which is idempotent with these calls and
-        // also updates the stat-waiting counter.
-        updateWaitingBadge(sessionId, null);
-        updateAlwaysLabel(sessionId, null);
-        updateApproveButtons(sessionId, null);
-      } else {
-        alert(data.detail || 'Approve failed');
-      }
-    })
-    .catch(e => alert('Error: ' + e.message));
-}
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-// ── Tool filter (All / Claude / Codex) ────────────────────────────
-const FILTER_KEY = 'agentHubToolFilter';
-
-function applyToolFilter(filter) {
-  // Apply across both native and tmux tab panels so the choice is
-  // global. Filtered-out cards get `tool-filtered` so we don't
-  // collide with other hidden states (e.g. parent collapse).
-  document.querySelectorAll('[id^="card-"]').forEach(card => {
-    const fam = card.dataset.toolFamily || 'other';
-    const show = filter === 'all' || filter === fam;
-    card.classList.toggle('hidden', !show);
-  });
-  document.querySelectorAll('.tool-filter-btn').forEach(btn => {
-    const active = btn.dataset.toolFilter === filter;
-    btn.classList.toggle('is-active', active);
-  });
-  refreshProjectVisibility();
-}
-
-document.querySelectorAll('.tool-filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const f = btn.dataset.toolFilter;
-    localStorage.setItem(FILTER_KEY, f);
-    applyToolFilter(f);
-  });
-});
-
-// Apply saved filter on load (after cards exist) and re-apply when
-// the WS handler injects new cards via ensureCardExists.
-applyToolFilter(localStorage.getItem(FILTER_KEY) || 'all');
-
-document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => setSourceTab(btn.dataset.tab)));
-
-let activeSourceTab = 'native';
-function setSourceTab(name) {
-  activeSourceTab = name === 'tmux' ? 'tmux' : 'native';
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('is-active', btn.dataset.tab === activeSourceTab));
-  document.getElementById('tab-panel-native').classList.toggle('hidden', activeSourceTab !== 'native');
-  document.getElementById('tab-panel-tmux').classList.toggle('hidden', activeSourceTab !== 'tmux');
-}
-
-function rebuildProjectGroups(panel) {
-  if (!panel) return;
-  const cards = Array.from(panel.querySelectorAll('[id^="card-"]'));
-  if (!cards.length) return;
-  cards.forEach(card => card.remove());
-  panel.querySelectorAll('.project-group').forEach(group => group.remove());
-  const groups = new Map();
-  cards.forEach(card => {
-    const key = card.dataset.project || 'Other';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(card);
-  });
-  Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b)).forEach(([project, projectCards]) => {
-    const section = document.createElement('section');
-    section.className = 'project-group';
-    const header = document.createElement('button');
-    header.type = 'button';
-    header.className = 'project-header';
-    header.innerHTML = `<span>⌄</span><span>${escapeHtml(project)}</span><span class="project-count">${projectCards.length}</span>`;
-    const list = document.createElement('div');
-    list.className = 'project-list';
-    projectCards.forEach(card => list.appendChild(card));
-    header.addEventListener('click', () => {
-      const hidden = list.hidden;
-      list.hidden = !hidden;
-      header.firstElementChild.textContent = hidden ? '⌄' : '›';
-    });
-    section.append(header, list);
-    panel.appendChild(section);
-  });
-  refreshProjectVisibility();
-}
-
-function refreshProjectVisibility() {
-  document.querySelectorAll('.project-group').forEach(group => {
-    const hasVisible = Array.from(group.querySelectorAll('.session-row')).some(card => !card.classList.contains('hidden'));
-    group.hidden = !hasVisible;
-  });
-}
-
-function renderNeedsAction() {
-  const host = document.getElementById('needs-list');
-  if (!host) return;
-  const cards = Array.from(document.querySelectorAll('.session-row[data-pending="1"]'));
-  document.getElementById('needs-count').textContent = cards.length;
-  if (!cards.length) {
-    host.innerHTML = '<div class="needs-empty">All sessions can continue without you.</div>';
-    return;
-  }
-  host.innerHTML = '';
-  cards.forEach(card => {
-    const sid = card.id.slice(5);
-    const hasTmux = !!card.dataset.tmux;
-    const item = document.createElement('div');
-    item.className = 'needs-item';
-    item.innerHTML = `<span class="dot dot-waiting"></span><button type="button" class="needs-main"><div class="needs-title">${escapeHtml(card.dataset.sessionName || sid)}</div><div class="needs-detail">${escapeHtml(card.querySelector('.session-detail')?.textContent || 'Approval required')}</div></button>${hasTmux ? '<button type="button" class="action-btn approve">Approve</button>' : '<a class="action-btn" href="/sessions/' + encodeURIComponent(sid) + '">Details</a>'}`;
-    item.querySelector('.needs-main').addEventListener('click', () => hasTmux ? previewSession(card) : (location.href = `/sessions/${encodeURIComponent(sid)}`));
-    item.querySelector('.approve')?.addEventListener('click', function() { approveSession(sid, false, this); });
-    host.appendChild(item);
-  });
-}
-
-const WORKSPACE_KEY = 'agentHubWorkspaceTabs';
-const ACTIVE_TAB_KEY = 'agentHubActiveTab';
-let workspaceTabs = [];
-try { workspaceTabs = JSON.parse(localStorage.getItem(WORKSPACE_KEY) || '[]'); } catch (_) { workspaceTabs = []; }
-if (!Array.isArray(workspaceTabs)) workspaceTabs = [];
-
-function saveWorkspaceTabs() {
-  localStorage.setItem(WORKSPACE_KEY, JSON.stringify(workspaceTabs));
-  if (previewState.sid) localStorage.setItem(ACTIVE_TAB_KEY, previewState.sid); else localStorage.removeItem(ACTIVE_TAB_KEY);
-}
-
-function openWorkspaceTab(sid) {
-  if (!workspaceTabs.includes(sid)) workspaceTabs.push(sid);
-  previewState.sid = sid;
-  saveWorkspaceTabs();
-  renderWorkspaceTabs();
-}
-
-function renderWorkspaceTabs() {
-  const host = document.getElementById('workspace-tabs');
-  if (!host) return;
-  workspaceTabs = workspaceTabs.filter(sid => document.getElementById('card-' + sid));
-  host.innerHTML = '';
-  workspaceTabs.forEach(sid => {
-    const card = document.getElementById('card-' + sid);
-    if (!card) return;
-    const tab = document.createElement('div');
-    tab.className = 'workspace-tab' + (previewState.sid === sid ? ' is-active' : '');
-    const main = document.createElement('button');
-    main.type = 'button';
-    main.className = 'workspace-tab-main';
-    main.setAttribute('role', 'tab');
-    main.dataset.sid = sid;
-    main.setAttribute('aria-selected', previewState.sid === sid ? 'true' : 'false');
-    main.setAttribute('aria-label', `Open ${card.dataset.sessionName || sid}`);
-    main.tabIndex = previewState.sid === sid ? 0 : -1;
-    main.innerHTML = `<span class="dot dot-${escapeHtml(card.dataset.status || 'idle')}"></span><span class="workspace-tab-name">${escapeHtml(card.dataset.sessionName || sid)}</span>`;
-    main.addEventListener('click', () => previewSession(card));
-    main.addEventListener('keydown', event => handleWorkspaceTabKey(event, sid));
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'workspace-tab-close';
-    close.setAttribute('aria-label', `Close ${card.dataset.sessionName || sid} view`);
-    close.textContent = '×';
-    close.addEventListener('click', () => closeWorkspaceTab(sid));
-    tab.append(main, close);
-    host.appendChild(tab);
-  });
-  saveWorkspaceTabs();
-}
-
-function handleWorkspaceTabKey(event, sid) {
-  const tabs = Array.from(document.querySelectorAll('#workspace-tabs [role="tab"]'));
-  const index = tabs.indexOf(event.currentTarget);
-  let target = null;
-  if (event.key === 'ArrowRight') target = tabs[(index + 1) % tabs.length];
-  if (event.key === 'ArrowLeft') target = tabs[(index - 1 + tabs.length) % tabs.length];
-  if (event.key === 'Home') target = tabs[0];
-  if (event.key === 'End') target = tabs[tabs.length - 1];
-  if (target) {
-    event.preventDefault();
-    const targetSid = target.dataset.sid;
-    target.click();
-    requestAnimationFrame(() => {
-      Array.from(document.querySelectorAll('#workspace-tabs [role="tab"]')).find(tab => tab.dataset.sid === targetSid)?.focus();
-    });
-  }
-  if (event.key === 'Delete' || event.key === 'Backspace') {
-    event.preventDefault();
-    closeWorkspaceTab(sid);
-    requestAnimationFrame(() => document.querySelector('#workspace-tabs [role="tab"][tabindex="0"]')?.focus());
-  }
-}
-
-function closeWorkspaceTab(sid) {
-  const index = workspaceTabs.indexOf(sid);
-  workspaceTabs = workspaceTabs.filter(item => item !== sid);
-  if (previewState.sid === sid) {
-    const next = workspaceTabs[Math.max(0, index - 1)] || workspaceTabs[0];
-    if (next && document.getElementById('card-' + next)) previewSession(document.getElementById('card-' + next)); else clearTerminalStage();
-  } else renderWorkspaceTabs();
-  saveWorkspaceTabs();
-  requestAnimationFrame(() => document.querySelector('#workspace-tabs [role="tab"][aria-selected="true"]')?.focus());
-}
-
-function setMobileMode(mode) {
-  document.body.dataset.mobileMode = mode === 'terminal' ? 'terminal' : 'sessions';
-  syncTerminalVisibility();
-}
-
-const mobileViewport = window.matchMedia('(max-width: 699px)');
-function terminalIsVisible() {
-  return !!previewState.sid && (!mobileViewport.matches || document.body.dataset.mobileMode === 'terminal');
-}
-function syncTerminalVisibility() {
-  const visible = terminalIsVisible();
-  requestAnimationFrame(() => postToTerminal({type:'agent-hub:visibility', visible}));
-}
-mobileViewport.addEventListener?.('change', syncTerminalVisibility);
-window.addEventListener('resize', syncTerminalVisibility);
-
-function postToTerminal(message) {
-  const frame = document.getElementById('preview-iframe');
-  if (frame?.contentWindow) frame.contentWindow.postMessage(message, TERMINAL_ORIGIN);
-}
-
-function renderThemeOptions() {
-  const host = document.getElementById('theme-options');
-  const current = document.documentElement.dataset.theme;
-  host.innerHTML = '';
-  ['dark','light'].forEach(tone => {
-    const heading = document.createElement('div'); heading.className = 'theme-heading'; heading.textContent = tone === 'dark' ? 'Dark' : 'Light'; host.appendChild(heading);
-    const grid = document.createElement('div'); grid.className = 'theme-grid';
-    AGENT_HUB_THEMES.filter(item => item.tone === tone).forEach(item => {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'theme-option' + (item.id === current ? ' is-active' : '');
-      button.innerHTML = `<span class="theme-swatches">${item.swatches.map(color => `<span class="theme-swatch" style="background:${color}"></span>`).join('')}</span><span>${escapeHtml(item.name)}</span>`;
-      button.addEventListener('click', () => { setAgentHubTheme(item.id); renderThemeOptions(); document.getElementById('theme-panel').hidden = true; document.getElementById('theme-button').setAttribute('aria-expanded','false'); });
-      grid.appendChild(button);
-    });
-    host.appendChild(grid);
-  });
-  document.getElementById('theme-label').textContent = AGENT_HUB_THEMES.find(item => item.id === current)?.name || 'Theme';
-}
-
-document.getElementById('theme-button').addEventListener('click', () => {
-  const panel = document.getElementById('theme-panel'); panel.hidden = !panel.hidden; document.getElementById('theme-button').setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
-});
-window.addEventListener('agenthub:theme', event => {
-  document.getElementById('theme-label').textContent = AGENT_HUB_THEMES.find(item => item.id === event.detail.theme)?.name || 'Theme';
-  postToTerminal({type:'agent-hub:set-theme', theme:event.detail.theme});
-});
-document.addEventListener('click', event => { if (!event.target.closest('.theme-wrap')) { document.getElementById('theme-panel').hidden = true; document.getElementById('theme-button').setAttribute('aria-expanded','false'); } });
-
-// ── New session modal (Claude Sonnet / Claude Opus / Codex / YOLO variants) ──
-let ncBrowsePath = null;
-let ncTool = 'claude-opus';
-
-function ncSetTool(tool) {
-  ncTool = tool;
-  const active = 'nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition bg-accent text-white';
-  const inactive = 'nc-tool-btn text-xs px-3 py-2 rounded font-semibold transition bg-surface text-gray-400 hover:text-white border border-gray-700/50';
-  for (const t of ['claude-sonnet', 'claude-opus', 'codex', 'claude-yolo', 'omx-yolo']) {
-    const el = document.getElementById('nc-tool-' + t);
-    if (el) el.className = (tool === t) ? active : inactive;
-  }
-}
-
-function ncShowError(msg) {
-  const el = document.getElementById('nc-error');
-  el.textContent = msg;
-  el.classList.remove('hidden');
-}
-function ncClearError() {
-  document.getElementById('nc-error').classList.add('hidden');
-}
-
-async function ncBrowse(path) {
-  const url = '/api/browse' + (path ? ('?path=' + encodeURIComponent(path)) : '');
-  const res = await fetch(url);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({detail: res.statusText}));
-    throw new Error(err.detail || 'browse failed');
-  }
-  const data = await res.json();
-  ncBrowsePath = data.path;
-  ncRenderCrumb(data.path);
-  ncRenderDirList(data);
-}
-
-function ncRenderCrumb(path) {
-  const parts = path.split('/').filter(Boolean);
-  const crumbs = [{name: '/', path: '/'}];
-  let acc = '';
-  for (const p of parts) {
-    acc += '/' + p;
-    crumbs.push({name: p, path: acc});
-  }
-  const el = document.getElementById('nc-breadcrumb');
-  el.innerHTML = crumbs.map((c, i) => {
-    if (i === crumbs.length - 1) {
-      return `<span class="text-white font-semibold">${escapeHtml(c.name)}</span>`;
-    }
-    return `<a href="#" data-path="${escapeHtml(c.path)}" class="nc-crumb hover:text-white transition">${escapeHtml(c.name)}</a><span class="text-gray-600">/</span>`;
-  }).join('');
-  el.querySelectorAll('.nc-crumb').forEach(a => {
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      ncBrowse(a.dataset.path).catch(e => ncShowError(e.message));
-    });
-  });
-}
-
-function ncRenderDirList(data) {
-  const el = document.getElementById('nc-dir-list');
-  const rows = [];
-  if (data.parent) {
-    rows.push(`<button type="button" data-path="${escapeHtml(data.parent)}" class="nc-entry w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-surface-lighter transition border-b border-gray-700/30">.. (parent)</button>`);
-  }
-  for (const e of (data.entries || [])) {
-    const child = data.path.endsWith('/') ? data.path + e.name : data.path + '/' + e.name;
-    rows.push(`<button type="button" data-path="${escapeHtml(child)}" class="nc-entry w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-surface-lighter transition border-b border-gray-700/30">${escapeHtml(e.name)}/</button>`);
-  }
-  el.innerHTML = rows.length ? rows.join('') : '<div class="text-gray-500 text-xs py-3 text-center">(empty)</div>';
-  el.querySelectorAll('.nc-entry').forEach(btn => {
-    btn.addEventListener('click', () => {
-      ncBrowse(btn.dataset.path).catch(e => ncShowError(e.message));
-    });
-  });
-}
-
-function ncOpen() {
-  ncClearError();
-  document.getElementById('nc-name').value = '';
-  ncSetTool('claude-opus');
-  const modal = document.getElementById('modal-new-claude');
-  modal.classList.remove('hidden');
-  modal.classList.add('flex');
-  ncBrowse('').catch(e => ncShowError(e.message));
-}
-function ncClose() {
-  const modal = document.getElementById('modal-new-claude');
-  modal.classList.add('hidden');
-  modal.classList.remove('flex');
-}
-
-async function ncCreate() {
-  ncClearError();
-  if (!ncBrowsePath) {
-    ncShowError('Pick a directory first');
-    return;
-  }
-  const name = document.getElementById('nc-name').value
-    .trim()
-    .replace(/[\u2013\u2014]/g, '-');
-  try {
-    const res = await fetch('/api/tmux/new', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name || null, cwd: ncBrowsePath, command: ncTool}),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({detail: res.statusText}));
-      ncShowError(err.detail || 'create failed');
-      return;
-    }
-    const data = await res.json();
-    ncClose();
-    window.open(`${TERMINAL_URL}/?attach=${encodeURIComponent(data.name)}`, '_blank');
-  } catch (e) {
-    ncShowError(e.message);
-  }
-}
-
-document.getElementById('btn-new-claude').addEventListener('click', ncOpen);
-document.getElementById('nc-cancel').addEventListener('click', ncClose);
-document.getElementById('nc-create').addEventListener('click', ncCreate);
-document.getElementById('nc-tool-claude-sonnet').addEventListener('click', () => ncSetTool('claude-sonnet'));
-document.getElementById('nc-tool-claude-opus').addEventListener('click', () => ncSetTool('claude-opus'));
-document.getElementById('nc-tool-codex').addEventListener('click', () => ncSetTool('codex'));
-document.getElementById('nc-tool-claude-yolo').addEventListener('click', () => ncSetTool('claude-yolo'));
-document.getElementById('nc-tool-omx-yolo').addEventListener('click', () => ncSetTool('omx-yolo'));
-document.getElementById('modal-new-claude').addEventListener('click', (ev) => {
-  if (ev.target.id === 'modal-new-claude') ncClose();
-});
-
-// ── Orphan-session restore button ─────────────────────────────────
-async function refreshOrphanCount() {
-  try {
-    const res = await fetch('/api/orphan-sessions');
-    if (!res.ok) return;
-    const data = await res.json();
-    const count = (data.orphans || []).length;
-    const btn = document.getElementById('btn-restore-all');
-    document.getElementById('orphan-count').textContent = count;
-    btn.classList.toggle('hidden', count === 0);
-  } catch (e) { /* silent */ }
-}
-
-async function restoreAll(btn) {
-  if (!confirm('Recreate tmux sessions and resume Claude/Codex for missing sessions?')) return;
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Restoring…';
-  try {
-    const res = await fetch('/api/restore-orphans', {method: 'POST'});
-    const data = await res.json();
-    if (!res.ok) {
-      alert('Restore failed: ' + (data.detail || res.statusText));
-      return;
-    }
-    btn.textContent = `${data.restored}/${data.total} restored`;
-    setTimeout(() => location.reload(), 1500);
-  } catch (e) {
-    alert('Error: ' + e.message);
-    btn.textContent = orig;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-document.getElementById('btn-restore-all').addEventListener('click', function() {
-  restoreAll(this);
-});
-
-refreshOrphanCount();
-setInterval(refreshOrphanCount, 15000);
-
-// ── Terminal workspace ─────────────────────────────────────────────
-const previewState = { sid: null, tmux: null };
-
-function previewSession(el) {
-  const card = el.closest('[id^="card-"]');
-  if (!card) return;
-  const footer = card.querySelector('[id^="actions-"]');
-  if (!footer) return;
-  const sid = footer.dataset.sid;
-  const tmux = footer.dataset.tmux;
-  if (!tmux) return;
-  const name = footer.dataset.name || sid.slice(0, 8);
-  const cwd = footer.dataset.cwd || '';
-  const model = footer.dataset.model || '';
-
-  const iframe = document.getElementById('preview-iframe');
-  const theme = document.documentElement.dataset.theme || 'graphite';
-
-  if (previewState.sid !== sid) {
-    const params = new URLSearchParams({attach: tmux, embed: '1', theme, parent_origin: location.origin});
-    iframe.src = `${TERMINAL_URL}/?${params.toString()}`;
-    previewState.tmux = tmux;
-  }
-  previewState.sid = sid;
-  iframe.classList.remove('hidden');
-  document.getElementById('preview-empty').classList.add('hidden');
-  document.getElementById('preview-pane').classList.remove('is-connected');
-
-  document.getElementById('preview-name').textContent = name;
-  const cwdEl = document.getElementById('preview-cwd');
-  cwdEl.textContent = `${card.dataset.project || 'Project'} · ${cwd || '—'} · ${card.dataset.host || ''}`;
-  const modelEl = document.getElementById('preview-model');
-  if (model) {
-    modelEl.textContent = model;
-    modelEl.classList.remove('hidden');
-  } else {
-    modelEl.classList.add('hidden');
-  }
-  const detail = document.getElementById('preview-detail');
-  detail.href = `/sessions/${encodeURIComponent(sid)}`;
-  detail.classList.remove('hidden');
-  const standalone = document.getElementById('preview-standalone');
-  standalone.href = `${TERMINAL_URL}/?attach=${encodeURIComponent(tmux)}&theme=${encodeURIComponent(theme)}`;
-  standalone.classList.remove('hidden');
-  document.getElementById('preview-close').classList.remove('hidden');
-  document.getElementById('terminal-status-dot').className = 'dot dot-running';
-  openWorkspaceTab(sid);
-  highlightPreviewCard(sid);
-  if (window.innerWidth < 700) setMobileMode('terminal');
-}
-
-function highlightPreviewCard(sid) {
-  document.querySelectorAll('.preview-active').forEach(el => {
-    el.classList.remove('preview-active', 'is-selected');
-  });
-  if (sid) {
-    const card = document.getElementById('card-' + sid);
-    if (card) card.classList.add('preview-active', 'is-selected');
-  }
-}
-
-function clearTerminalStage() {
-  const iframe = document.getElementById('preview-iframe');
-  iframe.src = 'about:blank';
-  iframe.classList.add('hidden');
-  document.getElementById('preview-empty').classList.remove('hidden');
-  document.getElementById('preview-name').textContent = 'No session selected';
-  document.getElementById('preview-model').textContent = '';
-  document.getElementById('preview-cwd').textContent = 'Choose a session to attach its native TUI';
-  document.getElementById('preview-detail').classList.add('hidden');
-  document.getElementById('preview-standalone').classList.add('hidden');
-  document.getElementById('preview-close').classList.add('hidden');
-  document.getElementById('terminal-status-dot').className = 'dot dot-stopped';
-  document.getElementById('preview-pane').classList.remove('is-connected');
-  previewState.sid = null;
-  previewState.tmux = null;
-  highlightPreviewCard(null);
-  renderWorkspaceTabs();
-  saveWorkspaceTabs();
-  syncTerminalVisibility();
-}
-
-function closePreview() {
-  if (previewState.sid) closeWorkspaceTab(previewState.sid); else clearTerminalStage();
-}
-
-window.addEventListener('message', event => {
-  const iframe = document.getElementById('preview-iframe');
-  if (event.origin !== TERMINAL_ORIGIN || event.source !== iframe.contentWindow || event.data?.source !== 'web-terminal') return;
-  const type = event.data.type;
-  if (!TERMINAL_EVENT_TYPES.has(type) || event.data.session !== previewState.tmux) return;
-  const dot = document.getElementById('terminal-status-dot');
-  if (type === 'webterminal:ready') {
-    postToTerminal({type:'agent-hub:set-theme', theme:document.documentElement.dataset.theme || 'graphite'});
-    postToTerminal({type:'agent-hub:visibility', visible:window.innerWidth >= 700 || document.body.dataset.mobileMode === 'terminal'});
-  }
-  if (type === 'webterminal:connected') { dot.className = 'dot dot-active'; document.getElementById('preview-pane').classList.add('is-connected'); }
-  if (type === 'webterminal:disconnected') { dot.className = 'dot dot-stopped'; document.getElementById('preview-pane').classList.remove('is-connected'); }
-});
-
-document.getElementById('preview-close').addEventListener('click', closePreview);
-
-rebuildProjectGroups(document.getElementById('tab-panel-native'));
-rebuildProjectGroups(document.getElementById('tab-panel-tmux'));
-renderNeedsAction();
-renderThemeOptions();
-setSourceTab('native');
-renderWorkspaceTabs();
-const requestedSid = new URLSearchParams(location.search).get('session');
-const restoredSid = requestedSid || localStorage.getItem(ACTIVE_TAB_KEY);
-const initialCard = (restoredSid && document.getElementById('card-' + restoredSid)) || document.querySelector('#tab-panel-native .session-row[data-tmux]:not([data-tmux=""])');
-if (initialCard && (window.innerWidth >= 700 || requestedSid)) previewSession(initialCard);
-else setMobileMode('sessions');
-</script>
+<script src="/static/workspace.js?v={{ static_v() }}"></script>
 {% endblock %}

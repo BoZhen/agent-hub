@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import logging
 import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from dotenv import load_dotenv
 
@@ -197,6 +199,11 @@ def create_app(config: HubConfig) -> FastAPI:
     app.include_router(internal_api.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(web_routes.router)
+
+    # hub.css / hub.js / workspace.js. Versioned query strings come from
+    # web.routes._static_version, so long cache lifetimes are safe.
+    static_dir = Path(__file__).parent / "web" / "static"
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Expose the same FastMCP instance over two transports so both
     # legacy and modern MCP clients can connect:

@@ -9,21 +9,21 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 <p align="center">
   <img src="figs/modern-desktop.png" alt="桌面端 Agent Hub 工作台" width="90%">
 </p>
-<p align="center"><em>桌面端：Needs Action + 项目/Session 导航 + 原生 TUI 工作区</em></p>
+<p align="center"><em>桌面端：待处理队列 + 按项目分组的 session 导航 + 工作集标签 + 原生 TUI 主画布</em></p>
 
 <p align="center">
   <img src="figs/modern-phone-sessions.png" alt="移动端 Session 导航" width="28%">
   <img src="figs/modern-phone-terminal.png" alt="移动端原生 TUI" width="28%">
 </p>
-<p align="center"><em>移动端：Session 与全屏 Terminal 双模式，保留触控特殊键</em></p>
+<p align="center"><em>移动端：Session 列表与全屏 Terminal 两个模式，保留触控特殊键</em></p>
 
 ## 核心能力
 
 - 统一管理 Claude Code 与 Codex CLI 会话
 - 记录会话事件并在 Dashboard 中实时展示
 - 基于 tmux 进行远程审批与终端接入
-- 项目分组、Needs Action 与浏览器工作集标签
-- 5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
+- 项目分组、待处理队列、浏览器工作集标签与 session 详情抽屉
+- 单一样式表（无 Tailwind / 无前端构建），5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
 - 手机端独立 Session/Terminal 模式
 - 通过 MCP SSE 暴露查询接口
 - 支持 Telegram 待审批通知
@@ -107,11 +107,11 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 ## 常用页面
 
-- `/`：主 Dashboard
-- `/idle`：空闲会话
-- `/stopped`：已停止会话
-- `/tmux`：tmux 管理页
-- `/sessions/{id}`：单会话详情页
+- `/`：工作台。侧栏按项目列出 live session，下方的 Idle / Ended / Other tmux 分组按需展开；右侧是工作集标签与嵌入式终端，session 详情在右侧抽屉里查看
+- `/?session={id}`：直接打开某个 session 的终端（手机上进入全屏 Terminal 模式）
+- `/sessions/{id}`：单会话完整页（抽屉的降级页，含完整事件列表）
+- `/agent`：Monitor 只读助手
+- `/idle`、`/stopped`、`/tmux`：保留为跳转，分别展开工作台侧栏对应分组
 
 ## 常用接口
 

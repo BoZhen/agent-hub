@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from agent_hub import db
@@ -72,9 +72,11 @@ async def _enrich_running(conn, session: dict) -> dict:
     session["running_elapsed_label"] = _format_elapsed(int(elapsed))
     return session
 
+
 router = APIRouter()
 
 _template_dir = Path(__file__).parent / "templates"
+_static_dir = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(_template_dir))
 
 
@@ -83,8 +85,19 @@ def _basename(path: str) -> str:
     return os.path.basename(path) or path
 
 
-# Register custom filters
+def _static_version() -> str:
+    """Cache-busting token for /static assets: the newest mtime in the
+    directory. A handful of stat calls per page render, and a deploy can
+    never leave a browser on a stale hub.css."""
+    try:
+        return str(int(max(p.stat().st_mtime for p in _static_dir.iterdir() if p.is_file())))
+    except (ValueError, OSError):
+        return "0"
+
+
+# Register custom filters / globals
 templates.env.filters["basename"] = _basename
+templates.env.globals["static_v"] = _static_version
 
 
 def _terminal_url(request: Request) -> str:
@@ -97,8 +110,8 @@ def _terminal_url(request: Request) -> str:
 async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
     """Sessions visible on the main dashboard: everything active,
     plus idle sessions the user pinned so they don't fall off into
-    /idle. Actives come first, then pinned idle — both sorted by
-    last_seen_at DESC within their bucket."""
+    the Idle group. Actives come first, then pinned idle — both sorted
+    by last_seen_at DESC within their bucket."""
     actives = await db.get_sessions(
         conn, status="active", limit=100, transferred=transferred,
     )
@@ -144,8 +157,10 @@ async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    sessions_native = await _fetch_dashboard(conn, transferred=0)
-    sessions_from_tmux = await _fetch_dashboard(conn, transferred=1)
+    # Hook-driven sessions and sessions adopted from tmux scanning share
+    # one navigator; the row carries a `tmux` badge for the latter.
+    sessions = await _fetch_dashboard(conn, transferred=0)
+    sessions += await _fetch_dashboard(conn, transferred=1)
     stats = await db.get_stats(conn)
 
     terminal_url = _terminal_url(request)
@@ -153,8 +168,7 @@ async def dashboard(request: Request):
         request=request,
         name="dashboard.html",
         context={
-            "sessions_native": sessions_native,
-            "sessions_from_tmux": sessions_from_tmux,
+            "sessions": sessions,
             "stats": stats,
             "terminal_url": terminal_url,
             "current_page": "dashboard",
@@ -162,36 +176,21 @@ async def dashboard(request: Request):
     )
 
 
-@router.get("/stopped", response_class=HTMLResponse)
-async def stopped_sessions(request: Request):
-    conn = request.app.state.db
-    sessions = await db.get_sessions(conn, status="stopped", limit=200)
-    terminal_url = _terminal_url(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="stopped.html",
-        context={
-            "sessions": sessions,
-            "terminal_url": terminal_url,
-            "current_page": "stopped",
-        },
-    )
+# The old list pages now live inside the workspace sidebar. Keep the
+# URLs working for bookmarks and the README.
+@router.get("/idle")
+async def idle_sessions():
+    return RedirectResponse("/?open=idle", status_code=302)
 
 
-@router.get("/idle", response_class=HTMLResponse)
-async def idle_sessions(request: Request):
-    conn = request.app.state.db
-    sessions = await db.get_sessions(conn, status="idle", limit=200)
-    terminal_url = _terminal_url(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="idle.html",
-        context={
-            "sessions": sessions,
-            "terminal_url": terminal_url,
-            "current_page": "idle",
-        },
-    )
+@router.get("/stopped")
+async def stopped_sessions():
+    return RedirectResponse("/?open=stopped", status_code=302)
+
+
+@router.get("/tmux")
+async def tmux_hub():
+    return RedirectResponse("/?open=tmux", status_code=302)
 
 
 @router.get("/agent", response_class=HTMLResponse)
@@ -199,20 +198,7 @@ async def agent_chat_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="agent.html",
-        context={"current_page": "agent"},
-    )
-
-
-@router.get("/tmux", response_class=HTMLResponse)
-async def tmux_hub(request: Request):
-    terminal_url = _terminal_url(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="tmux_hub.html",
-        context={
-            "terminal_url": terminal_url,
-            "current_page": "tmux",
-        },
+        context={"current_page": "agent", "terminal_url": _terminal_url(request)},
     )
 
 
@@ -248,9 +234,9 @@ async def session_detail(
 
 @router.get("/partials/session-card/{session_id}")
 async def session_card_partial(request: Request, session_id: str) -> dict:
-    """Render a single session card as an HTML fragment.
+    """Render a single session row as an HTML fragment.
 
-    Used by the dashboard's WebSocket handler to insert a card for a
+    Used by the dashboard's WebSocket handler to insert a row for a
     session that wasn't present in the initial server-side render.
     """
     conn = request.app.state.db
@@ -271,3 +257,28 @@ async def session_card_partial(request: Request, session_id: str) -> dict:
         "transferred": int(session.get("transferred", 0) or 0),
         "status": session.get("status", "active"),
     }
+
+
+@router.get("/partials/session-list")
+async def session_list_partial(request: Request, status: str = "idle") -> dict:
+    """Rows for one of the sidebar's lazily loaded groups (Idle, Ended).
+
+    Pinned idle sessions already sit in the live list, so they are left
+    out here to avoid duplicate row ids on the page.
+    """
+    if status not in ("idle", "stopped"):
+        raise HTTPException(status_code=400, detail="status must be idle or stopped")
+    conn = request.app.state.db
+    sessions = await db.get_sessions(conn, status=status, limit=200)
+    if status == "idle":
+        sessions = [s for s in sessions if not s.get("pinned")]
+        for s in sessions:
+            s["recent_events"] = await db.get_session_events_latest(
+                conn, s["session_id"], n=1,
+            )
+    terminal_url = _terminal_url(request)
+    macro = templates.env.get_template("_session_card.html").module.session_card
+    html = "".join(
+        str(macro(s, terminal_url, show_delete=True)) for s in sessions
+    )
+    return {"html": html, "count": len(sessions)}
