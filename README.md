@@ -72,21 +72,13 @@ Claude 通过本地 hooks 将事件推送到 Hub。推荐按 `SETUP.md` 或本�
 
 支持两种方式：
 
-1. **推荐：OMX hook 模式**  
-   通过 `scripts/codex-hub-hook.sh` 将 Codex 事件桥接到 Hub。
+1. **推荐：Codex 原生 hook 模式**  
+   Codex 自带 hook 机制（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.codex/hooks.json`）。把 `scripts/codex-hub-hook.sh` 注册进去，Codex 事件就会桥接到 Hub，不需要 oh-my-codex 之类的包装层。配置步骤见 `SETUP.md` 2.6。
 
 2. **回退：tmux 扫描模式**  
-   未接入 OMX 时，Hub 仍可通过 tmux pane 扫描发现 Codex 会话并提供基础管理能力。
+   未配置 hook 时，Hub 仍可通过 tmux pane 扫描发现 Codex 会话并提供基础管理能力，但会话只有合成 id，没有事件时间线。
 
-### OMX HUD 说明
-
-如果你觉得 OMX 在 tmux 底部创建的 HUD 状态栏过高或没有必要，可以禁用它：
-
-```bash
-export OMX_DISABLE_HUD=1
-```
-
-建议将该环境变量写入你的 shell 配置后，重新启动 omx session。已有的旧 tmux / omx 会话如果没有继承这个环境变量，仍可能继续显示 HUD。
+注意：Codex 在第一条 prompt 提交时才触发 SessionStart hook。刚启动、还没说话的 Codex 会话在 Hub 里先以扫描得到的合成 id 出现，第一条 prompt 之后自动换成 Codex 自己的会话 id。
 
 ## 会话跟踪范围（仅 tmux）
 

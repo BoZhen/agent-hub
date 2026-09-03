@@ -3,10 +3,15 @@
 # Agent Hub's /api/events endpoint so codex sessions join the same
 # push pipeline Claude Code sessions use.
 #
-# Requires oh-my-codex (omx): the hooks are registered in
-# ~/.codex/hooks.json by `omx setup`. This script is referenced
-# from those entries with one argument — the hook event name
+# Hooks are a native Codex feature: enable `hooks = true` under
+# [features] in ~/.codex/config.toml and register this script in
+# ~/.codex/hooks.json with one argument — the hook event name
 # (SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop).
+# No wrapper such as oh-my-codex is required. See SETUP.md 2.6.
+#
+# Codex fires SessionStart when the first prompt of a session is
+# submitted, not at process start. Until then the Hub only knows the
+# session from tmux pane scanning (session_manager.py).
 #
 # The stdin payload is a codex-emitted JSON object. We forward it
 # verbatim to the hub and always echo `{}` to stdout so codex
@@ -15,9 +20,6 @@
 #
 # Env overrides:
 #   AGENT_HUB_URL  default http://127.0.0.1:7800
-#
-# Bare codex (without omx) has no hook system at all — those users
-# fall back to the pane-scan discovery path in session_manager.py.
 set -u
 EVENT="${1:-unknown}"
 HUB_URL="${AGENT_HUB_URL:-http://127.0.0.1:7800}"

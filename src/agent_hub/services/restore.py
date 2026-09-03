@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 import aiosqlite
@@ -77,6 +78,11 @@ async def _list_alive_tmux_names() -> set[str]:
     return set(stdout.decode("utf-8", errors="replace").splitlines())
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
 def _resume_hint_command(tool: str, session_id: str) -> str:
     """Return a shell-quoted human-readable resume hint for a tool."""
     if tool == "claude-yolo":
@@ -87,13 +93,20 @@ def _resume_hint_command(tool: str, session_id: str) -> str:
         return f"claude --resume {session_id} --model opus"
     if tool.startswith("claude"):
         return f"claude --resume {session_id}"
-    if tool == "omx-yolo":
-        return "omx resume --last --madmax"
-    if tool in ("codex", "omx"):
-        # codex session_id stored in hub is synthetic (codex-{name}-{ts}),
-        # so we can't pass it as a UUID. Hint the user toward omx's
-        # interactive resume picker.
-        return "omx resume"
+    if tool.startswith(("codex", "omx")):
+        # A codex session that reported through the hook carries Codex's
+        # own UUID, which `codex resume` accepts directly. A session that
+        # was only discovered by pane scanning has a synthetic id
+        # (codex-<tmux>-<ts>), so fall back to the interactive picker.
+        # "omx-yolo" rows predate the bare-codex launcher; `omx --madmax`
+        # was an alias for the bypass flag, so the same codex command
+        # resumes them whether or not oh-my-codex is still installed.
+        cmd = "codex resume"
+        if _UUID_RE.match(session_id):
+            cmd += f" {session_id}"
+        if "yolo" in tool:
+            cmd += " --dangerously-bypass-approvals-and-sandbox"
+        return cmd
     return ""
 
 

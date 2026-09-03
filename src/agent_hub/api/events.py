@@ -28,8 +28,8 @@ async def receive_event(
     # Inject tmux_session from query param into payload for processing
     if tmux_session:
         payload["_tmux_session"] = tmux_session
-    # Inject CLI tool identifier ("claude" default; "codex" when omx hook
-    # wrapper posts here). Downstream session_manager.ensure_session uses
+    # Inject CLI tool identifier ("claude" default; "codex" when the codex
+    # hook bridge posts here). Downstream session_manager.ensure_session uses
     # this to skip Claude-specific startup heuristics for codex.
     payload["_tool"] = tool
 

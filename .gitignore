@@ -18,3 +18,4 @@ certs/
 
 # Internal design scratch — kept local, not part of the public repo
 docs/planning/
+session_snapshot/

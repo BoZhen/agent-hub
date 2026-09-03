@@ -1,8 +1,8 @@
 {# Tool icons — inline SVG brand marks used on the left rail of session cards. #}
 {% macro tool_icon(tool) -%}
-  {# Match the tool_family logic in _session_card.html so omx-yolo
-     and any future codex-family launch marker get the Codex glyph
-     instead of falling back to Claude. #}
+  {# Match the tool_family logic in _session_card.html so codex-yolo,
+     the retired omx-yolo and any future codex-family launch marker get
+     the Codex glyph instead of falling back to Claude. #}
   {%- set t = tool or '' -%}
   {%- if 'codex' in t or t.startswith('omx') -%}
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#10A37F" class="w-full h-full" aria-label="Codex">

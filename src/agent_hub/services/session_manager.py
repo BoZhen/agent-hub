@@ -237,6 +237,18 @@ async def ensure_session(
     event_type = payload.get("hook_event_name", "")
     model = payload.get("model")  # Accept model from any event type
 
+    # Codex fires SessionStart with the first prompt, often minutes after
+    # the launcher created the tmux, so the hub-launch marker consulted
+    # below may already have expired. The payload itself says whether
+    # permission prompts are skipped (Claude and Codex both report
+    # permission_mode=bypassPermissions), so derive the "-yolo" marker
+    # from it. restore.py relies on that marker to rebuild the flag.
+    if (
+        payload.get("permission_mode") == "bypassPermissions"
+        and tool in ("claude", "codex")
+    ):
+        tool = f"{tool}-yolo"
+
     existing = await db.get_session(conn, session_id)
 
     if existing is None:
@@ -280,11 +292,12 @@ async def ensure_session(
                 # this is a subagent or a /clear reuse — in both cases
                 # the new session lives inside the same tmux lineage.
                 transferred = int(orphan_rows[0]["transferred"] or 0)
-            elif tool != "codex":
+            elif not tool.startswith(("codex", "omx")):
                 # Fresh tmux (no same-tmux predecessor) — run the
                 # Claude workspace-trust prompt delay heuristic.
-                # Codex has no such prompt, so codex hook arrivals
-                # stay first-class regardless of tmux age.
+                # Codex fires SessionStart only with the first prompt,
+                # so tmux age says nothing about how it was launched;
+                # codex hook arrivals stay first-class regardless.
                 transferred = await _detect_transferred(tmux_session)
 
             # Retire the orphans only if this is NOT a subagent spawn.

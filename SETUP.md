@@ -5,7 +5,7 @@
 ```
 每台计算机需要配置:              Hub 主机额外需要:
 ├── Claude Code hooks            ├── agent-hub server (systemd)
-├── Codex + omx hooks [可选]     ├── web-terminal server (systemd)
+├── Codex hooks [可选]           ├── web-terminal server (systemd)
 ├── MCP server 注册              └── SQLite 数据库
 ├── ai-tmux wrapper
 └── fish/bash function
@@ -236,15 +236,15 @@ claude mcp list
 # 应看到 agent-hub: ✓ Connected
 ```
 
-### 2.6 Codex hook 配置（via omx,可选）
+### 2.6 Codex hook 配置（可选）
 
-如果这台机器跑 Codex CLI(不只是 Claude Code),可以通过 [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) 让 codex 事件也推送到 Hub,享受和 Claude 一致的 event feed、running state、以及 MCP 和 Bash 审批推送。
+如果这台机器跑 Codex CLI(不只是 Claude Code),可以让 codex 事件也推送到 Hub,享受和 Claude 一致的 event feed、running state、以及 MCP 和 Bash 审批推送。hook 是 Codex 自带的功能,不需要 oh-my-codex 之类的包装层。
 
-**不装 omx 也能工作**:Hub 会 fall back 到 pane-scan 轮询(每 3 秒扫 tmux 找 codex TUI),session discovery + 远程审批仍然可用,只是 dashboard 上 codex 卡片的 "latest 2 events" 会一直空着 —— 因为 pull 路径不生成 events 表行。
+**不配 hook 也能工作**:Hub 会 fall back 到 pane-scan 轮询(扫 tmux 找 codex TUI),session discovery + 远程审批仍然可用,只是 session 只有合成 id(`codex-<tmux>-<ts>`),dashboard 上没有事件时间线,重启后也只能用 `codex resume` 的选择器而不是精确 id 恢复。
 
 #### 2.6.1 服务端(Hub 主机)
 
-Hub 本身**不需要**任何 codex 特定配置。`scripts/codex-hub-hook.sh` 作为 bridge 脚本已经跟着 repo 一起 —— `/api/events` endpoint 在 Commit `2fcf1c4` 之后就接受 `?tool=codex` query param,`session_manager` 会自动给 codex payload 打标签。
+Hub 本身**不需要**任何 codex 特定配置。`scripts/codex-hub-hook.sh` 作为 bridge 脚本已经跟着 repo 一起 —— `/api/events` endpoint 接受 `?tool=codex` query param,`session_manager` 会自动给 codex payload 打标签。
 
 服务端唯一需要关心的是:**当 Hub 主机自己也跑 codex 时,按 2.6.2 客户端流程配置一遍**(和 Claude hook 一样,Hub 机既是服务端又是客户端)。
 
@@ -252,66 +252,40 @@ Hub 本身**不需要**任何 codex 特定配置。`scripts/codex-hub-hook.sh` �
 
 **前置**:机器上已经 clone `~/Git/agent-home`(Part 2.4 的 ai-tmux wrapper 就依赖这个)。
 
-**Step 1 —— 安装 omx**:
+**Step 1 —— 打开 Codex 的 hook 功能**:在 `~/.codex/config.toml` 里确认有:
 
-```bash
-npm install -g oh-my-codex
-omx setup           # 会生成 ~/.codex/hooks.json 和 ~/.codex/config.toml
-# 确认 ~/.codex/config.toml 里有:
-#   [features]
-#   codex_hooks = true
+```toml
+[features]
+hooks = true
 ```
 
-**Step 2 —— 追加 agent-hub bridge hook** 到 `~/.codex/hooks.json`。`omx setup` 生成的版本每个 event 下只有 omx 自己的 hook group,需要追加一个**第二个** hook group 指向 repo 的 bridge 脚本(不要动 omx 原有的 entry):
+**Step 2 —— 注册 bridge hook**:写入 `~/.codex/hooks.json`(没有就新建;已有其他 hook 的话,把下面每个事件的条目追加进对应数组):
 
-```jsonc
+```json
 {
   "hooks": {
     "SessionStart": [
-      { /* existing omx entry with matcher "startup|resume" — don't touch */ },
-      {
-        "hooks": [
-          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh SessionStart" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh SessionStart" } ] }
     ],
     "UserPromptSubmit": [
-      { /* existing omx entry */ },
-      {
-        "hooks": [
-          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh UserPromptSubmit" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh UserPromptSubmit" } ] }
     ],
     "PreToolUse": [
-      { /* existing omx entry with matcher "Bash" */ },
-      {
-        "hooks": [
-          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PreToolUse" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PreToolUse" } ] }
     ],
     "PostToolUse": [
-      { /* existing omx entry */ },
-      {
-        "hooks": [
-          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PostToolUse" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh PostToolUse" } ] }
     ],
     "Stop": [
-      { /* existing omx entry with timeout 30 */ },
-      {
-        "hooks": [
-          { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh Stop" }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "/home/USER/Git/agent-home/scripts/codex-hub-hook.sh Stop" } ] }
     ]
   }
 }
 ```
 
 替换 `USER` 为你的实际用户名。`codex-hub-hook.sh` 必须 `chmod +x`(repo 里已经是)。
+
+Codex 只执行它信任过的 hook:每个条目的哈希记在 `~/.codex/config.toml` 的 `[hooks.state]` 下。如果 hook 没有触发,先用 `codex --dangerously-bypass-hook-trust` 起一次确认桥接本身连通,再检查信任状态。
 
 **Step 3 —— 指定 Hub 地址(仅辅助机)**:通过环境变量 `AGENT_HUB_URL` 告诉 wrapper hook 要 POST 到哪台机器:
 
@@ -325,11 +299,11 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 
 **Step 4 —— 验证**:
 
-1. 重启 codex session(hooks.json 在 codex 启动时加载一次):
+1. 在 tmux 里起一个 codex(hooks.json 在 codex 启动时加载一次):
    ```bash
-   tmux new-session -d -s codex-test -c ~
-   tmux send-keys -t codex-test: "omx --tmux" Enter
+   tmux new-session -d -s codex-test -c ~/some-project codex
    ```
+   目录第一次用时 codex 会问 "Do you trust the contents of this directory?",attach 进去按 Enter 选 Yes。
 
 2. **发一条 prompt**(重要,见 2.6.3 第一条),然后查 session 列表:
    ```bash
@@ -346,7 +320,7 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 
 #### 2.6.3 已知行为(不是 bug,但得心里有数)
 
-- **codex 0.120.0 把 SessionStart hook 延迟到第一个 turn 开始**,不是进程启动。所以你刚起 `omx --tmux` 时 dashboard 卡片可能先是 pane-scan 创建的 placeholder;发第一条 prompt 后 hook 接管,placeholder 被自动 retire 掉,真 UUID session 显示出来。两条路径的 hybrid push + pull 就是为这种情况设计的。
+- **codex(0.120.0 起,0.152.1 实测仍如此)把 SessionStart hook 延迟到第一个 turn 开始**,不是进程启动。所以你刚起 codex 时 dashboard 卡片可能先是 pane-scan 创建的 placeholder;发第一条 prompt 后 hook 接管,placeholder 被自动 retire 掉,真 UUID session 显示出来。两条路径的 hybrid push + pull 就是为这种情况设计的。
 
 - **MCP tool 调用不触发 PreToolUse hook**(验证过 `omx_state.*`、`omx_memory.*` 等)。Codex 给 MCP 工具配了独立的 4 选项审批 UI(`› 1. Allow`),Hub 的 pane-scan parser 识别这个 UI,dashboard 仍然显示 waiting 徽章 + Approve/Always 按钮,但这条路径靠 pane-scan 而不是 hook push。MCP 审批的 detail 格式是 `<server>: <tool>`(如 `omx_state: state_get_status`)。
 

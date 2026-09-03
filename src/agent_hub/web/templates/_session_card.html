@@ -5,7 +5,7 @@
    `show_delete` is kept for callers; ended and idle rows always get it. #}
 {% macro session_card(s, terminal_url, show_delete=False) %}
   {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
-  {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if (s.tool or '') in ('codex', 'omx-yolo') or (s.tool or '').startswith('omx') else 'other') %}
+  {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if 'codex' in (s.tool or '') or (s.tool or '').startswith('omx') else 'other') %}
   {% set display_name = s.title or s.tmux_session or s.hostname %}
   {% set status = 'waiting' if s.pending_tool else ('running' if s.running_tool else s.status) %}
   {% set labels = {'waiting': 'Waiting', 'running': 'Running', 'active': 'Active', 'idle': 'Idle', 'stopped': 'Ended'} %}
