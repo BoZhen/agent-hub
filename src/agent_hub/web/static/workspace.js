@@ -18,9 +18,11 @@ const WORKSPACE_KEY = 'agentHubWorkspaceTabs';
 const ACTIVE_TAB_KEY = 'agentHubActiveTab';
 const GROUPS_KEY = 'agentHubGroups';
 const RAW = 'tmux:'; // key prefix for rows that are bare tmux sessions, not Hub sessions
+const ENDED_PREVIEW = 3; // ended rows shown per project before "more"
 
 const previewState = {sid: null, tmux: null};
 const STATE_LABELS = {waiting: 'Waiting', running: 'Running', active: 'Active', idle: 'Idle', stopped: 'Ended'};
+const STATUS_RANK = {waiting: 0, running: 1, active: 1, idle: 2, stopped: 3};
 const VERBS = {
   PreToolUse: e => e.tool_name || 'Tool',
   PostToolUse: e => (e.tool_name || 'Tool') + ' done',
@@ -37,6 +39,7 @@ const mobileViewport = window.matchMedia('(max-width: 699px)');
 
 function verbFor(e) { const f = VERBS[e.event_type]; return f ? f(e) : e.event_type; }
 function basename(path) { const parts = String(path || '').split('/').filter(Boolean); return parts[parts.length - 1] || path || ''; }
+function rankOf(card) { return STATUS_RANK[card.dataset.status] ?? 2; }
 
 /* ------------------------------------------------------------------ */
 /* Rows                                                                */
@@ -48,14 +51,17 @@ function rowInfo(card) {
   return {
     sid: d.sid, tmux: d.tmux || '', name: d.sessionName || (d.sid || '').slice(0, 8), cwd: d.cwd || '', model: d.model || '',
     host: d.host || '', project: d.project || '', status: d.status || 'idle', tool: d.tool || '', raw: d.raw === '1', pinned: d.pinned === '1',
+    title: d.title || '',
   };
 }
 function setRowStatus(card, status, label) {
+  const changed = card.dataset.status !== status;
   card.dataset.status = status;
   const dot = card.querySelector('[data-role="dot"]');
   if (dot) dot.className = 'dot dot-' + status;
   const state = card.querySelector('[data-role="state-label"]');
   if (state) state.textContent = label || STATE_LABELS[status] || status;
+  if (changed) placeCard(card);
   renderWorkspaceTabs();
 }
 function setRowEvent(card, data) {
@@ -89,6 +95,18 @@ function setRowPending(card, pendingTool, detail, alwaysLabel, hasAlways, tmux) 
   }
   renderNeedsAction();
 }
+function setRowName(card, title) {
+  card.dataset.title = title || '';
+  const name = title || card.dataset.tmux || card.dataset.host || card.dataset.sid.slice(0, 8);
+  card.dataset.sessionName = name;
+  const el = card.querySelector('[data-role="name"]');
+  if (el) el.textContent = name;
+  const select = card.querySelector('.session-select');
+  if (select) select.setAttribute('aria-label', `Open ${name}`);
+  if (previewState.sid === card.dataset.sid) $('preview-name').textContent = name;
+  renderWorkspaceTabs();
+  renderNeedsAction();
+}
 function highlightRow(sid) {
   document.querySelectorAll('.session-row.is-selected').forEach(el => el.classList.remove('is-selected'));
   const card = cardFor(sid);
@@ -96,69 +114,101 @@ function highlightRow(sid) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Live panel: project groups                                          */
+/* Project groups                                                      */
 /* ------------------------------------------------------------------ */
 let groupState = {};
 try { groupState = JSON.parse(localStorage.getItem(GROUPS_KEY) || '{}') || {}; } catch (_) { groupState = {}; }
 function saveGroupState() { localStorage.setItem(GROUPS_KEY, JSON.stringify(groupState)); }
 
 function projectGroupFor(project) {
-  const panel = $('live-panel');
+  const panel = $('session-panel');
   let group = Array.from(panel.querySelectorAll('.group')).find(g => g.dataset.project === project);
   if (group) return group;
   group = document.createElement('section');
   group.className = 'group';
   group.dataset.project = project;
   group.dataset.collapsed = groupState['project:' + project] ? '1' : '0';
-  group.innerHTML = `<button type="button" class="group-head" data-action="toggle-group" aria-expanded="${group.dataset.collapsed === '0'}">${icon('chevron-down', 'icon icon-sm chev')}<span class="group-name">${esc(project)}</span><span class="group-count"></span></button><div class="group-body"></div>`;
-  const siblings = Array.from(panel.querySelectorAll('.group'));
-  const after = siblings.find(g => g.dataset.project.localeCompare(project) > 0);
-  if (after) panel.insertBefore(group, after); else panel.appendChild(group);
+  group.innerHTML = `<button type="button" class="group-head" data-action="toggle-group" aria-expanded="${group.dataset.collapsed === '0'}">${icon('chevron-down', 'icon icon-sm chev')}<span class="group-name" title="${esc(project)}">${esc(project)}</span><span class="group-count"></span></button><div class="group-body"></div>`;
+  panel.appendChild(group);
   return group;
 }
+/* Insert a row into its project at the right spot: waiting, live, idle,
+   ended; pinned first within a band; otherwise server order. */
 function placeCard(card) {
   const group = projectGroupFor(card.dataset.project || 'Other');
-  group.querySelector('.group-body').appendChild(card);
+  const body = group.querySelector('.group-body');
+  if (!card.dataset.order) card.dataset.order = '0';
+  const key = c => [rankOf(c), c.dataset.pinned === '1' ? 0 : 1, Number(c.dataset.order || 0)];
+  const mine = key(card);
+  const rows = Array.from(body.querySelectorAll('.session-row')).filter(r => r !== card);
+  const before = rows.find(r => {
+    const k = key(r);
+    for (let i = 0; i < mine.length; i++) { if (mine[i] !== k[i]) return mine[i] < k[i]; }
+    return false;
+  });
+  if (before) body.insertBefore(card, before); else body.appendChild(card);
+  updateGroupCounts();
 }
-function rebuildLiveGroups() {
-  const panel = $('live-panel');
+function rebuildGroups() {
+  const panel = $('session-panel');
   const cards = Array.from(panel.querySelectorAll('.session-row'));
+  cards.forEach((card, i) => { card.dataset.order = String(i + 1); });
   panel.querySelectorAll('.group').forEach(g => g.remove());
-  cards.forEach(placeCard);
+  cards.forEach(card => {
+    const group = projectGroupFor(card.dataset.project || 'Other');
+    group.querySelector('.group-body').appendChild(card);
+  });
+  Array.from(panel.querySelectorAll('.group')).forEach(group => {
+    const body = group.querySelector('.group-body');
+    Array.from(body.querySelectorAll('.session-row')).forEach(placeCard);
+  });
   updateGroupCounts();
 }
 function updateGroupCounts() {
-  document.querySelectorAll('#live-panel .group').forEach(group => {
-    const rows = Array.from(group.querySelectorAll('.session-row'));
+  const panel = $('session-panel');
+  const groups = Array.from(panel.querySelectorAll('.group'));
+  groups.forEach(group => {
+    const body = group.querySelector('.group-body');
+    const rows = Array.from(body.querySelectorAll('.session-row'));
     const visible = rows.filter(r => !r.classList.contains('is-hidden'));
     group.querySelector('.group-count').textContent = visible.length;
     group.hidden = visible.length === 0;
+    const minRank = visible.length ? Math.min(...visible.map(rankOf)) : 9;
+    group.dataset.rank = String(minRank);
+    group.classList.toggle('is-cold', minRank >= 3);
+    // Projects with only ended sessions start folded unless the user
+    // chose otherwise; they unfold on their own when something goes live.
+    const userChoice = groupState['project:' + group.dataset.project];
+    if (userChoice === undefined) {
+      const fold = minRank >= 3;
+      group.dataset.collapsed = fold ? '1' : '0';
+      group.querySelector('.group-head').setAttribute('aria-expanded', fold ? 'false' : 'true');
+    }
+    // Ended rows beyond the first few fold behind a "more" line.
+    const ended = visible.filter(r => r.dataset.status === 'stopped');
+    ended.forEach((r, i) => r.classList.toggle('is-overflow', i >= ENDED_PREVIEW));
+    rows.filter(r => r.dataset.status !== 'stopped').forEach(r => r.classList.remove('is-overflow'));
+    let more = group.querySelector('.group-more');
+    const hidden = Math.max(0, ended.length - ENDED_PREVIEW);
+    if (hidden > 0) {
+      if (!more) { more = document.createElement('button'); more.type = 'button'; more.className = 'group-more'; more.dataset.action = 'toggle-ended'; group.appendChild(more); }
+      more.textContent = group.dataset.showEnded === '1' ? 'Show fewer ended' : `${hidden} more ended`;
+    } else if (more) {
+      more.remove();
+    }
   });
-  const liveRows = document.querySelectorAll('#live-panel .session-row');
-  $('live-empty').hidden = liveRows.length > 0;
+  // Projects with something live float up; ended-only projects sink.
+  groups.sort((a, b) => (Number(a.dataset.rank) - Number(b.dataset.rank)) || a.dataset.project.localeCompare(b.dataset.project))
+    .forEach(g => panel.appendChild(g));
+  const any = panel.querySelectorAll('.session-row').length > 0;
+  $('panel-empty').hidden = any;
 }
 function toggleGroup(group) {
   const collapsed = group.dataset.collapsed === '1';
   group.dataset.collapsed = collapsed ? '0' : '1';
   group.querySelector('.group-head').setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-  const key = group.dataset.project ? 'project:' + group.dataset.project : group.id;
-  groupState[key] = !collapsed;
+  groupState['project:' + group.dataset.project] = !collapsed;
   saveGroupState();
-  if (collapsed && group.dataset.lazy) loadLazyGroup(group.dataset.lazy);
-}
-function expandGroup(id) {
-  const group = $(id);
-  if (group && group.dataset.collapsed === '1') toggleGroup(group);
-}
-function restoreLazyGroupState() {
-  ['group-idle', 'group-stopped', 'group-tmux'].forEach(id => {
-    const group = $(id);
-    if (groupState[id] === false) {
-      group.dataset.collapsed = '0';
-      group.querySelector('.group-head').setAttribute('aria-expanded', 'true');
-      loadLazyGroup(group.dataset.lazy);
-    }
-  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -170,7 +220,7 @@ function applyFilters() {
   allRows().forEach(card => {
     const fam = card.dataset.toolFamily || 'other';
     const toolOk = filter === 'all' || filter === fam;
-    const hay = `${card.dataset.sessionName} ${card.dataset.project} ${card.dataset.cwd} ${card.dataset.model} ${card.dataset.host}`.toLowerCase();
+    const hay = `${card.dataset.sessionName} ${card.dataset.tmux} ${card.dataset.project} ${card.dataset.cwd} ${card.dataset.model} ${card.dataset.host}`.toLowerCase();
     const queryOk = !query || hay.includes(query);
     card.classList.toggle('is-hidden', !(toolOk && queryOk));
   });
@@ -243,8 +293,6 @@ function scheduleStats() {
       const s = await api('GET', '/api/stats');
       $('stat-active').textContent = s.active_sessions;
       $('stat-waiting').textContent = s.waiting_sessions;
-      $('stat-idle').textContent = s.idle_sessions;
-      $('stat-stopped').textContent = s.stopped_sessions;
       $('stat-waiting-wrap').classList.toggle('is-zero', !s.waiting_sessions);
     } catch (_) {}
   }, 1500);
@@ -292,14 +340,7 @@ async function ensureCardExists(sessionId) {
     wrapper.innerHTML = (data.html || '').trim();
     const card = wrapper.firstElementChild;
     if (!card) return;
-    if (data.status === 'active' || card.dataset.pinned === '1') {
-      placeCard(card);
-    } else {
-      const panel = $('panel-' + data.status);
-      if (!panel || panel.querySelector('.group-loading')) return;
-      panel.querySelector('.group-empty')?.remove();
-      panel.prepend(card);
-    }
+    placeCard(card);
     card.querySelector('[data-role="event-line"]')?.classList.add('flash');
     // A tab opened on the bare tmux before the Hub knew the session now
     // belongs to the session itself; keep the terminal attached.
@@ -320,63 +361,43 @@ async function ensureCardExists(sessionId) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Lazy groups: idle, ended, bare tmux                                 */
+/* Bare tmux sessions, filed under their project                        */
 /* ------------------------------------------------------------------ */
-const lazyLoadedAt = {};
-function loadLazyGroup(kind) {
-  if (Date.now() - (lazyLoadedAt[kind] || 0) < 20000) return;
-  lazyLoadedAt[kind] = Date.now();
-  if (kind === 'tmux') loadTmuxGroup(); else loadSessionGroup(kind);
-}
-async function loadSessionGroup(status) {
-  const body = $('panel-' + status);
-  try {
-    const data = await api('GET', `/partials/session-list?status=${status}`);
-    body.innerHTML = data.html || '';
-    $('stat-' + status).textContent = data.count;
-    if (!data.count) body.innerHTML = `<div class="group-empty">${status === 'idle' ? 'No idle sessions.' : 'No ended sessions.'}</div>`;
-    else if (status === 'stopped') body.insertAdjacentHTML('beforeend', `<div class="group-foot"><button type="button" class="btn btn-sm btn-danger" data-action="clear-stopped">${icon('trash', 'icon icon-sm')}Clear all ended</button></div>`);
-    applyFilters();
-    renderWorkspaceTabs();
-  } catch (e) {
-    body.innerHTML = `<div class="group-empty">${esc(e.message)}</div>`;
-  }
-}
 let tmuxTimer = null;
 function scheduleTmuxRefresh() {
   if (tmuxTimer) return;
-  tmuxTimer = setTimeout(() => { tmuxTimer = null; lazyLoadedAt.tmux = 0; loadTmuxGroup(); }, 1200);
+  tmuxTimer = setTimeout(() => { tmuxTimer = null; loadBareTmux(); }, 1200);
 }
 function rawRowHtml(s) {
   const status = s.dead ? 'stopped' : (s.attached ? 'active' : 'idle');
   const key = RAW + s.name;
   const label = s.dead ? 'Dead' : (s.attached ? 'Attached' : 'Detached');
-  return `<div class="session-row" id="card-${esc(key)}" data-sid="${esc(key)}" data-raw="1" data-tool="tmux" data-tool-family="other" data-project="${esc(basename(s.cwd))}" data-cwd="${esc(s.cwd || '')}" data-host="" data-session-name="${esc(s.name)}" data-model="" data-status="${status}" data-pending="0" data-pinned="0" data-tmux="${s.dead ? '' : esc(s.name)}">`
-    + `<button type="button" class="session-select" data-action="open" aria-label="Open ${esc(s.name)}"><span class="session-tool" aria-hidden="true">${icon('terminal')}</span><span class="session-body"><span class="session-line1"><span class="dot dot-${status}" data-role="dot"></span><span class="session-name">${esc(s.name)}</span><span class="session-state" data-role="state-label">${label}</span></span><span class="session-line2" data-role="event-line">${esc(s.cwd || '')}</span></span></button>`
+  return `<div class="session-row" id="card-${esc(key)}" data-sid="${esc(key)}" data-raw="1" data-tool="tmux" data-tool-family="other" data-project="${esc(basename(s.cwd) || 'Other')}" data-cwd="${esc(s.cwd || '')}" data-host="" data-session-name="${esc(s.name)}" data-title="" data-model="" data-status="${status}" data-pending="0" data-pinned="0" data-tmux="${s.dead ? '' : esc(s.name)}">`
+    + `<button type="button" class="session-select" data-action="open" aria-label="Open ${esc(s.name)}"><span class="session-tool" aria-hidden="true">${icon('terminal')}</span><span class="session-body"><span class="session-line1"><span class="dot dot-${status}" data-role="dot"></span><span class="session-name" data-role="name">${esc(s.name)}</span><span class="badge" title="tmux session without a Hub record">shell</span><span class="session-state" data-role="state-label">${label}</span></span><span class="session-line2" data-role="event-line">${esc(s.cwd || '')}</span></span></button>`
     + '<div class="session-approve" data-role="approve-host"></div>'
     + `<div class="session-actions">${s.dead ? '' : `<a class="btn icon-btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.name)}" target="_blank" title="Open in a new tab">${icon('external', 'icon icon-sm')}</a>`}<button type="button" class="btn icon-btn btn-danger" data-action="kill" data-tmux="${esc(s.name)}" title="Kill tmux">${icon('power', 'icon icon-sm')}</button></div></div>`;
 }
-async function loadTmuxGroup() {
-  const body = $('panel-tmux');
+async function loadBareTmux() {
   try {
     const data = await api('GET', '/api/tmux/list');
     const list = data.sessions || [];
-    $('stat-tmux').textContent = list.length;
     const keep = new Set(list.map(s => RAW + s.name));
-    body.querySelectorAll('.session-row').forEach(row => { if (!keep.has(row.dataset.sid)) row.remove(); });
-    body.querySelector('.group-loading')?.remove();
-    body.querySelector('.group-empty')?.remove();
+    document.querySelectorAll('.session-row[data-raw="1"]').forEach(row => { if (!keep.has(row.dataset.sid)) row.remove(); });
     list.forEach(s => {
       const existing = cardFor(RAW + s.name);
-      if (existing) existing.outerHTML = rawRowHtml(s); else body.insertAdjacentHTML('beforeend', rawRowHtml(s));
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = rawRowHtml(s);
+      const fresh = wrapper.firstElementChild;
+      if (existing) {
+        if (existing.dataset.status === fresh.dataset.status) return;
+        existing.replaceWith(fresh);
+      }
+      placeCard(fresh);
     });
-    if (!list.length) body.innerHTML = '<div class="group-empty">No other tmux sessions.</div>';
     if (previewState.sid) highlightRow(previewState.sid);
     applyFilters();
     renderWorkspaceTabs();
-  } catch (e) {
-    body.innerHTML = `<div class="group-empty">${esc(e.message)}</div>`;
-  }
+  } catch (_) { /* tmux unavailable; nothing to file */ }
 }
 
 /* ------------------------------------------------------------------ */
@@ -598,12 +619,13 @@ async function openInspector(sid) {
   const body = $('inspector-body');
   body.innerHTML = '<div class="group-loading">Loading</div>';
   const card = cardFor(sid);
+  $('inspector-rename').hidden = sid.startsWith(RAW);
   if (sid.startsWith(RAW)) {
     const info = card ? rowInfo(card) : {name: sid.slice(RAW.length), cwd: '', tmux: sid.slice(RAW.length)};
     $('inspector-title').textContent = info.name;
-    body.innerHTML = `<div class="drawer-section"><dl class="kv"><dt>Kind</dt><dd>bare tmux session</dd><dt>Directory</dt><dd>${esc(info.cwd || '—')}</dd><dt>tmux</dt><dd>${esc(info.name)}</dd></dl></div>`
+    body.innerHTML = `<div class="drawer-section"><dl class="kv"><dt>Kind</dt><dd>tmux session without a Hub record</dd><dt>Directory</dt><dd>${esc(info.cwd || '—')}</dd><dt>tmux</dt><dd>${esc(info.name)}</dd></dl></div>`
       + `<div class="drawer-section"><div class="drawer-actions">${info.tmux ? `<a class="btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(info.tmux)}" target="_blank">${icon('external')}New tab</a>` : ''}<button type="button" class="btn btn-danger" data-action="kill" data-tmux="${esc(info.name)}">${icon('power')}Kill tmux</button></div></div>`
-      + '<div class="drawer-section"><p class="group-empty">Not tracked by the Hub. Start Claude or Codex inside it and it will show up under its project.</p></div>';
+      + '<div class="drawer-section"><p class="group-empty">Start Claude or Codex inside it and the Hub will track it as a session.</p></div>';
     return;
   }
   try {
@@ -623,7 +645,7 @@ function renderInspector(s, events, isOrphan) {
   const live = status !== 'stopped';
   const fmt = iso => String(iso || '').replace('T', ' ').slice(0, 19);
   const canFork = s.tool && s.tool.includes('claude') && s.tmux_session && !s.transferred && live;
-  $('inspector-title').textContent = s.tmux_session || s.hostname;
+  $('inspector-title').textContent = s.title || s.tmux_session || s.hostname;
   let html = '';
   if (s.pending_tool) {
     html += `<div class="drawer-section"><div class="pending-box"><strong>Waiting for approval</strong><br>${esc(s.pending_tool)}${s.pending_detail ? '<br>' + esc(s.pending_detail) : ''}${s.pending_always_label ? '<br>Always: ' + esc(s.pending_always_label) : ''}</div>`;
@@ -644,7 +666,8 @@ function renderInspector(s, events, isOrphan) {
     <dt>Session id</dt><dd>${esc(s.session_id)}</dd>
   </dl></div>`;
   html += '<div class="drawer-section"><div class="drawer-actions">'
-    + `<button type="button" class="btn" data-action="pin" data-sid="${esc(s.session_id)}">${icon('pin')}${s.pinned ? 'Unpin' : 'Pin'}</button>`
+    + `<button type="button" class="btn" data-action="rename" data-sid="${esc(s.session_id)}">${icon('edit')}Rename</button>`
+    + (live ? `<button type="button" class="btn" data-action="pin" data-sid="${esc(s.session_id)}">${icon('pin')}${s.pinned ? 'Unpin' : 'Pin'}</button>` : '')
     + (s.tmux_session && live && !isOrphan ? `<a class="btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.tmux_session)}" target="_blank">${icon('external')}New tab</a>` : '')
     + (canFork ? `<button type="button" class="btn" data-action="fork" data-sid="${esc(s.session_id)}" data-tmux="${esc(s.tmux_session)}">${icon('fork')}Fork</button>` : '')
     + `<a class="btn" href="/sessions/${encodeURIComponent(s.session_id)}">${icon('book')}Full page</a>`
@@ -685,6 +708,19 @@ async function approveSession(sid, always, btn) {
     if (btn) { btn.classList.remove('is-busy'); btn.textContent = always ? 'Always' : 'Approve'; }
   }
 }
+async function renameSession(sid) {
+  const card = cardFor(sid);
+  if (!card || sid.startsWith(RAW)) return;
+  const current = card.dataset.title || '';
+  const next = await H.promptDialog({title: 'Rename session', label: `Shown instead of the tmux name (${card.dataset.tmux || 'none'}). Leave empty to use the tmux name.`, value: current, placeholder: card.dataset.tmux || '', confirmLabel: 'Rename'});
+  if (next === null || next === current) return;
+  try {
+    const data = await api('POST', `/api/sessions/${sid}/title`, {title: next});
+    setRowName(card, data.title || '');
+    if (inspectorSid === sid) openInspector(sid);
+    toast(data.title ? `Renamed to ${data.title}` : 'Name reset to the tmux name', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
 async function togglePin(sid, btn) {
   const card = cardFor(sid);
   const pinned = card ? card.dataset.pinned === '1' : /Unpin/.test(btn?.textContent || '');
@@ -693,21 +729,10 @@ async function togglePin(sid, btn) {
     if (card) {
       card.dataset.pinned = pinned ? '0' : '1';
       const pinBtn = card.querySelector('[data-action="pin"]');
-      if (pinBtn) { pinBtn.classList.toggle('is-pinned', !pinned); pinBtn.title = pinned ? 'Pin to workspace' : 'Unpin'; }
-      if (pinned && card.dataset.status === 'idle' && card.closest('#live-panel')) {
-        // Unpinned idle sessions leave the live list and go back under Idle.
-        const idlePanel = $('panel-idle');
-        if (idlePanel && !idlePanel.querySelector('.group-loading')) { idlePanel.querySelector('.group-empty')?.remove(); idlePanel.prepend(card); }
-        else card.remove();
-        updateGroupCounts();
-      } else if (!pinned && card.closest('#panel-idle')) {
-        placeCard(card);
-        updateGroupCounts();
-        const idlePanel = $('panel-idle');
-        if (idlePanel && !idlePanel.querySelector('.session-row')) idlePanel.innerHTML = '<div class="group-empty">No idle sessions.</div>';
-      }
+      if (pinBtn) { pinBtn.classList.toggle('is-pinned', !pinned); pinBtn.title = pinned ? 'Pin to top of project' : 'Unpin'; }
+      placeCard(card);
     }
-    toast(pinned ? 'Unpinned' : 'Pinned to the workspace', 'success');
+    toast(pinned ? 'Unpinned' : 'Pinned to the top of its project', 'success');
     if (inspectorSid === sid) openInspector(sid);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -771,17 +796,24 @@ async function clearStopped() {
   try {
     await api('POST', '/api/sessions/clear-stopped');
     toast('Ended sessions cleared', 'success');
-    lazyLoadedAt.stopped = 0;
-    loadSessionGroup('stopped');
+    document.querySelectorAll('.session-row[data-status="stopped"]:not([data-raw="1"])').forEach(row => {
+      if (inspectorSid === row.dataset.sid) closeInspector();
+      row.remove();
+    });
+    workspaceTabs = workspaceTabs.filter(k => cardFor(k));
+    updateGroupCounts();
+    renderWorkspaceTabs();
     scheduleStats();
   } catch (e) { toast(e.message, 'error'); }
 }
 async function openRawTmux(name) {
-  expandGroup('group-tmux');
-  lazyLoadedAt.tmux = 0;
-  await loadTmuxGroup();
+  await loadBareTmux();
   const row = cardFor(RAW + name);
-  if (row) previewSession(row);
+  if (row) {
+    const group = row.closest('.group');
+    if (group && group.dataset.collapsed === '1') toggleGroup(group);
+    previewSession(row);
+  }
 }
 
 /* Every data-action button in the page routes through here. */
@@ -797,6 +829,8 @@ document.addEventListener('click', event => {
     case 'approve': approveSession(sid, false, btn); break;
     case 'approve-always': approveSession(sid, true, btn); break;
     case 'pin': togglePin(sid, btn); break;
+    case 'rename': renameSession(sid); break;
+    case 'rename-current': if (inspectorSid) renameSession(inspectorSid); break;
     case 'inspect': openInspector(sid); break;
     case 'fork': forkSession(sid, tmux, btn); break;
     case 'kill': killTmux(tmux, sid); break;
@@ -805,6 +839,7 @@ document.addEventListener('click', event => {
     case 'restore-all': restoreAll(btn); break;
     case 'clear-stopped': clearStopped(); break;
     case 'toggle-group': toggleGroup(btn.closest('.group')); break;
+    case 'toggle-ended': { const g = btn.closest('.group'); g.dataset.showEnded = g.dataset.showEnded === '1' ? '0' : '1'; updateGroupCounts(); break; }
     case 'new-session': ncOpen(); break;
     case 'mobile-sessions': setMobileMode('sessions'); break;
     case 'close-inspector': closeInspector(); break;
@@ -959,26 +994,24 @@ document.addEventListener('keydown', event => {
 /* ------------------------------------------------------------------ */
 /* Init                                                                */
 /* ------------------------------------------------------------------ */
-rebuildLiveGroups();
+rebuildGroups();
 applyFilters();
 renderNeedsAction();
 renderThemeOptions();
 renderWorkspaceTabs();
-restoreLazyGroupState();
 refreshOrphanCount();
 setInterval(refreshOrphanCount, 15000);
-setInterval(() => { if ($('group-tmux').dataset.collapsed === '0') { lazyLoadedAt.tmux = 0; loadTmuxGroup(); } }, 15000);
-api('GET', '/api/tmux/list').then(d => { $('stat-tmux').textContent = (d.sessions || []).length; }).catch(() => {});
+setInterval(loadBareTmux, 15000);
 
 const pageParams = new URLSearchParams(location.search);
-const openGroup = pageParams.get('open');
-if (openGroup) expandGroup('group-' + openGroup);
 const requestedSid = pageParams.get('session');
 const restoredSid = requestedSid || localStorage.getItem(ACTIVE_TAB_KEY);
 if (restoredSid && restoredSid.startsWith(RAW)) {
   openRawTmux(restoredSid.slice(RAW.length));
 } else {
-  const initialCard = cardFor(restoredSid) || document.querySelector('#live-panel .session-row:not([data-tmux=""])');
+  const candidates = allRows().filter(c => c.dataset.tmux && c.dataset.status !== 'stopped').sort((a, b) => rankOf(a) - rankOf(b));
+  const initialCard = cardFor(restoredSid) || candidates[0];
   if (initialCard && (!mobileViewport.matches || requestedSid)) previewSession(initialCard);
   else setMobileMode('sessions');
+  loadBareTmux();
 }

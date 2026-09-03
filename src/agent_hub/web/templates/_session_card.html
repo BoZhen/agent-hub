@@ -1,13 +1,15 @@
 {% import "_macros.html" as icons %}
 
 {# One dense session row for the sidebar. Everything the JavaScript needs
-   lives in data-* attributes; actions are dispatched by data-action. #}
+   lives in data-* attributes; actions are dispatched by data-action.
+   `show_delete` is kept for callers; ended and idle rows always get it. #}
 {% macro session_card(s, terminal_url, show_delete=False) %}
   {% set is_yolo = 'yolo' in (s.tool or '') or 'yolo' in (s.tmux_session or '')|lower %}
   {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if (s.tool or '') in ('codex', 'omx-yolo') or (s.tool or '').startswith('omx') else 'other') %}
-  {% set session_name = s.tmux_session or s.hostname %}
+  {% set display_name = s.title or s.tmux_session or s.hostname %}
   {% set status = 'waiting' if s.pending_tool else ('running' if s.running_tool else s.status) %}
   {% set labels = {'waiting': 'Waiting', 'running': 'Running', 'active': 'Active', 'idle': 'Idle', 'stopped': 'Ended'} %}
+  {% set live = status in ('waiting', 'running', 'active') %}
   <div class="session-row{% if s.pending_tool %} is-waiting{% endif %}{% if s.parent_session_id %} subagent{% endif %}"
        id="card-{{ s.session_id }}"
        data-sid="{{ s.session_id }}"
@@ -17,19 +19,20 @@
        data-project="{{ s.cwd | basename }}"
        data-cwd="{{ s.cwd }}"
        data-host="{{ s.hostname }}"
-       data-session-name="{{ session_name }}"
+       data-session-name="{{ display_name }}"
+       data-title="{{ s.title or '' }}"
        data-model="{{ s.model or '' }}"
        data-status="{{ status }}"
        data-pending="{{ 1 if s.pending_tool else 0 }}"
        data-pinned="{{ 1 if s.pinned else 0 }}"
        data-transferred="{{ 1 if s.transferred else 0 }}"
        data-tmux="{{ s.tmux_session or '' }}">
-    <button type="button" class="session-select" data-action="open" aria-label="Open {{ session_name }}">
+    <button type="button" class="session-select" data-action="open" aria-label="Open {{ display_name }}">
       <span class="session-tool" aria-hidden="true">{{ icons.tool_icon(s.tool) }}</span>
       <span class="session-body">
         <span class="session-line1">
           <span class="dot dot-{{ status }}" data-role="dot"></span>
-          <span class="session-name">{{ session_name }}</span>
+          <span class="session-name" data-role="name" title="{{ s.tmux_session or '' }}">{{ display_name }}</span>
           {% if s.parent_session_id %}<span class="badge">sub</span>{% endif %}
           {% if is_yolo %}<span class="badge badge-danger" title="Permission prompts are skipped">yolo</span>{% endif %}
           {% if s.transferred %}<span class="badge" title="Discovered from a tmux pane">tmux</span>{% endif %}
@@ -73,11 +76,12 @@
       {% endif %}
     </div>
     <div class="session-actions">
-      <button type="button" class="btn icon-btn{% if s.pinned %} is-pinned{% endif %}" data-action="pin" title="{% if s.pinned %}Unpin{% else %}Pin to workspace{% endif %}"><svg class="icon icon-sm"><use href="#i-pin"/></svg></button>
+      <button type="button" class="btn icon-btn" data-action="rename" title="Rename"><svg class="icon icon-sm"><use href="#i-edit"/></svg></button>
+      {% if status != 'stopped' %}<button type="button" class="btn icon-btn{% if s.pinned %} is-pinned{% endif %}" data-action="pin" title="{% if s.pinned %}Unpin{% else %}Pin to top of project{% endif %}"><svg class="icon icon-sm"><use href="#i-pin"/></svg></button>{% endif %}
       <button type="button" class="btn icon-btn" data-action="inspect" title="Details"><svg class="icon icon-sm"><use href="#i-info"/></svg></button>
-      {% if s.tmux_session %}<a class="btn icon-btn" href="{{ terminal_url }}/?attach={{ s.tmux_session }}" target="_blank" title="Open in a new tab"><svg class="icon icon-sm"><use href="#i-external"/></svg></a>{% endif %}
-      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred %}<button type="button" class="btn icon-btn" data-action="fork" title="Fork into a new tmux"><svg class="icon icon-sm"><use href="#i-fork"/></svg></button>{% endif %}
-      {% if show_delete %}<button type="button" class="btn icon-btn btn-danger" data-action="delete" title="Delete record"><svg class="icon icon-sm"><use href="#i-trash"/></svg></button>{% endif %}
+      {% if s.tmux_session and status != 'stopped' %}<a class="btn icon-btn" href="{{ terminal_url }}/?attach={{ s.tmux_session }}" target="_blank" title="Open in a new tab"><svg class="icon icon-sm"><use href="#i-external"/></svg></a>{% endif %}
+      {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred and live %}<button type="button" class="btn icon-btn" data-action="fork" title="Fork into a new tmux"><svg class="icon icon-sm"><use href="#i-fork"/></svg></button>{% endif %}
+      {% if show_delete or not live %}<button type="button" class="btn icon-btn btn-danger" data-action="delete" title="{% if status == 'idle' and s.tmux_session %}Delete record and kill its tmux{% else %}Delete record{% endif %}"><svg class="icon icon-sm"><use href="#i-trash"/></svg></button>{% endif %}
     </div>
   </div>
 {% endmacro %}

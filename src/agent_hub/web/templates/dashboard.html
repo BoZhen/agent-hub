@@ -41,23 +41,12 @@
         <div id="needs-list"></div>
       </section>
 
-      <div id="live-panel">
+      {# Rows are rendered flat; workspace.js groups them by project and
+         orders live, idle and ended sessions inside each group. #}
+      <div id="session-panel">
         {% for s in sessions %}{{ session_card(s, terminal_url) }}{% endfor %}
       </div>
-      <div class="sidebar-empty" id="live-empty"{% if sessions %} hidden{% endif %}><strong>No live sessions</strong>Start one below, or open a tmux session from the groups underneath.</div>
-
-      <section class="group is-archive" id="group-idle" data-collapsed="1" data-lazy="idle">
-        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Idle</span><span class="group-count" id="stat-idle">{{ stats.idle_sessions }}</span></button>
-        <div class="group-body" id="panel-idle"><div class="group-loading">Loading</div></div>
-      </section>
-      <section class="group is-archive" id="group-stopped" data-collapsed="1" data-lazy="stopped">
-        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Ended</span><span class="group-count" id="stat-stopped">{{ stats.stopped_sessions }}</span></button>
-        <div class="group-body" id="panel-stopped"><div class="group-loading">Loading</div></div>
-      </section>
-      <section class="group is-archive" id="group-tmux" data-collapsed="1" data-lazy="tmux">
-        <button type="button" class="group-head" data-action="toggle-group" aria-expanded="false"><svg class="icon icon-sm chev"><use href="#i-chevron-down"/></svg><span class="group-name">Other tmux</span><span class="group-count" id="stat-tmux"></span></button>
-        <div class="group-body" id="panel-tmux"><div class="group-loading">Loading</div></div>
-      </section>
+      <div class="sidebar-empty" id="panel-empty"{% if sessions %} hidden{% endif %}><strong>No sessions yet</strong>Start one below. Sessions launched from a terminal show up here as soon as their hooks report in.</div>
     </div>
     <footer class="sidebar-foot">
       <button type="button" class="btn btn-primary" id="btn-new-claude" data-action="new-session"><svg class="icon"><use href="#i-plus"/></svg>New session</button>
@@ -91,7 +80,7 @@
       <iframe id="preview-iframe" class="hidden" title="Session terminal" allow="clipboard-read; clipboard-write" referrerpolicy="no-referrer"></iframe>
       <div class="stage-status"><span id="stage-status-text"></span></div>
       <aside class="drawer" id="inspector" aria-label="Session details" aria-hidden="true">
-        <div class="drawer-head"><span class="drawer-title" id="inspector-title">Details</span><button type="button" class="btn btn-ghost icon-btn" data-action="close-inspector" aria-label="Close details"><svg class="icon"><use href="#i-x"/></svg></button></div>
+        <div class="drawer-head"><span class="drawer-title" id="inspector-title">Details</span><button type="button" class="btn btn-ghost icon-btn btn-rename" id="inspector-rename" data-action="rename-current" title="Rename" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button type="button" class="btn btn-ghost icon-btn" data-action="close-inspector" aria-label="Close details"><svg class="icon"><use href="#i-x"/></svg></button></div>
         <div class="drawer-body" id="inspector-body"></div>
       </aside>
     </div>

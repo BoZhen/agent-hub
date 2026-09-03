@@ -51,6 +51,7 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN pending_always_label TEXT",
     "ALTER TABLE sessions ADD COLUMN tool TEXT DEFAULT 'claude'",
     "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
+    "ALTER TABLE sessions ADD COLUMN title TEXT",
 ]
 
 
@@ -211,6 +212,17 @@ async def update_session_status(
             "UPDATE sessions SET status = ? WHERE session_id = ?",
             (status, session_id),
         )
+    await db.commit()
+
+
+async def set_session_title(
+    db: aiosqlite.Connection, session_id: str, title: str | None
+) -> None:
+    """User-chosen display name. NULL means "show the tmux name"."""
+    await db.execute(
+        "UPDATE sessions SET title = ? WHERE session_id = ?",
+        (title, session_id),
+    )
     await db.commit()
 
 

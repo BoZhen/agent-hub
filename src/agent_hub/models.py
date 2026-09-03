@@ -23,6 +23,7 @@ class SessionResponse(BaseModel):
     tmux_session: str | None = None
     pinned: bool = False
     tool: str = "claude"
+    title: str | None = None
 
 class EventResponse(BaseModel):
     id: int

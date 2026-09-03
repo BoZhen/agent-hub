@@ -80,6 +80,34 @@ window.AgentHub = (() => {
     });
   }
 
+  /* Single-field prompt. Resolves the trimmed string, or null on cancel. */
+  function promptDialog({title, label = '', value = '', placeholder = '', confirmLabel = 'Save'}) {
+    return new Promise(resolve => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.innerHTML = `
+        <div class="modal confirm" role="dialog" aria-modal="true">
+          <h2>${escapeHtml(title)}</h2>
+          <div class="field">${label ? `<label for="prompt-input">${escapeHtml(label)}</label>` : ''}<input class="input" id="prompt-input" type="text" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" autocomplete="off"></div>
+          <div class="modal-foot">
+            <button type="button" class="btn" data-cancel>Cancel</button>
+            <button type="button" class="btn btn-primary" data-ok>${escapeHtml(confirmLabel)}</button>
+          </div>
+        </div>`;
+      const input = backdrop.querySelector('#prompt-input');
+      const done = result => { backdrop.remove(); document.removeEventListener('keydown', onKey); resolve(result); };
+      const onKey = e => { if (e.key === 'Escape') done(null); };
+      backdrop.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+      backdrop.querySelector('[data-ok]').addEventListener('click', () => done(input.value.trim()));
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); } });
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) done(null); });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(backdrop);
+      input.focus();
+      input.select();
+    });
+  }
+
   function copyText(text) {
     if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
     const ta = document.createElement('textarea');
@@ -117,5 +145,5 @@ window.AgentHub = (() => {
   }
   if (document.getElementById('ws-dot') || document.body.dataset.ws !== 'off') connectWS();
 
-  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, toast, api, confirmDialog, copyText};
+  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, toast, api, confirmDialog, promptDialog, copyText};
 })();

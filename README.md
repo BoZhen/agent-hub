@@ -22,7 +22,7 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 - 统一管理 Claude Code 与 Codex CLI 会话
 - 记录会话事件并在 Dashboard 中实时展示
 - 基于 tmux 进行远程审批与终端接入
-- 项目分组、待处理队列、浏览器工作集标签与 session 详情抽屉
+- 按项目分组的 session 导航（活跃 / 空闲 / 已结束同组展示）、待处理队列、浏览器工作集标签、session 重命名与详情抽屉
 - 单一样式表（无 Tailwind / 无前端构建），5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
 - 手机端独立 Session/Terminal 模式
 - 通过 MCP SSE 暴露查询接口
@@ -107,11 +107,11 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 ## 常用页面
 
-- `/`：工作台。侧栏按项目列出 live session，下方的 Idle / Ended / Other tmux 分组按需展开；右侧是工作集标签与嵌入式终端，session 详情在右侧抽屉里查看
+- `/`：工作台。侧栏按项目分组，每个项目下依次列出等待审批、活跃、空闲、已结束的 session 以及该目录下未被跟踪的 tmux；右侧是工作集标签与嵌入式终端，session 详情与重命名在右侧抽屉里
 - `/?session={id}`：直接打开某个 session 的终端（手机上进入全屏 Terminal 模式）
 - `/sessions/{id}`：单会话完整页（抽屉的降级页，含完整事件列表）
 - `/agent`：Monitor 只读助手
-- `/idle`、`/stopped`、`/tmux`：保留为跳转，分别展开工作台侧栏对应分组
+- `/idle`、`/stopped`、`/tmux`：保留为跳转，回到工作台
 
 ## 常用接口
 

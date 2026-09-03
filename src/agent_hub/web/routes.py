@@ -107,32 +107,31 @@ def _terminal_url(request: Request) -> str:
     return f"http://{host}:{port}"
 
 
-async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
-    """Sessions visible on the main dashboard: everything active,
-    plus idle sessions the user pinned so they don't fall off into
-    the Idle group. Actives come first, then pinned idle — both sorted
-    by last_seen_at DESC within their bucket."""
-    actives = await db.get_sessions(
-        conn, status="active", limit=100, transferred=transferred,
-    )
-    pinned_idle = await db.get_sessions(
-        conn, status="idle", limit=100, transferred=transferred, pinned=1,
-    )
-    sessions = actives + pinned_idle
-    for s in sessions:
+STOPPED_LIMIT = 100
+
+
+async def _fetch_dashboard(conn) -> list[dict]:
+    """Every session the sidebar shows, in one list: active, idle and the
+    most recent ended ones. The browser groups them by project and sorts
+    by state inside each project. Waiting sessions come first so the
+    initial selection lands on the one that needs attention."""
+    actives = await db.get_sessions(conn, status="active", limit=100)
+    idles = await db.get_sessions(conn, status="idle", limit=100)
+    stopped = await db.get_sessions(conn, status="stopped", limit=STOPPED_LIMIT)
+    for s in actives:
         await _enrich_running(conn, s)
+    for s in actives + idles:
         s["recent_events"] = await db.get_session_events_latest(
-            conn, s["session_id"], n=2
+            conn, s["session_id"], n=1
         )
-    # Float waiting sessions to the top so pending approvals can't hide
-    # below the fold. Python's sort is stable, so relative order within
-    # the waiting and non-waiting groups is preserved (still last_seen_at
-    # DESC within each bucket).
+    for s in stopped:
+        s["recent_events"] = []
+    sessions = actives + idles + stopped
     sessions.sort(key=lambda s: 0 if s.get("pending_tool") else 1)
 
-    # Place subagent cards directly after their parent so the
-    # visual indent forms a tree. Any subagent whose parent isn't
-    # in the current list falls through to the end.
+    # Place subagent rows directly after their parent so the visual
+    # indent forms a tree. Any subagent whose parent isn't in the
+    # current list falls through to the end.
     parents: list[dict] = []
     children_by_parent: dict[str, list[dict]] = {}
     orphan_subagents: list[dict] = []
@@ -157,10 +156,7 @@ async def _fetch_dashboard(conn, transferred: int) -> list[dict]:
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     conn = request.app.state.db
-    # Hook-driven sessions and sessions adopted from tmux scanning share
-    # one navigator; the row carries a `tmux` badge for the latter.
-    sessions = await _fetch_dashboard(conn, transferred=0)
-    sessions += await _fetch_dashboard(conn, transferred=1)
+    sessions = await _fetch_dashboard(conn)
     stats = await db.get_stats(conn)
 
     terminal_url = _terminal_url(request)
@@ -176,21 +172,21 @@ async def dashboard(request: Request):
     )
 
 
-# The old list pages now live inside the workspace sidebar. Keep the
+# The old list pages are part of the workspace sidebar now. Keep the
 # URLs working for bookmarks and the README.
 @router.get("/idle")
 async def idle_sessions():
-    return RedirectResponse("/?open=idle", status_code=302)
+    return RedirectResponse("/", status_code=302)
 
 
 @router.get("/stopped")
 async def stopped_sessions():
-    return RedirectResponse("/?open=stopped", status_code=302)
+    return RedirectResponse("/", status_code=302)
 
 
 @router.get("/tmux")
 async def tmux_hub():
-    return RedirectResponse("/?open=tmux", status_code=302)
+    return RedirectResponse("/", status_code=302)
 
 
 @router.get("/agent", response_class=HTMLResponse)
@@ -257,28 +253,3 @@ async def session_card_partial(request: Request, session_id: str) -> dict:
         "transferred": int(session.get("transferred", 0) or 0),
         "status": session.get("status", "active"),
     }
-
-
-@router.get("/partials/session-list")
-async def session_list_partial(request: Request, status: str = "idle") -> dict:
-    """Rows for one of the sidebar's lazily loaded groups (Idle, Ended).
-
-    Pinned idle sessions already sit in the live list, so they are left
-    out here to avoid duplicate row ids on the page.
-    """
-    if status not in ("idle", "stopped"):
-        raise HTTPException(status_code=400, detail="status must be idle or stopped")
-    conn = request.app.state.db
-    sessions = await db.get_sessions(conn, status=status, limit=200)
-    if status == "idle":
-        sessions = [s for s in sessions if not s.get("pinned")]
-        for s in sessions:
-            s["recent_events"] = await db.get_session_events_latest(
-                conn, s["session_id"], n=1,
-            )
-    terminal_url = _terminal_url(request)
-    macro = templates.env.get_template("_session_card.html").module.session_card
-    html = "".join(
-        str(macro(s, terminal_url, show_delete=True)) for s in sessions
-    )
-    return {"html": html, "count": len(sessions)}

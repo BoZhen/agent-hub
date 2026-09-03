@@ -194,6 +194,15 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .group-foot { display: flex; gap: 6px; padding: 4px 6px 6px; }
 .group.is-archive .group-head { color: var(--muted); }
 
+.session-row[data-status="stopped"] { opacity: .62; }
+.session-row[data-status="stopped"]:hover, .session-row[data-status="stopped"].is-selected { opacity: 1; }
+.session-row.is-overflow { display: none; }
+.group[data-show-ended="1"] .session-row.is-overflow { display: block; }
+.group.is-cold .group-head { color: var(--muted); }
+.group-more { display: block; width: 100%; padding: 4px 6px 6px 34px; color: var(--muted); font-size: var(--fs-1); text-align: left; }
+.group-more:hover { color: var(--text-2); }
+.session-name .name-tmux { margin-left: 6px; color: var(--muted); font-weight: 400; font-family: var(--font-mono); font-size: 11px; }
+.drawer-head .btn-rename { flex-shrink: 0; }
 .sidebar-empty { padding: 28px 16px; text-align: center; color: var(--muted); font-size: var(--fs-1); line-height: 1.5; }
 .sidebar-empty strong { display: block; margin-bottom: 4px; color: var(--text-2); font-weight: 500; }
 

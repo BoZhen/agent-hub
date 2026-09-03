@@ -450,6 +450,28 @@ async def pin_session(request: Request, session_id: str, body: PinRequest):
     return {"ok": True, "pinned": body.pinned}
 
 
+class TitleRequest(BaseModel):
+    title: str | None = None
+
+
+@router.post("/sessions/{session_id}/title")
+async def set_title(request: Request, session_id: str, body: TitleRequest):
+    """Rename how a session is shown in the Hub.
+
+    This is a display name only. The tmux session keeps its name, so
+    attach / approve / restore keep working unchanged.
+    """
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    title = (body.title or "").strip()
+    if len(title) > 80:
+        raise HTTPException(status_code=400, detail="Title is limited to 80 characters")
+    await db.set_session_title(conn, session_id, title or None)
+    return {"ok": True, "title": title or None}
+
+
 class NotifyRequest(BaseModel):
     message: str
 
