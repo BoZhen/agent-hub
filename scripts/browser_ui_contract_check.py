@@ -121,9 +121,9 @@ def main() -> int:
 
         stale = cdp.evaluate(
             "(() => {"
-            "const frame=document.getElementById('preview-iframe');const dot=document.getElementById('terminal-status-dot');"
+            "const dot=document.getElementById('terminal-status-dot');"
             "dot.className='dot dot-active';"
-            "window.dispatchEvent(new MessageEvent('message',{origin:TERMINAL_ORIGIN,source:frame.contentWindow,data:{source:'web-terminal',type:'webterminal:disconnected',session:'stale-session'}}));"
+            "window.dispatchEvent(new MessageEvent('message',{origin:TERMINAL_ORIGIN,source:window,data:{source:'web-terminal',type:'webterminal:disconnected',session:'stale-session'}}));"
             "return {dot:dot.className,current:previewState.tmux};"
             "})()"
         )
@@ -160,9 +160,9 @@ def main() -> int:
         closed = cdp.evaluate(
             "(() => {const tab=document.querySelector('#workspace-tabs [role=tab]');"
             "tab.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true}));"
-            "return new Promise(resolve=>requestAnimationFrame(()=>resolve({tabs:document.querySelectorAll('#workspace-tabs [role=tab]').length,sid:previewState.sid,src:document.getElementById('preview-iframe').src})));})()"
+            "return new Promise(resolve=>requestAnimationFrame(()=>resolve({tabs:document.querySelectorAll('#workspace-tabs [role=tab]').length,sid:previewState.sid,frames:document.querySelectorAll('#stage-frames iframe').length})));})()"
         )
-        assert closed["tabs"] == 0 and closed["sid"] is None and closed["src"] == "about:blank", closed
+        assert closed["tabs"] == 0 and closed["sid"] is None and closed["frames"] == 0, closed
         tmux_check = subprocess.run(
             ["tmux", "has-session", "-t", args.tmux],
             stdout=subprocess.DEVNULL,

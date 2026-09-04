@@ -12,7 +12,7 @@ const $ = id => document.getElementById(id);
 
 const TERMINAL_URL = document.body.dataset.terminalUrl;
 const TERMINAL_ORIGIN = new URL(TERMINAL_URL, location.href).origin;
-const TERMINAL_EVENT_TYPES = new Set(['webterminal:ready', 'webterminal:connected', 'webterminal:disconnected', 'webterminal:focus']);
+const TERMINAL_EVENT_TYPES = new Set(['webterminal:ready', 'webterminal:connected', 'webterminal:reconnecting', 'webterminal:disconnected', 'webterminal:focus']);
 const FILTER_KEY = 'agentHubToolFilter';
 const WORKSPACE_KEY = 'agentHubWorkspaceTabs';
 const ACTIVE_TAB_KEY = 'agentHubActiveTab';
@@ -477,7 +477,11 @@ function handleWorkspaceTabKey(event, sid) {
    and the CLI inside it keep running. */
 function closeWorkspaceTab(sid) {
   const index = workspaceTabs.indexOf(sid);
+  const card = cardFor(sid);
+  const tmux = card ? rowInfo(card).tmux : null;
   workspaceTabs = workspaceTabs.filter(item => item !== sid);
+  // Closing the last tab on a tmux drops its frame; the tmux itself lives on.
+  if (tmux && !tmuxInUse(tmux)) dropFrame(tmux);
   if (previewState.sid === sid) {
     const next = workspaceTabs[Math.max(0, index - 1)] || workspaceTabs[0];
     const nextCard = cardFor(next);
@@ -490,21 +494,74 @@ function closeWorkspaceTab(sid) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Terminal stage                                                      */
+/* Terminal stage: one iframe per open tab, only the active one shown  */
 /* ------------------------------------------------------------------ */
+const MAX_LIVE_FRAMES = 6;
+const frames = new Map(); // tmux name → {iframe, state, lastUsed}
+const STAGE_TEXT = {connecting: 'Connecting to the terminal', reconnecting: 'Reconnecting to the terminal', disconnected: 'Terminal disconnected. Click to reconnect.'};
+const STAGE_DOT = {connected: 'dot-active', connecting: 'dot-running', reconnecting: 'dot-waiting', disconnected: 'dot-danger'};
+
 function setStageConn(state) {
-  const pane = $('preview-pane');
-  pane.dataset.conn = state;
-  const text = {connecting: 'Connecting to the terminal', disconnected: 'Terminal disconnected. Click to reconnect.'}[state] || '';
-  $('stage-status-text').textContent = text;
-  $('terminal-status-dot').className = 'dot ' + ({connected: 'dot-active', connecting: 'dot-running', disconnected: 'dot-danger'}[state] || 'dot-stopped');
+  $('preview-pane').dataset.conn = state;
+  $('stage-status-text').textContent = STAGE_TEXT[state] || '';
+  $('terminal-status-dot').className = 'dot ' + (STAGE_DOT[state] || 'dot-stopped');
+}
+function terminalSrc(tmux) {
+  const theme = H.currentTheme();
+  const params = new URLSearchParams({attach: tmux, embed: '1', theme, parent_origin: location.origin});
+  return `${TERMINAL_URL}/?${params.toString()}`;
+}
+function activeFrame() { return previewState.tmux ? frames.get(previewState.tmux) || null : null; }
+function frameForWindow(win) {
+  for (const frame of frames.values()) if (frame.iframe.contentWindow === win) return frame;
+  return null;
+}
+function tmuxInUse(tmux) {
+  return workspaceTabs.some(sid => { const card = cardFor(sid); return !!card && rowInfo(card).tmux === tmux; });
+}
+function dropFrame(tmux) {
+  const frame = frames.get(tmux);
+  if (!frame) return;
+  frame.iframe.remove();
+  frames.delete(tmux);
+}
+function ensureFrame(tmux) {
+  let frame = frames.get(tmux);
+  if (frame) return frame;
+  // Keep the pool bounded: the frame unused for longest goes first. It is
+  // recreated (and reconnects) the next time its tab is opened.
+  while (frames.size >= MAX_LIVE_FRAMES) {
+    let oldest = null;
+    frames.forEach((f, name) => { if (name !== previewState.tmux && (!oldest || f.lastUsed < oldest.frame.lastUsed)) oldest = {name, frame: f}; });
+    if (!oldest) break;
+    dropFrame(oldest.name);
+  }
+  const iframe = document.createElement('iframe');
+  iframe.className = 'stage-frame';
+  iframe.title = 'Session terminal';
+  iframe.setAttribute('allow', 'clipboard-read; clipboard-write');
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
+  iframe.dataset.tmux = tmux;
+  iframe.hidden = true;
+  iframe.src = terminalSrc(tmux);
+  $('stage-frames').appendChild(iframe);
+  frame = {iframe, state: 'connecting', lastUsed: Date.now()};
+  frames.set(tmux, frame);
+  return frame;
+}
+function activateFrame(tmux) {
+  const frame = ensureFrame(tmux);
+  frame.lastUsed = Date.now();
+  previewState.tmux = tmux;
+  frames.forEach((f, name) => { f.iframe.hidden = name !== tmux; });
+  setStageConn(frame.state);
 }
 function reloadTerminal() {
-  const iframe = $('preview-iframe');
-  const src = iframe.src;
-  if (!src || src === 'about:blank') return;
-  iframe.src = 'about:blank';
-  requestAnimationFrame(() => { iframe.src = src; setStageConn('connecting'); });
+  const frame = activeFrame();
+  if (!frame) return;
+  const src = frame.iframe.src;
+  frame.iframe.src = 'about:blank';
+  requestAnimationFrame(() => { frame.iframe.src = src; frame.state = 'connecting'; setStageConn('connecting'); });
 }
 $('stage-status-text').addEventListener('click', () => { if ($('preview-pane').dataset.conn === 'disconnected') reloadTerminal(); });
 
@@ -514,16 +571,10 @@ function previewSession(el) {
   const info = rowInfo(card);
   if (!info.tmux || info.status === 'stopped') { openInspector(info.sid); return; }
 
-  const iframe = $('preview-iframe');
   const theme = H.currentTheme();
-  if (previewState.tmux !== info.tmux) {
-    const params = new URLSearchParams({attach: info.tmux, embed: '1', theme, parent_origin: location.origin});
-    iframe.src = `${TERMINAL_URL}/?${params.toString()}`;
-    previewState.tmux = info.tmux;
-    setStageConn('connecting');
-  }
+  activateFrame(info.tmux);
   previewState.sid = info.sid;
-  iframe.classList.remove('hidden');
+  $('stage-frames').classList.remove('hidden');
   $('preview-empty').classList.add('hidden');
 
   $('preview-name').textContent = info.name;
@@ -545,9 +596,8 @@ function previewSession(el) {
   syncTerminalVisibility();
 }
 function clearTerminalStage() {
-  const iframe = $('preview-iframe');
-  iframe.src = 'about:blank';
-  iframe.classList.add('hidden');
+  Array.from(frames.keys()).forEach(dropFrame);
+  $('stage-frames').classList.add('hidden');
   $('preview-empty').classList.remove('hidden');
   $('preview-name').textContent = 'No session';
   $('preview-model').hidden = true;
@@ -570,28 +620,36 @@ function setMobileMode(mode) {
 function terminalIsVisible() {
   return !!previewState.sid && (!mobileViewport.matches || document.body.dataset.mobileMode === 'terminal');
 }
+/* Only the active frame is told it is visible; hidden ones skip resize
+   traffic and stay connected quietly. */
 function syncTerminalVisibility() {
   const visible = terminalIsVisible();
-  requestAnimationFrame(() => postToTerminal({type: 'agent-hub:visibility', visible}));
+  requestAnimationFrame(() => frames.forEach((frame, name) => postToTerminal({type: 'agent-hub:visibility', visible: visible && name === previewState.tmux}, frame)));
 }
 mobileViewport.addEventListener?.('change', syncTerminalVisibility);
 window.addEventListener('resize', syncTerminalVisibility);
 
-function postToTerminal(message) {
-  const frame = $('preview-iframe');
-  if (frame?.contentWindow) frame.contentWindow.postMessage(message, TERMINAL_ORIGIN);
+function postToTerminal(message, frame = activeFrame()) {
+  if (frame?.iframe.contentWindow) frame.iframe.contentWindow.postMessage(message, TERMINAL_ORIGIN);
+}
+function broadcastToTerminals(message) {
+  frames.forEach(frame => postToTerminal(message, frame));
 }
 window.addEventListener('message', event => {
-  const iframe = $('preview-iframe');
-  if (event.origin !== TERMINAL_ORIGIN || event.source !== iframe.contentWindow || event.data?.source !== 'web-terminal') return;
+  if (event.origin !== TERMINAL_ORIGIN || event.data?.source !== 'web-terminal') return;
+  const frame = frameForWindow(event.source);
+  if (!frame) return;
   const type = event.data.type;
-  if (!TERMINAL_EVENT_TYPES.has(type) || event.data.session !== previewState.tmux) return;
+  if (!TERMINAL_EVENT_TYPES.has(type)) return;
+  const name = frame.iframe.dataset.tmux;
   if (type === 'webterminal:ready') {
-    postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()});
-    postToTerminal({type: 'agent-hub:visibility', visible: terminalIsVisible()});
+    postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()}, frame);
+    postToTerminal({type: 'agent-hub:visibility', visible: terminalIsVisible() && name === previewState.tmux}, frame);
   }
-  if (type === 'webterminal:connected') setStageConn('connected');
-  if (type === 'webterminal:disconnected') setStageConn('disconnected');
+  if (type === 'webterminal:connected') frame.state = 'connected';
+  if (type === 'webterminal:reconnecting') frame.state = 'reconnecting';
+  if (type === 'webterminal:disconnected') frame.state = 'disconnected';
+  if (name === previewState.tmux) setStageConn(frame.state);
 });
 
 /* ------------------------------------------------------------------ */
@@ -891,7 +949,7 @@ document.addEventListener('click', event => {
 });
 window.addEventListener('agenthub:theme', event => {
   $('theme-label').textContent = H.themeName(event.detail.theme);
-  postToTerminal({type: 'agent-hub:set-theme', theme: event.detail.theme});
+  broadcastToTerminals({type: 'agent-hub:set-theme', theme: event.detail.theme});
   const standalone = $('preview-standalone');
   if (!standalone.hidden && previewState.tmux) standalone.href = `${TERMINAL_URL}/?attach=${encodeURIComponent(previewState.tmux)}&theme=${encodeURIComponent(event.detail.theme)}`;
 });

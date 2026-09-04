@@ -42,8 +42,11 @@ def test_terminal_embed_url_carries_theme_and_parent_origin() -> None:
     assert "agent-hub:set-theme" in WORKSPACE_JS
     assert "webterminal:connected" in WORKSPACE_JS
     assert "webterminal:disconnected" in WORKSPACE_JS
-    assert "event.source !== iframe.contentWindow" in WORKSPACE_JS
-    assert "event.data.session !== previewState.tmux" in WORKSPACE_JS
+    # only windows the Hub created itself are listened to; each frame is
+    # matched by its own contentWindow
+    assert "frameForWindow(event.source)" in WORKSPACE_JS
+    assert "if (name === previewState.tmux) setStageConn(frame.state)" in WORKSPACE_JS
+    assert "const MAX_LIVE_FRAMES" in WORKSPACE_JS
 
 
 def test_close_workspace_tab_is_view_only() -> None:
