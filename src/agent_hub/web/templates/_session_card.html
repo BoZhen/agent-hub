@@ -81,6 +81,7 @@
       <button type="button" class="btn icon-btn" data-action="inspect" title="Details"><svg class="icon icon-sm"><use href="#i-info"/></svg></button>
       {% if s.tmux_session and status != 'stopped' %}<a class="btn icon-btn" href="{{ terminal_url }}/?attach={{ s.tmux_session }}" target="_blank" title="Open in a new tab"><svg class="icon icon-sm"><use href="#i-external"/></svg></a>{% endif %}
       {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred and live %}<button type="button" class="btn icon-btn" data-action="fork" title="Fork into a new tmux"><svg class="icon icon-sm"><use href="#i-fork"/></svg></button>{% endif %}
+      {% if status == 'stopped' and tool_family in ('claude', 'codex') %}<button type="button" class="btn icon-btn" data-action="resume" title="Resume in a new tmux"><svg class="icon icon-sm"><use href="#i-play"/></svg></button>{% endif %}
       {% if show_delete or not live %}<button type="button" class="btn icon-btn btn-danger" data-action="delete" title="{% if status == 'idle' and s.tmux_session %}Delete record and kill its tmux{% else %}Delete record{% endif %}"><svg class="icon icon-sm"><use href="#i-trash"/></svg></button>{% endif %}
     </div>
   </div>

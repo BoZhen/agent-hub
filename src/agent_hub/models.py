@@ -24,6 +24,9 @@ class SessionResponse(BaseModel):
     pinned: bool = False
     tool: str = "claude"
     title: str | None = None
+    # The command that would bring this session back (`claude --resume …`
+    # or `codex resume …`); what POST /sessions/{id}/resume runs.
+    resume_command: str | None = None
 
 class EventResponse(BaseModel):
     id: int

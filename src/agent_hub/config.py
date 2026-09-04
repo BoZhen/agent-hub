@@ -16,3 +16,8 @@ class HubConfig:
     # clutter — Claude/Codex transcripts live on disk independently, so a
     # later `--resume` still works. 0 disables pruning (keep forever).
     stopped_retention_days: int = 14
+    # What restore_on_startup does with a session whose tmux is gone
+    # (after a reboot, typically). "resume" recreates the tmux and runs
+    # the CLI's own resume command in it; "shell" only recreates the tmux
+    # and prints that command, so you pick by hand. AGENT_HUB_RESTORE_MODE.
+    restore_mode: str = "resume"

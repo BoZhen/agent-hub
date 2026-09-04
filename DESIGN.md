@@ -368,6 +368,7 @@ resume / new activity    ─────────▶ active
 - `stopped` 的判断基于 **tmux 是否实际消失**，而不是单纯时间超时
 - `idle` 会话可以长期保留，以支持次日继续恢复工作
 - 同名 tmux 被复用时，旧会话会被自动退休，避免主面板出现重复活跃行
+- `stopped` 不是不可逆的终态：只要行还在（未被保留期清理），`POST /api/sessions/{id}/resume` 会重建 tmux 并在其中运行 CLI 的恢复命令，行随 SessionStart 回到 `active`；机器重启后 `restore_on_startup` 对 tmux 已消失的 active/idle 行自动做同样的事
 
 ---
 

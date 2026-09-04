@@ -49,6 +49,12 @@ def test_terminal_embed_url_carries_theme_and_parent_origin() -> None:
     assert "const MAX_LIVE_FRAMES" in WORKSPACE_JS
 
 
+def test_ended_rows_offer_resume() -> None:
+    assert 'data-action="resume"' in SESSION_ROW
+    assert "/api/sessions/${sid}/resume" in WORKSPACE_JS
+    assert "case 'resume': resumeSession(sid); break;" in WORKSPACE_JS
+
+
 def test_close_workspace_tab_is_view_only() -> None:
     match = re.search(
         r"function closeWorkspaceTab\(sid\) \{(?P<body>.*?)\n\}",

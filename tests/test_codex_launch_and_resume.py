@@ -9,7 +9,12 @@ from agent_hub.api.tmux import (
     _NAME_PREFIX,
 )
 from agent_hub.services import session_manager
-from agent_hub.services.restore import _resume_hint_command
+from agent_hub.services.restore import (
+    _resume_hint_command,
+    _resume_pane_command,
+    _shell_pane_command,
+    resume_argv,
+)
 
 UUID = "01a0656c-8b56-72b2-802f-a69ba1be7257"
 BYPASS = "--dangerously-bypass-approvals-and-sandbox"
@@ -72,3 +77,28 @@ def test_bypass_permissions_marks_codex_yolo():
 
 def test_default_permissions_keep_plain_tool():
     assert _ensure("codex", {"permission_mode": "default"}) == "codex"
+
+
+def test_resume_argv_matches_hint():
+    for tool, sid in (("claude-yolo", UUID), ("claude-sonnet", UUID), ("codex-yolo", UUID), ("codex", "codex-x-1"), ("omx-yolo", UUID)):
+        argv = resume_argv(tool, sid)
+        assert argv is not None
+        assert " ".join(argv) == _resume_hint_command(tool, sid)
+    assert resume_argv("something-else", UUID) is None
+
+
+def test_resume_pane_command_keeps_argv_intact_and_falls_back_to_a_shell():
+    cmd = _resume_pane_command(["/opt/bin/claude", "--resume", UUID, "--dangerously-skip-permissions"])
+    assert cmd[:2] == ["bash", "-c"]
+    assert 'exec "${SHELL:-bash}" -i' in cmd[2]
+    # positional parameters: $1 is the printable command, the rest is argv
+    assert cmd[3] == "_"
+    assert cmd[4] == f"/opt/bin/claude --resume {UUID} --dangerously-skip-permissions"
+    assert cmd[5:] == ["/opt/bin/claude", "--resume", UUID, "--dangerously-skip-permissions"]
+
+
+def test_shell_pane_command_prints_the_hint():
+    cmd = _shell_pane_command("claude-yolo", UUID)
+    assert cmd[:2] == ["bash", "-c"]
+    assert f"claude --resume {UUID} --dangerously-skip-permissions" in cmd[2]
+    assert "exec ${SHELL:-bash} -i" in cmd[2]

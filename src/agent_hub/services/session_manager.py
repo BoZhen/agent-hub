@@ -540,6 +540,12 @@ def _hash_pane(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+def _is_codex_tool(tool: str | None) -> bool:
+    """True for every codex-family tool value: "codex", "codex-yolo" from
+    the launcher, and the retired "omx-yolo"."""
+    return (tool or "").startswith(("codex", "omx"))
+
+
 def _is_codex_pane(pane_text: str) -> bool:
     """Detect if a tmux pane is running Codex TUI.
 
@@ -628,7 +634,7 @@ async def discover_codex_for_tmux(
     claimed, or only a touch/reactivate happened.
     """
     existing = await _claim_for_tmux(conn, name)
-    if existing and existing.get("tool") != "codex":
+    if existing and not _is_codex_tool(existing.get("tool")):
         # Claude tmux — leave it alone.
         return False
 
@@ -655,7 +661,7 @@ async def discover_codex_for_tmux(
         # inserted between _claim_for_tmux and now.
         pre = await conn.execute(
             "SELECT 1 FROM sessions "
-            "WHERE tool='codex' AND tmux_session=? "
+            "WHERE (tool LIKE 'codex%' OR tool LIKE 'omx%') AND tmux_session=? "
             "AND status IN ('active','idle') LIMIT 1",
             (name,),
         )
@@ -1442,7 +1448,7 @@ async def parse_one(
     # in pane 1) still surface a real prompt.
     parser = (
         _parse_codex_approval_prompt
-        if session.get("tool") == "codex"
+        if _is_codex_tool(session.get("tool"))
         else _parse_approval_prompt
     )
     parsed = None

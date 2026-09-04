@@ -13,6 +13,9 @@ from agent_hub.api.ws import broadcaster
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
 from agent_hub.services.session_manager import mark_approved_suppress
 from agent_hub.services.restore import (
+    _list_alive_tmux_names,
+    _resume_hint_command,
+    is_codex_tool,
     find_orphan_sessions,
     restore_all_orphans,
     restore_session,
@@ -57,6 +60,7 @@ async def get_session(request: Request, session_id: str):
     row = await db.get_session(conn, session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    row["resume_command"] = _resume_hint_command(row.get("tool") or "", session_id) or None
     return row
 
 
@@ -134,21 +138,31 @@ async def delete_session(request: Request, session_id: str):
     return {"ok": True}
 
 
-@router.post("/sessions/{session_id}/restore")
-async def restore_one(request: Request, session_id: str):
-    """Recreate tmux + resume command for a single session."""
+@router.post("/sessions/{session_id}/resume")
+async def resume_one(request: Request, session_id: str):
+    """Bring one session back: recreate its tmux and run the CLI's own
+    resume command inside. Works for ended sessions and for live rows
+    whose tmux went missing; a session that is still running is left
+    alone."""
     conn = request.app.state.db
     session = await db.get_session(conn, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if not session.get("tmux_session"):
-        raise HTTPException(
-            status_code=400, detail="Session has no tmux name to restore",
-        )
-    result = await restore_session(conn, session)
+    tmux_name = session.get("tmux_session")
+    if session["status"] != "stopped" and tmux_name and tmux_name in await _list_alive_tmux_names():
+        raise HTTPException(status_code=409, detail="Session is still running; open it instead")
+    if not session.get("tool"):
+        raise HTTPException(status_code=400, detail="Session has no tool recorded, so there is no resume command")
+    result = await restore_session(conn, session, mode="resume")
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error"))
     return result
+
+
+@router.post("/sessions/{session_id}/restore")
+async def restore_one(request: Request, session_id: str):
+    """Older name for /resume, kept for existing callers."""
+    return await resume_one(request, session_id)
 
 
 @router.post("/sessions/{session_id}/approve")
@@ -209,7 +223,7 @@ async def approve_session(
 
     tool = session.get("tool") or "claude"
 
-    if tool == "codex":
+    if is_codex_tool(tool):
         # Option 1 is highlighted by default in every codex approval
         # UI; Enter confirms it.
         #

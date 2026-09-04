@@ -90,12 +90,22 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 ## 历史会话自动清理
 
-`stopped`（已结束）的会话是终态——其 tmux 已不存在，restore 也只恢复 active/idle——留着只是历史杂物。Hub 在每次 sweep 时会**自动删除停止时间超过保留期的 stopped 会话及其事件**：
+`stopped`（已结束）的会话——其 tmux 已不存在——可以随时从侧栏或抽屉点 Resume 恢复（见下），但留着不管只是历史杂物。Hub 在每次 sweep 时会**自动删除停止时间超过保留期的 stopped 会话及其事件**：
 
 - 由环境变量 `AGENT_HUB_STOPPED_RETENTION_DAYS` 控制，默认 **14** 天；设为 `0` 则永久保留、不自动清理。
+- 删除之后 Hub 就不再记得这个 session 的 id 和目录，Resume 按钮也随之消失；需要的话仍可在终端里手动 `claude --resume <id>`。
 - 删除的只是 Hub 的记录；Claude / Codex 的 transcript 仍在本地磁盘，日后 `--resume` 不受影响。
 
 > 想立刻整理已堆积的旧记录，也可以在 Dashboard 的 `/stopped` 页一键 Clear。
+
+## 恢复会话（升级 CLI、重启机器之后）
+
+Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`（按原来的参数补 `--dangerously-skip-permissions`），Codex 是 `codex resume <id>`（有真实 UUID 时；只有扫描得到的合成 id 时退回选择器）。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
+
+- **已结束的 session**：侧栏行 hover 或抽屉里的 **Resume**。升级 claude / codex 后退出重开就走这里。CLI 退出或恢复失败时窗格退回一个交互 shell，tmux 和记录都还在。
+- **整机重启**：Hub 启动 2 秒后自动把 tmux 已消失的 active/idle session 逐个恢复（间隔 0.5 s）。`AGENT_HUB_RESTORE_MODE=shell` 可改为只重建 tmux、打印命令、由你手动决定。
+- Hub 服务自身重启不影响任何 session（tmux 都还在）。
+- 抽屉里的 "Resume with" 一行显示将要运行的命令；`GET /api/sessions/{id}` 的 `resume_command` 字段是同一个值。
 
 ## 常用页面
 

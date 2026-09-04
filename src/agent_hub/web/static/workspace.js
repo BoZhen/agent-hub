@@ -259,7 +259,7 @@ function renderNeedsAction() {
   if (orphanCount) {
     const item = document.createElement('div');
     item.className = 'attention-item';
-    item.innerHTML = `<div class="attention-main"><span class="attention-name">${orphanCount} session${orphanCount > 1 ? 's' : ''} lost tmux</span><span class="attention-detail">Recreate tmux and resume the CLI</span></div><button type="button" class="btn btn-sm" data-action="restore-all">Restore</button>`;
+    item.innerHTML = `<div class="attention-main"><span class="attention-name">${orphanCount} session${orphanCount > 1 ? 's' : ''} lost tmux</span><span class="attention-detail">Recreate tmux and resume the CLI</span></div><button type="button" class="btn btn-sm" data-action="restore-all">Resume</button>`;
     host.appendChild(item);
   }
 }
@@ -271,7 +271,7 @@ async function refreshOrphanCount() {
   } catch (_) { /* hub unreachable; the WebSocket chip already says so */ }
 }
 async function restoreAll(btn) {
-  const ok = await H.confirmDialog({title: 'Restore lost sessions?', body: 'Each one gets a new tmux and the CLI is resumed from its transcript.', confirmLabel: 'Restore'});
+  const ok = await H.confirmDialog({title: 'Resume lost sessions?', body: 'Each one gets a new tmux with its CLI resumed inside.', confirmLabel: 'Resume'});
   if (!ok) return;
   btn.classList.add('is-busy');
   try {
@@ -703,6 +703,7 @@ function renderInspector(s, events, isOrphan) {
   const live = status !== 'stopped';
   const fmt = iso => String(iso || '').replace('T', ' ').slice(0, 19);
   const canFork = s.tool && s.tool.includes('claude') && s.tmux_session && !s.transferred && live;
+  const canResume = (isOrphan || status === 'stopped') && /^(claude|codex|omx)/.test(s.tool || '');
   $('inspector-title').textContent = s.title || s.tmux_session || s.hostname;
   let html = '';
   if (s.pending_tool) {
@@ -722,6 +723,7 @@ function renderInspector(s, events, isOrphan) {
     <dt>Last seen</dt><dd>${esc(fmt(s.last_seen_at))}</dd>
     ${tokens ? `<dt>Tokens</dt><dd>${esc(tokens)}</dd>` : ''}
     <dt>Session id</dt><dd>${esc(s.session_id)}</dd>
+    ${canResume && s.resume_command ? `<dt>Resume with</dt><dd><code>${esc(s.resume_command)}</code></dd>` : ''}
   </dl></div>`;
   html += '<div class="drawer-section"><div class="drawer-actions">'
     + `<button type="button" class="btn" data-action="rename" data-sid="${esc(s.session_id)}">${icon('edit')}Rename</button>`
@@ -729,7 +731,7 @@ function renderInspector(s, events, isOrphan) {
     + (s.tmux_session && live && !isOrphan ? `<a class="btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.tmux_session)}" target="_blank">${icon('external')}New tab</a>` : '')
     + (canFork ? `<button type="button" class="btn" data-action="fork" data-sid="${esc(s.session_id)}" data-tmux="${esc(s.tmux_session)}">${icon('fork')}Fork</button>` : '')
     + `<a class="btn" href="/sessions/${encodeURIComponent(s.session_id)}">${icon('book')}Full page</a>`
-    + (isOrphan ? `<button type="button" class="btn" data-action="restore" data-sid="${esc(s.session_id)}">${icon('refresh')}Restore tmux</button>` : '')
+    + (canResume ? `<button type="button" class="btn btn-primary" data-action="resume" data-sid="${esc(s.session_id)}">${icon('play')}Resume</button>` : '')
     + (s.tmux_session && live && !isOrphan ? `<button type="button" class="btn btn-danger" data-action="kill" data-sid="${esc(s.session_id)}" data-tmux="${esc(s.tmux_session)}">${icon('power')}Kill tmux</button>` : '')
     + (status === 'idle' || status === 'stopped' ? `<button type="button" class="btn btn-danger" data-action="delete" data-sid="${esc(s.session_id)}">${icon('trash')}Delete record</button>` : '')
     + '</div></div>';
@@ -837,14 +839,34 @@ async function deleteRecord(sid) {
     scheduleStats();
   } catch (e) { toast(e.message, 'error'); }
 }
-async function restoreSession(sid) {
+/* Fetch a fresh row for `sid` and swap it into the sidebar. */
+async function replaceCard(sid) {
+  const data = await api('GET', `/partials/session-card/${sid}`);
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = (data.html || '').trim();
+  const card = wrapper.firstElementChild;
+  if (!card) return null;
+  cardFor(sid)?.remove();
+  placeCard(card);
+  applyFilters();
+  renderNeedsAction();
+  renderWorkspaceTabs();
+  return card;
+}
+/* Bring an ended (or tmux-less) session back: the Hub recreates its tmux
+   and runs `claude --resume` / `codex resume` inside, then the terminal
+   opens on it. */
+async function resumeSession(sid) {
+  const before = cardFor(sid);
+  const name = before ? rowInfo(before).name : sid.slice(0, 8);
   try {
-    await api('POST', `/api/sessions/${sid}/restore`);
-    toast('tmux recreated, CLI resuming', 'success');
+    const data = await api('POST', `/api/sessions/${sid}/resume`);
+    if (data.mode === 'resume') toast(`Resuming ${name}`, 'success');
+    else toast(`tmux recreated for ${name}; run the resume command shown in it`, 'success');
     orphanCache.at = 0;
     refreshOrphanCount();
-    const card = cardFor(sid);
-    if (card) { previewState.tmux = null; previewSession(card); }
+    const card = await replaceCard(sid);
+    if (card) previewSession(card);
     if (inspectorSid === sid) openInspector(sid);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -893,7 +915,8 @@ document.addEventListener('click', event => {
     case 'fork': forkSession(sid, tmux, btn); break;
     case 'kill': killTmux(tmux, sid); break;
     case 'delete': deleteRecord(sid); break;
-    case 'restore': restoreSession(sid); break;
+    case 'restore':
+    case 'resume': resumeSession(sid); break;
     case 'restore-all': restoreAll(btn); break;
     case 'clear-stopped': clearStopped(); break;
     case 'toggle-group': toggleGroup(btn.closest('.group')); break;

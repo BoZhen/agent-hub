@@ -131,7 +131,7 @@ def create_app(config: HubConfig) -> FastAPI:
                 periodic_codex_discovery(conn, config.hub_id, config.port)
             )
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
-            restore_task = asyncio.create_task(restore_on_startup(conn))
+            restore_task = asyncio.create_task(restore_on_startup(conn, config.restore_mode))
             # Push-based pane observability: tmux pipe-pane → file →
             # inotify → debounce → parse_one. The manager is the
             # primary detection path; the polling loop above is the
@@ -244,6 +244,9 @@ def cli():
             )
         except ValueError:
             retention_days = HubConfig.stopped_retention_days
+        restore_mode = os.environ.get("AGENT_HUB_RESTORE_MODE", HubConfig.restore_mode)
+        if restore_mode not in ("resume", "shell"):
+            restore_mode = HubConfig.restore_mode
         config = HubConfig(
             hub_id=args.hub_id,
             host=args.host,
@@ -252,6 +255,7 @@ def cli():
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
             telegram_chat_id=int(tg_chat_id_raw) if tg_chat_id_raw else None,
             stopped_retention_days=retention_days,
+            restore_mode=restore_mode,
         )
         app = create_app(config)
         ssl_kwargs = {}
