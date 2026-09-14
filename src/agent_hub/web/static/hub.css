@@ -71,7 +71,7 @@
 /* 2. Base                                                             */
 /* ------------------------------------------------------------------ */
 *, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--text); }
+html, body { margin: 0; height: 100%; background: var(--canvas); color: var(--text); overscroll-behavior: none; }
 body { font: 400 var(--fs-2)/1.4 var(--font-sans); -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: none; border: 0; padding: 0; cursor: pointer; }
@@ -163,7 +163,7 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 /* Sidebar */
 .sidebar { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--panel); }
 .sidebar-tools { display: flex; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); }
-.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 4px 0 8px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .sidebar-foot { display: flex; align-items: center; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
 .sidebar-foot .btn-primary { flex: 1; }
 
