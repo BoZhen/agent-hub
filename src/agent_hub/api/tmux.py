@@ -12,35 +12,38 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 # The launcher offers exactly two things: Claude Code or Codex, each with
-# the tool's default model and with permission prompts skipped. Codex runs
-# bare: its hooks are a native feature (`[features] hooks = true` plus
-# ~/.codex/hooks.json), so no wrapper such as oh-my-codex is needed.
+# the tool's default model. Claude runs plain: the permission mode comes
+# from the user's own settings (permissions.defaultMode), so no flag is
+# added. Codex gets --dangerously-bypass-approvals-and-sandbox because it
+# has no comparable default. Codex runs bare: its hooks are a native
+# feature (`[features] hooks = true` plus ~/.codex/hooks.json), so no
+# wrapper such as oh-my-codex is needed.
 # The keys double as the session's `tool` value once hooks report in, so
 # restore.py can rebuild the same flags on resume; keep them stable.
-# "omx-yolo" is a retired key: rows launched through oh-my-codex still
-# carry it, and restore.py maps it to the equivalent bare codex command.
+# "claude-yolo" and "omx-yolo" are retired keys: rows launched by earlier
+# versions still carry them, and restore.py still knows their flags.
 _ALLOWED_COMMANDS = {
-    "claude-yolo",
+    "claude",
     "codex-yolo",
 }
 
 # Maps a virtual command key → the actual binary name that gets resolved
 # via shutil.which.
 _COMMAND_BIN: dict[str, str] = {
-    "claude-yolo": "claude",
+    "claude": "claude",
     "codex-yolo": "codex",
 }
 
 # Extra args appended after the resolved command path.
 _COMMAND_ARGS: dict[str, list[str]] = {
-    "claude-yolo": ["--dangerously-skip-permissions"],
+    "claude": [],
     "codex-yolo": ["--dangerously-bypass-approvals-and-sandbox"],
 }
 
 # Auto-name prefix for the generated tmux name: "claude-<workdir>-N" and
 # "codex-<workdir>-N".
 _NAME_PREFIX: dict[str, str] = {
-    "claude-yolo": "claude",
+    "claude": "claude",
     "codex-yolo": "codex",
 }
 

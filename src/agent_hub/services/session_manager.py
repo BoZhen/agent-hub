@@ -240,14 +240,12 @@ async def ensure_session(
     # Codex fires SessionStart with the first prompt, often minutes after
     # the launcher created the tmux, so the hub-launch marker consulted
     # below may already have expired. The payload itself says whether
-    # permission prompts are skipped (Claude and Codex both report
-    # permission_mode=bypassPermissions), so derive the "-yolo" marker
-    # from it. restore.py relies on that marker to rebuild the flag.
-    if (
-        payload.get("permission_mode") == "bypassPermissions"
-        and tool in ("claude", "codex")
-    ):
-        tool = f"{tool}-yolo"
+    # approvals are skipped (permission_mode=bypassPermissions), so derive
+    # the "-yolo" marker from it; restore.py relies on that marker to
+    # rebuild the flag. Claude is left alone: its permission mode comes
+    # from the user's settings, so a resume needs no flag.
+    if payload.get("permission_mode") == "bypassPermissions" and tool == "codex":
+        tool = "codex-yolo"
 
     existing = await db.get_session(conn, session_id)
 

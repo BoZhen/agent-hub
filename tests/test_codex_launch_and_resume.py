@@ -20,8 +20,11 @@ UUID = "01a0656c-8b56-72b2-802f-a69ba1be7257"
 BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 
 
-def test_launcher_runs_bare_codex():
-    assert _ALLOWED_COMMANDS == {"claude-yolo", "codex-yolo"}
+def test_launcher_runs_plain_claude_and_bare_codex():
+    assert _ALLOWED_COMMANDS == {"claude", "codex-yolo"}
+    assert _COMMAND_BIN["claude"] == "claude"
+    assert _COMMAND_ARGS["claude"] == []
+    assert _NAME_PREFIX["claude"] == "claude"
     assert _COMMAND_BIN["codex-yolo"] == "codex"
     assert _COMMAND_ARGS["codex-yolo"] == [BYPASS]
     assert _NAME_PREFIX["codex-yolo"] == "codex"
@@ -77,6 +80,16 @@ def test_bypass_permissions_marks_codex_yolo():
 
 def test_default_permissions_keep_plain_tool():
     assert _ensure("codex", {"permission_mode": "default"}) == "codex"
+
+
+def test_claude_keeps_plain_tool_whatever_the_permission_mode():
+    # Claude's permission mode comes from the user's settings; the Hub
+    # never turns it into a flag.
+    assert _ensure("claude", {"permission_mode": "bypassPermissions"}) == "claude"
+
+
+def test_plain_claude_resume_has_no_flag():
+    assert _resume_hint_command("claude", UUID) == f"claude --resume {UUID}"
 
 
 def test_resume_argv_matches_hint():
