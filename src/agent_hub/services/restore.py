@@ -179,7 +179,8 @@ def _free_tmux_name(preferred: str | None, tool: str, cwd: str, alive: set[str])
     if not preferred:
         from agent_hub.api.tmux import _auto_name  # local: api imports this module
 
-        return _auto_name(cwd, alive, prefix="codex" if is_codex_tool(tool) else "claude")
+        prefix = "codex" if is_codex_tool(tool) else ("claude2" if tool == "claude2" else "claude")
+        return _auto_name(cwd, alive, prefix=prefix)
     name, n = preferred, 2
     while name in alive:
         name = f"{preferred[:58]}-{n}"
@@ -222,7 +223,11 @@ async def find_orphan_sessions(conn: aiosqlite.Connection) -> list[dict[str, Any
 
 
 async def restore_session(
-    conn: aiosqlite.Connection, session_row: dict[str, Any], *, mode: str = "resume"
+    conn: aiosqlite.Connection,
+    session_row: dict[str, Any],
+    *,
+    mode: str = "resume",
+    config: Any = None,
 ) -> dict[str, Any]:
     """Recreate the tmux for one row and start the CLI inside it (mode
     "resume"), or leave a shell with the command printed (mode "shell").
@@ -290,6 +295,10 @@ async def restore_session(
     hub_path = os.environ.get("PATH", "")
     if hub_path:
         tmux_args.extend(["-e", f"PATH={hub_path}"])
+    from agent_hub.api.tmux import launch_env  # local: api imports this module
+
+    for key, value in launch_env(tool, config).items():
+        tmux_args.extend(["-e", f"{key}={value}"])
     tmux_args.extend(pane_cmd)
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,
@@ -324,7 +333,7 @@ async def restore_session(
 
 
 async def restore_all_orphans(
-    conn: aiosqlite.Connection, *, mode: str = "resume"
+    conn: aiosqlite.Connection, *, mode: str = "resume", config: Any = None
 ) -> dict[str, Any]:
     """Find every orphan session and restore them sequentially.
 
@@ -342,7 +351,7 @@ async def restore_all_orphans(
     failed = 0
     for row in orphans:
         try:
-            result = await restore_session(conn, row, mode=mode)
+            result = await restore_session(conn, row, mode=mode, config=config)
         except Exception as e:
             logger.exception("Restore failed for %s", row.get("session_id"))
             result = {
@@ -412,7 +421,9 @@ async def backfill_canonical_cwds(conn: aiosqlite.Connection) -> int:
     return fixed
 
 
-async def restore_on_startup(conn: aiosqlite.Connection, mode: str = "resume") -> None:
+async def restore_on_startup(
+    conn: aiosqlite.Connection, mode: str = "resume", config: Any = None
+) -> None:
     """Background task to run shortly after hub starts.
 
     Delayed slightly so the WebSocket / discovery loops have a chance
@@ -426,6 +437,6 @@ async def restore_on_startup(conn: aiosqlite.Connection, mode: str = "resume") -
         await asyncio.sleep(2.0)  # let other startup tasks settle
         # Repair drifted cwds before any restore decision uses them.
         await backfill_canonical_cwds(conn)
-        await restore_all_orphans(conn, mode=mode)
+        await restore_all_orphans(conn, mode=mode, config=config)
     except Exception:
         logger.exception("restore_on_startup failed")

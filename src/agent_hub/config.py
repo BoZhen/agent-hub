@@ -21,3 +21,8 @@ class HubConfig:
     # the CLI's own resume command in it; "shell" only recreates the tmux
     # and prints that command, so you pick by hand. AGENT_HUB_RESTORE_MODE.
     restore_mode: str = "resume"
+    # A second Claude Code account lives in its own config directory
+    # (CLAUDE_CONFIG_DIR). While that directory exists the launcher offers
+    # "claude2", and resuming or forking one of its sessions sets the same
+    # variable. AGENT_HUB_CLAUDE2_CONFIG_DIR.
+    claude2_config_dir: str = "~/.claude-alt"

@@ -2,11 +2,15 @@
 import asyncio
 
 from agent_hub import db
+from types import SimpleNamespace
+
 from agent_hub.api.tmux import (
     _ALLOWED_COMMANDS,
     _COMMAND_ARGS,
     _COMMAND_BIN,
     _NAME_PREFIX,
+    claude2_config_dir,
+    launch_env,
 )
 from agent_hub.services import session_manager
 from agent_hub.services.restore import (
@@ -21,11 +25,29 @@ BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 
 
 def test_launcher_runs_plain_claude_and_plain_codex():
-    assert _ALLOWED_COMMANDS == {"claude", "codex"}
+    assert _ALLOWED_COMMANDS == {"claude", "claude2", "codex"}
     for key in ("claude", "codex"):
         assert _COMMAND_BIN[key] == key
         assert _COMMAND_ARGS[key] == []
         assert _NAME_PREFIX[key] == key
+    assert _COMMAND_BIN["claude2"] == "claude"
+    assert _COMMAND_ARGS["claude2"] == []
+    assert _NAME_PREFIX["claude2"] == "claude2"
+
+
+def test_second_account_env_follows_its_config_dir(tmp_path):
+    cfg = SimpleNamespace(claude2_config_dir=str(tmp_path))
+    assert claude2_config_dir(cfg) == str(tmp_path)
+    assert launch_env("claude2", cfg) == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
+    assert launch_env("claude", cfg) == {}
+    missing = SimpleNamespace(claude2_config_dir=str(tmp_path / "absent"))
+    assert claude2_config_dir(missing) is None
+    assert launch_env("claude2", missing) == {}
+    assert launch_env("claude2", None) == {}
+
+
+def test_second_account_resume_is_plain_claude_resume():
+    assert _resume_hint_command("claude2", UUID) == f"claude --resume {UUID}"
 
 
 def test_claude_yolo_hint_keeps_flag():

@@ -48,6 +48,11 @@ logging.basicConfig(
 # busy claude session emits dozens per minute and drowns out useful log
 # entries. WARNING+ is enough; we never need to see normal activity.
 logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+# httpx logs every request URL at INFO. python-telegram-bot puts the bot
+# token in the URL path (/bot<TOKEN>/getUpdates), so INFO writes the token
+# to the journal on every poll. httpx reports failures by raising
+# exceptions rather than logging them, so WARNING drops no error information.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -131,7 +136,7 @@ def create_app(config: HubConfig) -> FastAPI:
                 periodic_codex_discovery(conn, config.hub_id, config.port)
             )
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
-            restore_task = asyncio.create_task(restore_on_startup(conn, config.restore_mode))
+            restore_task = asyncio.create_task(restore_on_startup(conn, config.restore_mode, config))
             # Push-based pane observability: tmux pipe-pane → file →
             # inotify → debounce → parse_one. The manager is the
             # primary detection path; the polling loop above is the
@@ -256,6 +261,7 @@ def cli():
             telegram_chat_id=int(tg_chat_id_raw) if tg_chat_id_raw else None,
             stopped_retention_days=retention_days,
             restore_mode=restore_mode,
+            claude2_config_dir=os.environ.get("AGENT_HUB_CLAUDE2_CONFIG_DIR", HubConfig.claude2_config_dir),
         )
         app = create_app(config)
         ssl_kwargs = {}

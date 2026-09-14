@@ -11,20 +11,22 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-# The launcher offers exactly two things: Claude Code or Codex, each run
-# plain with the tool's default model. Approvals and sandboxing follow
-# the user's own configuration (Claude: permissions.defaultMode in
+# The launcher offers Claude Code, Codex, and — when a second config
+# directory exists — Claude Code on a second account. Each runs plain
+# with the tool's default model. Approvals and sandboxing follow the
+# user's own configuration (Claude: permissions.defaultMode in
 # settings.json; Codex: approval_policy and sandbox_mode in config.toml),
 # so no flag is added. Codex runs bare: its hooks are a native feature
 # (`[features] hooks = true` plus ~/.codex/hooks.json), so no wrapper
 # such as oh-my-codex is needed.
 # The keys double as the session's `tool` value once hooks report in, so
-# restore.py can rebuild the same command on resume; keep them stable.
-# "claude-yolo", "codex-yolo" and "omx-yolo" are retired keys: rows
-# launched by earlier versions still carry them, and restore.py still
-# knows their flags.
+# restore.py can rebuild the same command and environment on resume;
+# keep them stable. "claude-yolo", "codex-yolo" and "omx-yolo" are
+# retired keys: rows launched by earlier versions still carry them, and
+# restore.py still knows their flags.
 _ALLOWED_COMMANDS = {
     "claude",
+    "claude2",
     "codex",
 }
 
@@ -32,21 +34,45 @@ _ALLOWED_COMMANDS = {
 # via shutil.which.
 _COMMAND_BIN: dict[str, str] = {
     "claude": "claude",
+    "claude2": "claude",
     "codex": "codex",
 }
 
 # Extra args appended after the resolved command path.
 _COMMAND_ARGS: dict[str, list[str]] = {
     "claude": [],
+    "claude2": [],
     "codex": [],
 }
 
-# Auto-name prefix for the generated tmux name: "claude-<workdir>-N" and
-# "codex-<workdir>-N".
+# Auto-name prefix for the generated tmux name: "claude-<workdir>-N",
+# "claude2-<workdir>-N" and "codex-<workdir>-N".
 _NAME_PREFIX: dict[str, str] = {
     "claude": "claude",
+    "claude2": "claude2",
     "codex": "codex",
 }
+
+
+def claude2_config_dir(config: Any) -> str | None:
+    """Expanded path of the second Claude account's config directory, or
+    None when it is not set up on this machine."""
+    raw = getattr(config, "claude2_config_dir", None) if config is not None else None
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return str(path) if path.is_dir() else None
+
+
+def launch_env(tool: str, config: Any) -> dict[str, str]:
+    """Environment a tmux needs for `tool`, shared by launch, resume and
+    fork so a second-account session always opens under its own
+    CLAUDE_CONFIG_DIR."""
+    if tool == "claude2":
+        directory = claude2_config_dir(config)
+        if directory:
+            return {"CLAUDE_CONFIG_DIR": directory}
+    return {}
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -180,7 +206,7 @@ def _valid_tmux_name(name: str) -> bool:
 
 
 @router.post("/tmux/new")
-async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
+async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
     cwd_path = Path(req.cwd).expanduser()
     if not cwd_path.is_absolute():
         raise HTTPException(400, "cwd must be an absolute path")
@@ -199,6 +225,11 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
             raise HTTPException(
                 400,
                 f"command must be one of {sorted(_ALLOWED_COMMANDS)}",
+            )
+        if req.command == "claude2" and not claude2_config_dir(request.app.state.config):
+            raise HTTPException(
+                400,
+                "second Claude account is not set up: AGENT_HUB_CLAUDE2_CONFIG_DIR must point at its config directory",
             )
         bin_name = _COMMAND_BIN.get(req.command, req.command)
         cmd_path = _resolve_command(bin_name)
@@ -240,6 +271,8 @@ async def new_tmux(req: NewTmuxRequest) -> dict[str, Any]:
     hub_path = os.environ.get("PATH", "")
     if hub_path:
         tmux_args.extend(["-e", f"PATH={hub_path}"])
+    for key, value in launch_env(req.command or "", request.app.state.config).items():
+        tmux_args.extend(["-e", f"{key}={value}"])
     if cmd_path:
         tmux_args.append(cmd_path)
         tmux_args.extend(_COMMAND_ARGS.get(req.command or "", []))

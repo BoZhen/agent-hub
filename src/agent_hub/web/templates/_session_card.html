@@ -33,6 +33,7 @@
           <span class="dot dot-{{ status }}" data-role="dot"></span>
           <span class="session-name" data-role="name" title="{{ s.tmux_session or '' }}">{{ display_name }}</span>
           {% if s.parent_session_id %}<span class="badge">sub</span>{% endif %}
+          {% if s.tool == 'claude2' %}<span class="badge" title="Second Claude account">account 2</span>{% endif %}
           {% if s.transferred %}<span class="badge" title="Discovered from a tmux pane">tmux</span>{% endif %}
           <span class="session-state" data-role="state-label">{% if s.running_tool %}Running {{ s.running_tool }}{% else %}{{ labels.get(status, status) }}{% endif %}</span>
         </span>

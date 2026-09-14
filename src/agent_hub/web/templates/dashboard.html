@@ -92,8 +92,9 @@
     <h2 id="nc-title">New session</h2>
     <div class="field">
       <label>Tool</label>
-      <div class="choice-grid choice-grid-2" id="nc-tools">
+      <div class="choice-grid{% if not claude2_available %} choice-grid-2{% endif %}" id="nc-tools">
         <button type="button" class="choice" data-tool="claude" title="claude">Claude Code</button>
+        {% if claude2_available %}<button type="button" class="choice" data-tool="claude2" title="claude on the second account (its own CLAUDE_CONFIG_DIR)">Claude Code (account 2)</button>{% endif %}
         <button type="button" class="choice" data-tool="codex" title="codex">Codex</button>
       </div>
       <p class="field-hint">Default model. Approvals follow your own Claude and Codex settings. Codex asks once before working in a directory it has not seen.</p>

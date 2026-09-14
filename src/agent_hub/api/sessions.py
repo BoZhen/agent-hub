@@ -51,7 +51,7 @@ async def list_orphans(request: Request):
 async def restore_all(request: Request):
     """Recreate tmux for every orphan session and resume Claude/Codex."""
     conn = request.app.state.db
-    return await restore_all_orphans(conn)
+    return await restore_all_orphans(conn, config=request.app.state.config)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -153,7 +153,7 @@ async def resume_one(request: Request, session_id: str):
         raise HTTPException(status_code=409, detail="Session is still running; open it instead")
     if not session.get("tool"):
         raise HTTPException(status_code=400, detail="Session has no tool recorded, so there is no resume command")
-    result = await restore_session(conn, session, mode="resume")
+    result = await restore_session(conn, session, mode="resume", config=request.app.state.config)
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error"))
     return result
@@ -351,6 +351,7 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
         _resolve_command,
         _tmux_ls,
         _valid_tmux_name,
+        launch_env,
     )
     from agent_hub.services.session_manager import (
         mark_hub_launched,
@@ -422,6 +423,8 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
     hub_path = os.environ.get("PATH", "")
     if hub_path:
         tmux_args.extend(["-e", f"PATH={hub_path}"])
+    for key, value in launch_env(tool, request.app.state.config).items():
+        tmux_args.extend(["-e", f"{key}={value}"])
     tmux_args.extend([cmd_path, *claude_args])
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,
@@ -433,7 +436,7 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
         err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
         raise HTTPException(status_code=500, detail=f"tmux new-session failed: {err}")
 
-    mark_hub_launched(name, "claude-fork")
+    mark_hub_launched(name, tool if tool == "claude2" else "claude-fork")
     register_pending_fork(name, str(resolved_cwd))
     return {"name": name, "cwd": str(resolved_cwd), "source_session_id": session_id}
 
