@@ -20,14 +20,12 @@ UUID = "01a0656c-8b56-72b2-802f-a69ba1be7257"
 BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 
 
-def test_launcher_runs_plain_claude_and_bare_codex():
-    assert _ALLOWED_COMMANDS == {"claude", "codex-yolo"}
-    assert _COMMAND_BIN["claude"] == "claude"
-    assert _COMMAND_ARGS["claude"] == []
-    assert _NAME_PREFIX["claude"] == "claude"
-    assert _COMMAND_BIN["codex-yolo"] == "codex"
-    assert _COMMAND_ARGS["codex-yolo"] == [BYPASS]
-    assert _NAME_PREFIX["codex-yolo"] == "codex"
+def test_launcher_runs_plain_claude_and_plain_codex():
+    assert _ALLOWED_COMMANDS == {"claude", "codex"}
+    for key in ("claude", "codex"):
+        assert _COMMAND_BIN[key] == key
+        assert _COMMAND_ARGS[key] == []
+        assert _NAME_PREFIX[key] == key
 
 
 def test_claude_yolo_hint_keeps_flag():
@@ -74,8 +72,10 @@ def _ensure(tool: str, payload: dict) -> str:
     return asyncio.run(run())
 
 
-def test_bypass_permissions_marks_codex_yolo():
-    assert _ensure("codex", {"permission_mode": "bypassPermissions"}) == "codex-yolo"
+def test_bypass_permissions_no_longer_changes_the_tool():
+    # Approvals follow the user's own configuration; the hook payload's
+    # permission_mode is not turned into a launch flag.
+    assert _ensure("codex", {"permission_mode": "bypassPermissions"}) == "codex"
 
 
 def test_default_permissions_keep_plain_tool():

@@ -237,16 +237,6 @@ async def ensure_session(
     event_type = payload.get("hook_event_name", "")
     model = payload.get("model")  # Accept model from any event type
 
-    # Codex fires SessionStart with the first prompt, often minutes after
-    # the launcher created the tmux, so the hub-launch marker consulted
-    # below may already have expired. The payload itself says whether
-    # approvals are skipped (permission_mode=bypassPermissions), so derive
-    # the "-yolo" marker from it; restore.py relies on that marker to
-    # rebuild the flag. Claude is left alone: its permission mode comes
-    # from the user's settings, so a resume needs no flag.
-    if payload.get("permission_mode") == "bypassPermissions" and tool == "codex":
-        tool = "codex-yolo"
-
     existing = await db.get_session(conn, session_id)
 
     if existing is None:
