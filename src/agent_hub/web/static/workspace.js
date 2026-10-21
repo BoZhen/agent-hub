@@ -327,7 +327,7 @@ function onWsMessage(data) {
   scheduleStats();
 }
 window.onWsMessage = onWsMessage;
-window.addEventListener('agenthub:ws-open', () => { scheduleStats(); refreshOrphanCount(); scheduleTmuxRefresh(); });
+window.addEventListener('agenthub:ws-open', () => { scheduleStats(); refreshOrphanCount(); scheduleTmuxRefresh(); reconcileRows(); });
 
 const _cardFetches = new Set();
 async function ensureCardExists(sessionId) {
@@ -829,15 +829,54 @@ async function deleteRecord(sid) {
   try {
     await api('DELETE', `/api/sessions/${sid}`);
     toast('Deleted', 'success');
-    if (previewState.sid === sid) closeWorkspaceTab(sid);
-    workspaceTabs = workspaceTabs.filter(k => k !== sid);
-    card?.remove();
-    if (inspectorSid === sid) closeInspector();
-    updateGroupCounts();
-    renderNeedsAction();
-    renderWorkspaceTabs();
-    scheduleStats();
+    dropRow(sid);
   } catch (e) { toast(e.message, 'error'); }
+}
+/* Take a session the Hub no longer has off the page. */
+function dropRow(sid) {
+  if (previewState.sid === sid) closeWorkspaceTab(sid);
+  workspaceTabs = workspaceTabs.filter(k => k !== sid);
+  cardFor(sid)?.remove();
+  if (inspectorSid === sid) closeInspector();
+  updateGroupCounts();
+  renderNeedsAction();
+  renderWorkspaceTabs();
+  scheduleStats();
+}
+/* The WebSocket carries hook events and approvals only. A session the
+   dead-tmux sweep ends, one deleted elsewhere (phone, API, another tab),
+   and anything sent while the socket was down never reach this page, and
+   a waiting row ignores later status changes. So compare the live rows
+   with the Hub every 15 s and on reconnect, and re-render the rows that
+   disagree. */
+let reconciling = false;
+async function reconcileRows() {
+  const rows = allRows().filter(r => r.dataset.raw !== '1' && r.dataset.status !== 'stopped');
+  if (reconciling || !rows.length) return;
+  reconciling = true;
+  try {
+    const [active, idle] = await Promise.all([
+      api('GET', '/api/sessions?status=active&limit=200'),
+      api('GET', '/api/sessions?status=idle&limit=200'),
+    ]);
+    const live = new Map([...active, ...idle].map(s => [s.session_id, s]));
+    for (const card of rows) {
+      const sid = card.dataset.sid;
+      const s = live.get(sid);
+      if (s && (card.dataset.pending === '1') === !!s.pending_tool) continue;
+      try {
+        await replaceCard(sid);
+        if (previewState.sid === sid) highlightRow(sid);
+        if (inspectorSid === sid) openInspector(sid);
+      } catch (e) {
+        if (/not found/i.test(e.message)) dropRow(sid);
+      }
+    }
+  } catch (_) {
+    // Hub unreachable; the next round tries again.
+  } finally {
+    reconciling = false;
+  }
 }
 /* Fetch a fresh row for `sid` and swap it into the sidebar. */
 async function replaceCard(sid) {
@@ -1083,6 +1122,7 @@ renderWorkspaceTabs();
 refreshOrphanCount();
 setInterval(refreshOrphanCount, 15000);
 setInterval(loadBareTmux, 15000);
+setInterval(reconcileRows, 15000);
 
 const pageParams = new URLSearchParams(location.search);
 const requestedSid = pageParams.get('session');

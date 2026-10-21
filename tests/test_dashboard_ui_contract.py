@@ -55,6 +55,15 @@ def test_ended_rows_offer_resume() -> None:
     assert "case 'resume': resumeSession(sid); break;" in WORKSPACE_JS
 
 
+def test_rows_follow_sessions_the_websocket_never_reports() -> None:
+    # The dead-tmux sweep and deletes elsewhere send nothing over the
+    # WebSocket; the page checks its live rows against the Hub instead.
+    assert "async function reconcileRows()" in WORKSPACE_JS
+    assert "setInterval(reconcileRows, 15000)" in WORKSPACE_JS
+    assert "scheduleTmuxRefresh(); reconcileRows(); }" in WORKSPACE_JS
+    assert "if (/not found/i.test(e.message)) dropRow(sid);" in WORKSPACE_JS
+
+
 def test_close_workspace_tab_is_view_only() -> None:
     match = re.search(
         r"function closeWorkspaceTab\(sid\) \{(?P<body>.*?)\n\}",
