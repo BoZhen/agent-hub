@@ -267,7 +267,12 @@ def cli():
         if args.ssl_cert and args.ssl_key:
             ssl_kwargs["ssl_certfile"] = args.ssl_cert
             ssl_kwargs["ssl_keyfile"] = args.ssl_key
-        uvicorn.run(app, host=config.host, port=config.port, **ssl_kwargs)
+        # On stop, uvicorn waits for open connections to close, and an MCP
+        # client's SSE stream (/mcp/sse) never does. Without a limit the
+        # stop hangs until systemd's timeout SIGKILLs `uv`, and because the
+        # unit uses KillMode=process the Python process is left running
+        # beside the next Hub. After 5 s uvicorn cancels what is left.
+        uvicorn.run(app, host=config.host, port=config.port, timeout_graceful_shutdown=5, **ssl_kwargs)
     else:
         parser.print_help()
 
