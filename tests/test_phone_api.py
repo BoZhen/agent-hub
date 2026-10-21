@@ -24,7 +24,7 @@ from agent_hub.api import stream as stream_api
 from agent_hub.config import HubConfig
 from agent_hub.services import tmux_input
 from agent_hub.services.attention import attention
-from agent_hub.services.tmux_input import pick_agent_pane
+from agent_hub.services.tmux_input import pick_agent_pane, runs_agent
 
 needs_tmux = pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
 
@@ -47,12 +47,25 @@ while True:
 
 
 def test_pick_agent_pane():
-    assert pick_agent_pane([("%1", "zsh", False), ("%2", "claude", False)]) == "%2"
-    assert pick_agent_pane([("%1", "codex", False), ("%2", "codex", True)]) == "%2"
-    assert pick_agent_pane([("%1", "bash", True), ("%2", "node", False)]) == "%2"
+    assert pick_agent_pane([("%1", False, False), ("%2", True, False)]) == "%2"
+    assert pick_agent_pane([("%1", True, False), ("%2", True, True)]) == "%2"
     # Only a shell left: no agent, so nothing may be typed there.
-    assert pick_agent_pane([("%1", "bash", True)]) is None
+    assert pick_agent_pane([("%1", False, True)]) is None
     assert pick_agent_pane([]) is None
+
+
+def test_agent_found_below_a_wrapper_shell():
+    """The Hub resumes a session as `bash -c '...; claude --resume …'`, so
+    tmux reports bash while claude runs one level down."""
+    table = {
+        100: (1, "bash"), 101: (100, "claude"), 102: (101, "node"),
+        200: (1, "fish"), 201: (200, "sleep"),
+        300: (1, "bash"),
+    }
+    assert runs_agent(100, table)
+    assert not runs_agent(200, table)
+    assert not runs_agent(300, table)
+    assert not runs_agent(999, table)
 
 
 @pytest.fixture
@@ -65,9 +78,10 @@ def private_tmux(tmp_path, monkeypatch):
     subprocess.run(["tmux", "kill-server"], capture_output=True)
 
 
-def _start_agent(tmp_path, name: str, program: str = "claude") -> str:
-    """A tmux session whose pane runs the reader under `program`'s name.
-    Returns the file the reader writes its input to."""
+def _start_agent(tmp_path, name: str, program: str = "claude", wrapper: bool = False) -> str:
+    """A tmux session whose pane runs the reader under `program`'s name,
+    directly or, with `wrapper`, as a child of `bash -c` the way the Hub
+    resumes sessions. Returns the file the reader writes its input to."""
     reader = tmp_path / "reader.py"
     reader.write_text(READER)
     link = tmp_path / program
@@ -76,7 +90,7 @@ def _start_agent(tmp_path, name: str, program: str = "claude") -> str:
     out = tmp_path / f"{name}.out"
     subprocess.run(
         ["tmux", "new-session", "-d", "-s", name, "-x", "100", "-y", "30",
-         f"{link} {reader} {out}"],
+         f"bash -c '{link} {reader} {out}; exec sleep 600'" if wrapper else f"{link} {reader} {out}"],
         check=True,
     )
     _wait_for(lambda: os.path.exists(f"{out}.ready"), "the reader to start")
@@ -242,3 +256,20 @@ def _parse_event(text: str):
     lines = text.strip().split("\n")
     assert lines[0].startswith("event: ") and lines[1].startswith("data: ")
     return lines[0][7:], json.loads(lines[1][6:])
+
+
+@needs_tmux
+def test_send_reaches_an_agent_below_a_wrapper_shell(tmp_path, private_tmux):
+    out = _start_agent(tmp_path, "resumed", wrapper=True)
+
+    async def run():
+        conn = await db.init_db(":memory:")
+        try:
+            await _session(conn, "s1", "resumed")
+            res = await sessions_api.send_text(_request(conn), "s1", sessions_api.SendRequest(text="hi"))
+            assert res["submitted"]
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+    assert _read_until(out, b"\r") == b"\x1b[200~hi\x1b[201~\r"

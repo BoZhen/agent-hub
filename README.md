@@ -124,6 +124,7 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 
 - `/`：工作台。侧栏按项目分组，每个项目下依次列出等待审批、活跃、空闲、已结束的 session 以及该目录下未被跟踪的 tmux；右侧是工作集标签与嵌入式终端，每个打开的标签各自保持一条终端连接，切换标签不重连；session 详情与重命名在右侧抽屉里
 - `/?session={id}`：直接打开某个 session 的终端（手机上进入全屏 Terminal 模式）
+- `/m`：手机页面。上面是需要你处理的 session（等待审批的、一轮结束后还没看过的）。点进去默认是 Terminal：原生的 Claude Code / Codex TUI；可切换到 Text，以文字查看最近一轮的消息。两种视图下都能用手机键盘回复（文字粘贴进 TUI）、审批或拒绝。`/m#/s/{id}` 直接打开某个 session
 - `/sessions/{id}`：单会话完整页（抽屉的降级页，含完整事件列表）
 - `/agent`：Monitor 只读助手
 - `/idle`、`/stopped`、`/tmux`：保留为跳转，回到工作台

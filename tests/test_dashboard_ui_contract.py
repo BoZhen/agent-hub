@@ -104,3 +104,93 @@ def test_destructive_actions_are_separate_from_closing_a_view() -> None:
     assert WORKSPACE_JS.count("H.confirmDialog(") >= 4
     assert "confirm(" not in WORKSPACE_JS.replace("confirmDialog(", "")
     assert "alert(" not in WORKSPACE_JS
+
+
+PHONE = (WEB / "templates/mobile.html").read_text()
+PHONE_JS = (WEB / "static/mobile.js").read_text()
+
+
+def test_phone_page_follows_the_stream_not_the_websocket() -> None:
+    # /m gets session states from GET /api/stream and opens no WebSocket.
+    assert 'data-ws="off"' in PHONE
+    assert "new EventSource('/api/stream')" in PHONE_JS
+    for kind in ("snapshot", "session", "removed", "notice"):
+        assert f"addEventListener('{kind}'" in PHONE_JS
+    assert "WebSocket" not in PHONE_JS
+    # The on-screen keyboard shrinks the page so the reply box stays visible.
+    assert "interactive-widget=resizes-content" in PHONE
+
+
+def test_phone_page_answers_through_the_session_endpoints() -> None:
+    for path in ("'/send'", "'/interrupt'", "'/approve'", "'/approve?always=true'", "/seen`", "/messages?limit="):
+        assert path in PHONE_JS
+    # Stop asks first; Deny and Approve are one tap on a visible card.
+    assert "case 'stop'" in PHONE_JS and "H.confirmDialog(" in PHONE_JS
+    assert "confirm(" not in PHONE_JS.replace("confirmDialog(", "")
+    assert "alert(" not in PHONE_JS
+
+
+def test_phone_page_escapes_text_and_shares_the_reply_formatter() -> None:
+    # Replies go through hub.js's escaping formatter, the same one the
+    # Monitor page uses; everything else is escaped or set as text.
+    assert "function renderMarkdown(text)" in HUB_JS
+    assert "H.renderMarkdown(" in PHONE_JS
+    assert "H.renderMarkdown(content)" in (WEB / "templates/agent.html").read_text()
+    assert "${esc(item.text)}" in PHONE_JS
+
+
+def test_phone_page_exposes_back_and_open_for_the_app() -> None:
+    # The Android app's Back key and notification taps drive these.
+    assert "window.AgentHubMobile = {back, openSession}" in PHONE_JS
+    assert "#\\/s\\/" in PHONE_JS
+
+
+def test_phone_page_is_served() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from agent_hub.config import HubConfig
+    from agent_hub.web import routes
+
+    app = FastAPI()
+    app.state.config = HubConfig(hub_id="t", terminal_port=7700)
+    app.include_router(routes.router)
+    res = TestClient(app).get("/m", headers={"host": "hub.example:7800"})
+    assert res.status_code == 200
+    assert 'id="m-home"' in res.text and 'id="m-session"' in res.text
+    assert "/static/mobile.js" in res.text
+    # The Terminal view embeds the Web Terminal on the host the page was opened on.
+    assert 'data-terminal-url="http://hub.example:7700"' in res.text
+
+
+def test_phone_session_opens_on_the_native_tui() -> None:
+    # A session opens on its Terminal (the Web Terminal attached to its tmux,
+    # embedded like the workspace's, but without touch keys); Text is the switch.
+    assert "localStorage.getItem(MODE_KEY) === 'text' ? 'text' : 'terminal'" in PHONE_JS
+    assert "embed: '1', theme: H.currentTheme(), parent_origin: location.origin, keys: 'off'" in PHONE_JS
+    assert 'data-mode="terminal"' in PHONE and 'data-mode="text"' in PHONE
+    assert 'id="m-stage"' in PHONE
+    # Only the frame the page created is listened to, and it hears when it is hidden.
+    assert "event.source !== terminal.iframe.contentWindow" in PHONE_JS
+    assert "type: 'agent-hub:visibility'" in PHONE_JS
+    # Leaving a session detaches its tmux client.
+    assert "detachTerminal();\n      openSid = sid;" in PHONE_JS
+
+
+def test_phone_terminal_view_has_esc_instead_of_touch_keys() -> None:
+    # The phone's own keyboard types into the TUI; the only extra key is Esc
+    # in the reply bar, sent through the Hub's interrupt (2 s double-press
+    # guard) without taking focus, so the phone keyboard stays open.
+    assert 'id="m-esc"' in PHONE
+    assert '#m-session[data-view="text"] .m-esc' in HUB_CSS
+    assert "act(escButton, () => H.api('POST', sessionUrl('/interrupt')))" in PHONE_JS
+    assert "escButton.addEventListener('touchstart', e => e.preventDefault(), {passive: false});" in PHONE_JS
+    assert "escButton.addEventListener('mousedown', e => e.preventDefault());" in PHONE_JS
+
+
+def test_phone_page_reloads_when_the_hub_serves_a_newer_one() -> None:
+    # The page lives on the Hub and changes without app updates; an open one
+    # compares its version with the stream's snapshot after every reconnect.
+    stream = (ROOT / "src/agent_hub/api/stream.py").read_text()
+    assert 'snapshot["page_version"] = _static_version()' in stream
+    assert "data.page_version !== PAGE_VERSION) reloadWhenIdle()" in PHONE_JS

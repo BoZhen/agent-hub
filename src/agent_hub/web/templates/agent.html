@@ -39,33 +39,13 @@
   function appendMessage(role, content) {
     const wrap = document.createElement('div');
     if (role === 'user') { wrap.className = 'msg-user'; wrap.textContent = content; }
-    else if (role === 'assistant') { wrap.className = 'msg-assistant'; wrap.innerHTML = renderMarkdown(content); }
+    else if (role === 'assistant') { wrap.className = 'msg-assistant'; wrap.innerHTML = H.renderMarkdown(content); }
     else if (role === 'tool-trace') { wrap.className = 'msg-trace'; wrap.textContent = content; }
     else { wrap.className = 'msg-error'; wrap.textContent = content; }
     chatLog.querySelector('.chat-hint')?.remove();
     chatLog.appendChild(wrap);
     chatLog.scrollTop = chatLog.scrollHeight;
     return wrap;
-  }
-
-  // Minimal markdown: fenced code, inline code, tables, bold, italic, lists.
-  function renderMarkdown(text) {
-    if (!text) return '';
-    let out = H.escapeHtml(text);
-    out = out.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code}</code></pre>`);
-    out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-    out = out.replace(/((?:^\|.+\|\s*$\n?)+)/gm, block => {
-      const lines = block.trim().split('\n');
-      if (lines.length < 2 || !/^\|[\s\-:|]+\|$/.test(lines[1])) return block;
-      const cells = l => l.split('|').slice(1, -1).map(c => c.trim());
-      let html = '<table><thead><tr>' + cells(lines[0]).map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
-      for (const row of lines.slice(2)) html += '<tr>' + cells(row).map(c => `<td>${c}</td>`).join('') + '</tr>';
-      return html + '</tbody></table>';
-    });
-    out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    out = out.replace(/(^|\n)([-*]) (.+)/g, '$1<li>$3</li>');
-    return out.replace(/\n/g, '<br>');
   }
 
   async function send() {

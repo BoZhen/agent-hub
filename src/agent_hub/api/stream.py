@@ -2,9 +2,11 @@
 when a session needs the user (services/attention.py).
 
 Events:
-  snapshot  {"sessions": [state…], "notices": [notice…], "server_time"}
+  snapshot  {"sessions": [state…], "notices": [notice…], "server_time",
+             "page_version"}
             sent first on every connection, so a client that was offline
-            catches up by replacing what it had
+            catches up by replacing what it had; page_version tells an open
+            phone page that the Hub now serves a newer one
   session   one session's state after it changed
   removed   {"session_id"}: the session ended or was deleted
   notice    a message from POST /api/notify
@@ -22,6 +24,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from agent_hub.services.attention import attention
+from agent_hub.web.routes import _static_version
 
 router = APIRouter()
 
@@ -35,6 +38,7 @@ def _event(kind: str, data: dict) -> str:
 @router.get("/stream")
 async def stream():
     sub, snapshot = await attention.subscribe()
+    snapshot["page_version"] = _static_version()
 
     async def body():
         try:

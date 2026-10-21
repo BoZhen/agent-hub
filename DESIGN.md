@@ -793,6 +793,7 @@ Design inference:
 - Core routes/screens:
   - `/`：统一工作台，承担导航、注意力队列、工作集和 Terminal。
   - `/sessions/{id}`：深链接与 Inspector 的完整降级页，不再是日常切换的必经路径。
+  - `/m`：手机页面（2026-10 增加）。列出需要处理的 session；打开后默认是 Terminal，即嵌入的 Web Terminal 里的原生 TUI，与工作台同一套嵌入协议。可切换到 Text：最近一轮的消息（用户消息、助手回复、一行一个的工具调用），只是 transcript 里的文字，不重建工具卡片、diff 或 Plan。两种视图底部都有审批条与回复框（手机键盘输入，粘贴进 TUI）。状态来自 `GET /api/stream`。手机 App 加载的就是这个页面。
   - `/tmux`：底层 tmux 管理页，保持辅助工具定位。
   - `/idle`、`/stopped`：短期保留兼容；长期可收敛为导航筛选或归档视图。
 - Content hierarchy: `Needs Action > selected native TUI > running/live evidence > idle/pinned > stopped/raw tmux`。

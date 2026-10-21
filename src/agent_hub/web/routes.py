@@ -200,6 +200,17 @@ async def agent_chat_page(request: Request):
     )
 
 
+@router.get("/m", response_class=HTMLResponse)
+async def phone_page(request: Request):
+    """The phone page: sessions that need you, each session's native TUI
+    (or its latest exchange as text), and a box to answer it. It renders
+    an empty shell; the sessions arrive over GET /api/stream
+    (static/mobile.js)."""
+    return templates.TemplateResponse(
+        request=request, name="mobile.html", context={"terminal_url": _terminal_url(request)},
+    )
+
+
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)
 async def session_detail(
     request: Request,

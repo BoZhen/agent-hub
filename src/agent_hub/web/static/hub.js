@@ -29,6 +29,66 @@ window.AgentHub = (() => {
     return `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   }
 
+  /* A small Markdown subset for agent replies (Monitor chat, phone page):
+     fenced code, tables, headings, lists, quotes, paragraphs, inline code,
+     bold and italics. Line based, and everything is escaped first, so
+     nothing inside a code block is reformatted and no HTML gets through. */
+  const LIST_RE = /^\s*([-*+]|\d+[.)])\s+/;
+  const TABLE_RE = /^\s*\|.*\|\s*$/;
+  function renderMarkdown(text) {
+    if (!text) return '';
+    const lines = String(text).replace(/\u0000/g, '').replace(/\r\n?/g, '\n').split('\n');
+    const inline = s => {
+      const codes = [];
+      let h = escapeHtml(s).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+      h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+           .replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+      return h.replace(/\u0000(\d+)\u0000/g, (_, n) => `<code>${codes[+n]}</code>`);
+    };
+    const startsBlock = line => /^\s*```/.test(line) || TABLE_RE.test(line) || /^#{1,6}\s/.test(line) || LIST_RE.test(line) || /^\s*>/.test(line);
+    const table = rows => {
+      const cells = row => row.replace(/^\s*\||\|\s*$/g, '').split('|').map(c => c.trim());
+      if (rows.length < 2 || !/^[\s|:-]+$/.test(rows[1])) return `<pre><code>${escapeHtml(rows.join('\n'))}</code></pre>`;
+      const head = cells(rows[0]).map(c => `<th>${inline(c)}</th>`).join('');
+      const body = rows.slice(2).map(r => `<tr>${cells(r).map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('');
+      return `<div class="md-table"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    };
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (/^\s*```/.test(line)) {
+        const body = [];
+        for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) body.push(lines[i]);
+        i++;
+        out.push(`<pre><code>${escapeHtml(body.join('\n'))}</code></pre>`);
+      } else if (TABLE_RE.test(line)) {
+        const rows = [];
+        for (; i < lines.length && TABLE_RE.test(lines[i]); i++) rows.push(lines[i]);
+        out.push(table(rows));
+      } else if (/^#{1,6}\s/.test(line)) {
+        out.push(`<p class="md-heading">${inline(line.replace(/^#{1,6}\s+/, ''))}</p>`);
+        i++;
+      } else if (LIST_RE.test(line)) {
+        const ordered = /^\s*\d/.test(line);
+        const items = [];
+        for (; i < lines.length && LIST_RE.test(lines[i]); i++) items.push(`<li>${inline(lines[i].replace(LIST_RE, ''))}</li>`);
+        out.push(ordered ? `<ol>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`);
+      } else if (/^\s*>/.test(line)) {
+        const quote = [];
+        for (; i < lines.length && /^\s*>/.test(lines[i]); i++) quote.push(inline(lines[i].replace(/^\s*>\s?/, '')));
+        out.push(`<blockquote>${quote.join('<br>')}</blockquote>`);
+      } else if (!line.trim()) {
+        i++;
+      } else {
+        const para = [];
+        for (; i < lines.length && lines[i].trim() && !startsBlock(lines[i]); i++) para.push(inline(lines[i]));
+        out.push(`<p>${para.join('<br>')}</p>`);
+      }
+    }
+    return out.join('');
+  }
+
   function toast(message, kind = '', ms = 2800) {
     const host = document.getElementById('toasts');
     if (!host) return;
@@ -145,5 +205,5 @@ window.AgentHub = (() => {
   }
   if (document.getElementById('ws-dot') || document.body.dataset.ws !== 'off') connectWS();
 
-  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, toast, api, confirmDialog, promptDialog, copyText};
+  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, renderMarkdown, toast, api, confirmDialog, promptDialog, copyText};
 })();

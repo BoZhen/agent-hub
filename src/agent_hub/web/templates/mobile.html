@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tool_icon %}
+{% block title %}Agent Hub{% endblock %}
+{# resizes-content: the on-screen keyboard shrinks the page, so the reply box stays above it. #}
+{% block viewport %}width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content{% endblock %}
+{% block body_class %}m-page{% endblock %}
+{# Live state comes from GET /api/stream; hub.js must not open its WebSocket. #}
+{% block body_attrs %} data-ws="off"{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<template id="m-icon-claude">{{ tool_icon('claude') }}</template>
+<template id="m-icon-codex">{{ tool_icon('codex') }}</template>
+
+<section class="m-view" id="m-home" aria-label="Sessions">
+  <header class="m-bar">
+    <span class="brand"><span class="brand-mark">&gt;_</span>Agent Hub</span>
+    <span class="conn"><span class="dot dot-idle" id="m-dot"></span><span id="m-conn">Connecting</span></span>
+    <span class="topbar-spacer"></span>
+    <a class="btn btn-ghost" href="/">Workspace</a>
+  </header>
+  <main class="m-scroll" id="m-list"></main>
+</section>
+
+<section class="m-view" id="m-session" aria-label="Session" hidden>
+  <header class="m-bar">
+    <button type="button" class="btn btn-ghost icon-btn" data-action="back" aria-label="Back to sessions"><svg class="icon"><use href="#i-chevron-left"/></svg></button>
+    <span class="m-tool" id="m-tool" aria-hidden="true"></span>
+    <span class="m-title"><span class="m-name" id="m-name"></span><span class="m-state" id="m-state"></span></span>
+    <div class="segmented m-mode" role="group" aria-label="View">
+      <button type="button" data-mode="terminal">Terminal</button><button type="button" data-mode="text">Text</button>
+    </div>
+  </header>
+  <div class="m-working" id="m-working" hidden>
+    <span class="dot dot-running"></span>
+    <span class="m-working-tool" id="m-working-tool"></span>
+    <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
+  </div>
+  {# Terminal: the session's native TUI from the Web Terminal. Text: its latest exchange, read from the transcript. #}
+  <div class="m-stage" id="m-stage" data-conn="idle">
+    <div class="m-stage-status" id="m-stage-status" hidden></div>
+  </div>
+  <main class="m-scroll m-thread" id="m-thread"></main>
+  <div class="m-dock">
+    <div class="m-approval" id="m-approval" hidden></div>
+    <form class="m-composer" id="m-composer">
+      <button type="button" class="btn m-esc" id="m-esc" title="Press Esc in the agent: stops a running turn" aria-label="Press Esc">Esc</button>
+      <textarea class="input" id="m-input" rows="1" placeholder="Reply" aria-label="Reply" autocomplete="off"></textarea>
+      <button type="submit" class="btn btn-primary" id="m-send">Send</button>
+    </form>
+    <p class="m-hint" id="m-hint" hidden></p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/mobile.js?v={{ static_v() }}"></script>
+{% endblock %}
