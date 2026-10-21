@@ -613,6 +613,18 @@ function clearTerminalStage() {
   syncTerminalVisibility();
 }
 
+/* Sidebar toggle (desktop). The page applies a stored 'hidden' before the
+   first paint; this keeps the button in step and remembers the choice. */
+const SIDEBAR_KEY = 'agentHubSidebar';
+function sidebarHidden() { return $('shell').classList.contains('is-sidebar-hidden'); }
+function setSidebarHidden(hidden) {
+  $('shell').classList.toggle('is-sidebar-hidden', hidden);
+  const btn = $('sidebar-toggle');
+  btn.setAttribute('aria-expanded', String(!hidden));
+  btn.title = hidden ? 'Show sidebar' : 'Hide sidebar';
+  try { localStorage.setItem(SIDEBAR_KEY, hidden ? 'hidden' : 'shown'); } catch (_) {}
+}
+
 function setMobileMode(mode) {
   document.body.dataset.mobileMode = mode === 'terminal' ? 'terminal' : 'sessions';
   syncTerminalVisibility();
@@ -962,6 +974,7 @@ document.addEventListener('click', event => {
     case 'toggle-ended': { const g = btn.closest('.group'); g.dataset.showEnded = g.dataset.showEnded === '1' ? '0' : '1'; updateGroupCounts(); break; }
     case 'new-session': ncOpen(); break;
     case 'mobile-sessions': setMobileMode('sessions'); break;
+    case 'toggle-sidebar': setSidebarHidden(!sidebarHidden()); break;
     case 'close-inspector': closeInspector(); break;
     case 'inspect-current': if (previewState.sid) openInspector(previewState.sid); break;
     default: break;
@@ -1106,6 +1119,7 @@ document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     if (mobileViewport.matches) setMobileMode('sessions');
+    else if (sidebarHidden()) setSidebarHidden(false);
     $('session-search').focus();
     $('session-search').select();
   }
@@ -1116,6 +1130,7 @@ document.addEventListener('keydown', event => {
 /* ------------------------------------------------------------------ */
 rebuildGroups();
 applyFilters();
+setSidebarHidden(sidebarHidden());
 renderNeedsAction();
 renderThemeOptions();
 renderWorkspaceTabs();

@@ -5,7 +5,10 @@
 
 {% block content %}
 <div class="shell" id="shell">
+  {# A hidden sidebar is applied before the first paint, so it does not flash. #}
+  <script>try { if (localStorage.getItem('agentHubSidebar') === 'hidden') document.getElementById('shell').classList.add('is-sidebar-hidden'); } catch (_) {}</script>
   <header class="topbar">
+    <button type="button" class="btn btn-ghost icon-btn desktop-only" id="sidebar-toggle" data-action="toggle-sidebar" aria-controls="sidebar" aria-expanded="true" title="Hide sidebar"><svg class="icon"><use href="#i-sidebar"/></svg></button>
     <a class="brand" href="/"><span class="brand-mark">&gt;_</span>Agent Hub</a>
     <span class="conn"><span class="dot dot-idle" id="ws-dot"></span><span id="ws-label">Connecting</span></span>
     <div class="stats">
@@ -30,7 +33,7 @@
     </div>
   </header>
 
-  <aside class="sidebar" aria-label="Sessions">
+  <aside class="sidebar" id="sidebar" aria-label="Sessions">
     <div class="sidebar-tools">
       <label class="input-icon"><svg class="icon"><use href="#i-search"/></svg><input class="input" id="session-search" type="search" placeholder="Filter" aria-label="Filter sessions" title="Filter sessions (Ctrl+K)" autocomplete="off"></label>
       <div class="segmented" role="group" aria-label="Tool"><button type="button" data-tool-filter="all" class="is-active">All</button><button type="button" data-tool-filter="claude">Claude</button><button type="button" data-tool-filter="codex">Codex</button></div>

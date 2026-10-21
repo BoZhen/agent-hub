@@ -64,6 +64,17 @@ def test_rows_follow_sessions_the_websocket_never_reports() -> None:
     assert "if (/not found/i.test(e.message)) dropRow(sid);" in WORKSPACE_JS
 
 
+def test_sidebar_can_be_hidden_on_desktop() -> None:
+    # The top bar's toggle hides the sidebar; the choice survives a reload
+    # (applied before the first paint) and Ctrl+K brings the sidebar back.
+    assert 'id="sidebar-toggle" data-action="toggle-sidebar"' in DASHBOARD
+    assert "localStorage.getItem('agentHubSidebar') === 'hidden'" in DASHBOARD
+    assert "case 'toggle-sidebar': setSidebarHidden(!sidebarHidden()); break;" in WORKSPACE_JS
+    assert "else if (sidebarHidden()) setSidebarHidden(false);" in WORKSPACE_JS
+    # Phones keep their own sessions screen.
+    assert "@media (min-width: 700px) {\n  .shell.is-sidebar-hidden" in HUB_CSS
+
+
 def test_close_workspace_tab_is_view_only() -> None:
     match = re.search(
         r"function closeWorkspaceTab\(sid\) \{(?P<body>.*?)\n\}",

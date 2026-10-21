@@ -166,6 +166,12 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 4px 0 8px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .sidebar-foot { display: flex; align-items: center; gap: 6px; padding: 8px; border-top: 1px solid var(--border); }
 .sidebar-foot .btn-primary { flex: 1; }
+/* Hidden sidebar: the terminal takes the full width. Desktop only; on a
+   phone the session list is a screen of its own. */
+@media (min-width: 700px) {
+  .shell.is-sidebar-hidden { grid-template-columns: 0 minmax(0, 1fr); }
+  .shell.is-sidebar-hidden .sidebar { display: none; }
+}
 
 .attention { margin: 6px 8px; border: 1px solid color-mix(in srgb, var(--waiting) 45%, var(--border)); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--waiting) 7%, var(--panel)); overflow: hidden; }
 .attention[hidden] { display: none; }
