@@ -29,7 +29,7 @@ Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观�
 - Web 页面
 - WebSocket
 - MCP Server
-- Telegram 通知集成
+- 面向手机的 session 状态推送（SSE）
 
 ---
 
@@ -86,7 +86,7 @@ Codex + OMX hooks ────────┼──▶ Agent Hub (FastAPI)
 Bare Codex tmux scan ─────┘       ├─ Web UI
                                   ├─ WebSocket
                                   ├─ MCP SSE
-                                  ├─ Telegram integration
+                                  ├─ Phone stream (SSE)
                                   └─ SQLite (WAL)
                                            │
                                            └─ Session / Event state
@@ -112,7 +112,7 @@ Other Agents   ◀──────────── MCP SSE
 - 启动后台任务：
   - `periodic_sweep`
   - `periodic_pending_check`
-- 启动与停止 Telegram Bot
+- 启动与停止 session 状态推送（`attention`）
 
 ### 5.2 分层结构
 
@@ -133,7 +133,9 @@ Other Agents   ◀──────────── MCP SSE
 
 - `event_processor.py`：事件落库、摘要生成、广播
 - `session_manager.py`：状态机、tmux 扫描、审批检测、生命周期维护
-- `telegram_bot.py`：Telegram 通知
+- `attention.py`：手机推送用的 session 状态（见 13.3）
+- `tmux_input.py`：从终端之外向 agent 所在的 pane 粘贴文字、按键（见 9.3）
+- `conversation.py`：从 Claude / Codex 的 transcript 读出最近的消息
 - `transcript_reader.py`：从 transcript 提取 token 与摘要信息
 
 #### 数据层
@@ -160,7 +162,7 @@ Codex CLI + OMX      ──[native hook -> bridge]────────┼─
 Bare Codex CLI       ◀─[tmux capture-pane polling]────┘      ├─ Web UI
                                                              ├─ WebSocket
                                                              ├─ MCP SSE
-                                                             ├─ Telegram Bot
+                                                             ├─ Phone stream (SSE)
                                                              └─ SQLite (WAL)
 
 Web Dashboard         ◀──────────── HTTP / WebSocket
@@ -188,6 +190,10 @@ Other MCP Clients     ◀──────────── /mcp/sse
 - `GET /api/sessions/{id}/events`
 - `GET /api/sessions/{id}/events/latest`
 - `POST /api/sessions/{id}/approve`
+- `POST /api/sessions/{id}/send`
+- `POST /api/sessions/{id}/interrupt`
+- `POST /api/sessions/{id}/seen`
+- `GET /api/sessions/{id}/messages`
 - `POST /api/sessions/{id}/pin`
 - `DELETE /api/sessions/{id}`
 - `POST /api/sessions/clear-stopped`
@@ -197,6 +203,13 @@ Other MCP Clients     ◀──────────── /mcp/sse
 - `POST /api/tmux/kill`
 - `GET /api/browse`
 - `POST /api/notify`
+- `GET /api/attention`
+
+#### 手机推送流
+
+- `GET /api/stream`
+
+Server-Sent Events，只推送 session 状态的变化（见 13.3）。用 SSE 而不用 WebSocket，是因为它就是一个逐行读取的 HTTP 响应，Android App 不需要额外的库。
 
 #### Web 页面
 
@@ -438,6 +451,14 @@ Codex 解析器把**检测**和**分类**解耦，以避免 Claude 解析器从�
 
 这个设计的核心规律：**标题短语漂移或新增 UI 变体只会降级 badge 的精确度，不会把审批请求丢在地上**。要新增一个已知 UI 分类时，只需在 `_CODEX_QUESTION_PATTERNS` 注册短语并按需提供 detail/Always 提取器。
 
+### 9.3 从终端之外输入
+
+`POST /api/sessions/{id}/send` 与 `/interrupt` 让手机不经过终端就能回复 session，实现在 `services/tmux_input.py`：
+
+- **目标 pane**：`tmux list-panes -s` 中前台命令为 `claude` 或 `codex` 的 pane，其次是 `node`（npm 安装的 CLI 以 node 运行）；有多个时取活动 pane。没有这样的 pane（CLI 已退出、只剩 shell）时返回 409，因为文字会被 shell 当成命令执行。
+- **文字**：`tmux load-buffer` 后 `paste-buffer -p`，以 bracketed paste 一次粘贴。Claude Code 与 Codex 都开启 bracketed paste 模式，多行文字作为一次输入到达，只有之后单独发送的 Enter 才提交；粘贴与 Enter 之间间隔 0.3 秒。若用 `send-keys` 逐字输入，每个换行都会提交一次。session 正在等待审批时拒绝（409），因为菜单里粘贴的字母可能选中选项。
+- **Esc**：停止正在运行的一轮，或拒绝正在等待的审批。同一 session 2 秒内的第二次被忽略，因为 Claude Code 连按两次 Esc 会打开回到之前消息的菜单。
+
 ---
 
 ## 10. Codex 支持策略
@@ -564,9 +585,19 @@ WebSocket 负责向前端推送：
 - 判断是否出现待审批状态
 - 解析审批详情与“Always”标签
 - 将结果同步到数据库与前端广播
-- 触发 Telegram 待审批通知
 
 ---
+
+### 13.3 `attention`：手机推送用的 session 状态
+
+`services/attention.py` 为每个仍在运行、在 tmux 里、且不是子代理的 session 保存一份状态：状态、待审批内容、上一轮结束的时间、结尾回复的前 600 个字符、`unseen` 与 `needs_you`。
+
+- 一轮结束：`Stop` hook 记下 `turn_ended_at`，以及 hook 自带的 `last_assistant_message`（Claude 与 Codex 都提供）。
+- `unseen`：session 为 idle，且 `turn_ended_at` 晚于 `seen_at`。`needs_you` 在此之外再加上等待审批的 session。
+- 何时算看过：`POST /api/sessions/{id}/seen`、`POST /api/sessions/{id}/send`，或该 session 的 tmux 上有终端在这一轮结束之后收到输入（`tmux list-clients` 的 `client_activity`）。终端 attach 后 3 秒内的输入不算，因为 xterm.js 在 attach 时会自己上报焦点。人离开电脑就没有输入，这一轮保持 `unseen`，手机照常收到通知。
+- 推送：每次 WebSocket 广播之后（等 0.25 秒，合并同一批广播）重新计算，另外每 10 秒计算一次，以覆盖不广播的变化（sweep、重命名、删除）。只有变化的状态发给订阅者。只随 hook 事件变化的字段（`last_seen_at`、token 数）不放进状态，所以运行中的 session 不产生推送。
+- 通知的延迟（例如在电脑前 10 秒内处理掉就不弹）由客户端决定，服务端只给出状态。
+- 同一 session 的 hook 按到达顺序处理（`api/events.py` 每个 session 一把锁）。否则 `Stop` 可能先于它前面的事件处理完，结束的 session 被标成 active，手机就收不到通知。
 
 ## 14. 配置与运行约定
 
@@ -590,8 +621,9 @@ uv run agent-hub serve --hub-id <hub-id>
 
 当前支持的外部配置主要包括：
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+- `AGENT_HUB_STOPPED_RETENTION_DAYS`：stopped session 的保留天数，默认 14，`0` 为永久保留
+- `AGENT_HUB_RESTORE_MODE`：`resume`（默认）或 `shell`，决定重启后如何恢复 tmux 已消失的 session
+- `AGENT_HUB_CLAUDE2_CONFIG_DIR`：第二个 Claude 账号的配置目录，默认 `~/.claude-alt`
 
 ### 14.3 Hook 与桥接脚本
 
@@ -650,14 +682,17 @@ src/agent_hub/
 ├── api/
 │   ├── events.py
 │   ├── sessions.py
+│   ├── stream.py
 │   ├── tmux.py
 │   └── ws.py
 ├── mcp/
 │   └── server.py
 ├── services/
+│   ├── attention.py
+│   ├── conversation.py
 │   ├── event_processor.py
 │   ├── session_manager.py
-│   ├── telegram_bot.py
+│   ├── tmux_input.py
 │   └── transcript_reader.py
 ├── web/
 │   ├── routes.py
@@ -921,7 +956,7 @@ Phase 1 implementation acceptance gate:
 - Session 标签只管理视图，任何关闭/切换动作都不结束进程。
 - waiting session 始终优先可见且能一次进入审批上下文。
 - 没有新增运行时依赖或前端构建链。
-- 当前 API、MCP、Telegram、restore/fork 与 WebSocket 行为没有回归。
+- 当前 API、MCP、restore/fork 与 WebSocket 行为没有回归。
 
 ## Open questions
 

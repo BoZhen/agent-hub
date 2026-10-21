@@ -26,7 +26,7 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 - 单一样式表（无 Tailwind / 无前端构建），5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
 - 手机端独立 Session/Terminal 模式
 - 通过 MCP SSE 暴露查询接口
-- 支持 Telegram 待审批通知
+- 通过 `GET /api/stream`（Server-Sent Events）向手机推送需要你处理的 session：一轮结束后还没看过的，以及等待审批的（见「手机接口」）
 
 ## 快速开始
 
@@ -108,6 +108,18 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 - 抽屉里的 "Resume with" 一行显示将要运行的命令；`GET /api/sessions/{id}` 的 `resume_command` 字段是同一个值。
 - 第二个 Claude 账号：把它的 `CLAUDE_CONFIG_DIR` 目录写在 `AGENT_HUB_CLAUDE2_CONFIG_DIR`（默认 `~/.claude-alt`）。目录存在时 New session 多出 "Claude Code (account 2)"，这类 session 的行带 `account 2` 标记，恢复和 fork 都会带上同一个变量。该目录里的 `settings.json` 也要配好 Hub 的 hook，否则会话不会出现在 Hub 里。
 
+## 手机接口
+
+手机不在电脑前，只需要知道哪个 session 需要你，并能直接回复。下面这组接口为此而设。
+
+- `GET /api/stream`：Server-Sent Events。连接后先发 `snapshot`（所有运行中的 tmux session 的状态，以及一小时内的 notice），之后只在某个状态变化时发 `session`，session 结束或被删除时发 `removed`，`POST /api/notify` 的消息作为 `notice` 发出；每 20 秒发一行注释，两端都能发现断开的连接。`GET /api/attention` 以一次 JSON 返回同样的快照。
+- 状态里的 `unseen` 表示上一轮结束之后还没人看过，`needs_you` 再加上等待审批的。一轮结束由 `Stop` hook 记录，hook 自带的 `last_assistant_message`（Claude 与 Codex 都有）就是 `last_message`。子代理和不在 tmux 里的 session 不在其中。
+- 以下情况算看过：手机打开这个 session（`POST /api/sessions/{id}/seen`）、从手机发出消息，或这个 session 的 tmux 终端在这一轮结束后收到输入。人在电脑前操作这个终端，手机不会被打扰；人走开了就没有输入，手机照常收到通知。
+- `POST /api/sessions/{id}/send`，body `{"text": "...", "submit": true}`：把文字以 bracketed paste 一次粘贴进 agent 所在的 pane，再按 Enter，多行文字是一条 prompt。正在等待审批（菜单里粘贴的字母可能选中选项），或 tmux 里的 agent 已经退出、只剩 shell（文字会被当成命令执行）时，返回 409。
+- `POST /api/sessions/{id}/interrupt`：在 agent 的 pane 里按 Esc，停止正在运行的这一轮，或拒绝正在等待的审批。2 秒内的第二次会被忽略，因为 Claude Code 连按两次 Esc 会打开回到之前消息的菜单。
+- `GET /api/sessions/{id}/messages?limit=30`：从 Claude / Codex 自己的 transcript 读出最近的消息（用户、助手、一行一个的工具调用）。
+- `POST /api/notify`，body `{"message": "...", "title": "..."}`：脚本给手机发一条消息，例如长任务跑完时。
+
 ## 常用页面
 
 - `/`：工作台。侧栏按项目分组，每个项目下依次列出等待审批、活跃、空闲、已结束的 session 以及该目录下未被跟踪的 tmux；右侧是工作集标签与嵌入式终端，每个打开的标签各自保持一条终端连接，切换标签不重连；session 详情与重命名在右侧抽屉里
@@ -122,7 +134,9 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 - `GET /api/sessions`
 - `GET /api/sessions/{id}`
 - `POST /api/sessions/{id}/approve`
+- `POST /api/sessions/{id}/send`
 - `GET /api/stats`
+- `GET /api/stream`
 - `WS /ws`
 - `GET /mcp/sse`
 

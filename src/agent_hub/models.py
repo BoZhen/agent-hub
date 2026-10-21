@@ -27,6 +27,11 @@ class SessionResponse(BaseModel):
     # The command that would bring this session back (`claude --resume …`
     # or `codex resume …`); what POST /sessions/{id}/resume runs.
     resume_command: str | None = None
+    # When the agent last finished a turn, the reply it ended with, and
+    # when the user last looked (services/attention.py).
+    turn_ended_at: datetime | None = None
+    last_message: str | None = None
+    seen_at: datetime | None = None
 
 class EventResponse(BaseModel):
     id: int

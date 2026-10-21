@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
+from agent_hub.services import conversation, tmux_input
+from agent_hub.services.attention import attention
 from agent_hub.services.session_manager import mark_approved_suppress
 from agent_hub.services.restore import (
     _list_alive_tmux_names,
@@ -187,8 +190,8 @@ async def approve_session(
 
     The `always=True` path is guarded against stale state: if the
     session has no active `pending_always_label`, we 400. This
-    protects both Claude and Codex from Telegram inline buttons
-    arriving after the user already resolved the prompt manually.
+    protects both Claude and Codex from a notification button pressed
+    after the user already resolved the prompt manually.
     """
     conn = request.app.state.db
     session = await db.get_session(conn, session_id)
@@ -264,8 +267,8 @@ async def approve_session(
         # clears its badge / always label / dot / waiting counter
         # without waiting for the next periodic tick — which
         # wouldn't fire a clear broadcast anyway since db_tool is
-        # already None. Also fixes Telegram-initiated approvals,
-        # which have no optimistic JS running on the dashboard.
+        # already None. Also covers approvals from the phone, which
+        # have no optimistic JS running on the dashboard.
         stats = await db.get_stats(conn)
         await broadcaster.broadcast({
             "type": "pending",
@@ -314,7 +317,7 @@ async def approve_session(
     mark_approved_suppress(session_id, *approval_sig)
     await db.update_session_pending_tool(conn, session_id, None, None)
     # Mirror the codex-branch broadcast: emit a cleared pending
-    # event so the dashboard + Telegram bot + any other WebSocket
+    # event so the dashboard, the phone stream and any other
     # subscriber updates immediately instead of waiting on a
     # periodic-tick clear (which no longer fires — see codex branch).
     stats = await db.get_stats(conn)
@@ -327,6 +330,130 @@ async def approve_session(
         "waiting_count": stats["waiting_sessions"],
     })
     return {"ok": True, "tmux_session": tmux_name, "always": always}
+
+
+@router.post("/sessions/{session_id}/seen")
+async def mark_seen(request: Request, session_id: str):
+    """The user has looked at the session, so its finished turn no
+    longer needs them (see services/attention.py)."""
+    conn = request.app.state.db
+    if not await db.get_session(conn, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    await db.mark_session_seen(conn, session_id)
+    attention.poke()
+    return {"ok": True}
+
+
+class SendRequest(BaseModel):
+    text: str
+    # False leaves the text in the input box without pressing Enter.
+    submit: bool = True
+
+
+_SEND_MAX_CHARS = 20000
+# Pause between the paste and the Enter, so the TUI has finished taking
+# the paste in; an Enter that arrives with it would become a newline.
+_SUBMIT_DELAY_S = 0.3
+
+
+async def _running_agent_pane(conn, session_id: str) -> tuple[dict, str]:
+    """The session and the tmux pane its agent runs in, or the HTTP error
+    for why there is none."""
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tmux_name = session.get("tmux_session")
+    if not tmux_name or session["status"] == "stopped":
+        raise HTTPException(status_code=409, detail="Session is not running")
+    try:
+        pane = await tmux_input.agent_pane(tmux_name)
+    except tmux_input.NoAgentError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except tmux_input.TmuxInputError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return session, pane
+
+
+@router.post("/sessions/{session_id}/send")
+async def send_text(request: Request, session_id: str, body: SendRequest):
+    """Type a message into the session's agent pane and press Enter.
+
+    The text goes in as one bracketed paste (services/tmux_input.py), so
+    a multi-line message is one prompt. A session waiting for an approval
+    is refused: its pane shows a menu, and pasted letters could pick an
+    option. So is a tmux whose agent has exited, where the text would run
+    as a shell command.
+    """
+    conn = request.app.state.db
+    text = body.text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Message is empty")
+    if len(text) > _SEND_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"Message is limited to {_SEND_MAX_CHARS} characters")
+    session, pane = await _running_agent_pane(conn, session_id)
+    if session.get("pending_tool"):
+        raise HTTPException(
+            status_code=409,
+            detail="Session is waiting for an approval; approve or deny it first",
+        )
+    try:
+        await tmux_input.paste(pane, text)
+        if body.submit:
+            await asyncio.sleep(_SUBMIT_DELAY_S)
+            await tmux_input.press(pane, "Enter")
+    except tmux_input.TmuxInputError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    await db.mark_session_seen(conn, session_id)
+    attention.poke()
+    return {"ok": True, "submitted": body.submit}
+
+
+# Last /interrupt per session (monotonic seconds).
+_last_interrupt: dict[str, float] = {}
+_INTERRUPT_GAP_S = 2.0
+
+
+@router.post("/sessions/{session_id}/interrupt")
+async def interrupt(request: Request, session_id: str):
+    """Press Escape in the agent pane. It stops a running turn, and on an
+    approval prompt it declines.
+
+    A second press within two seconds is ignored: in Claude Code two
+    Escapes in a row open the menu for going back to an earlier message.
+    """
+    conn = request.app.state.db
+    _, pane = await _running_agent_pane(conn, session_id)
+    now = time.monotonic()
+    if now - _last_interrupt.get(session_id, -_INTERRUPT_GAP_S) < _INTERRUPT_GAP_S:
+        return {"ok": True, "ignored": True}
+    _last_interrupt[session_id] = now
+    try:
+        await tmux_input.press(pane, "Escape")
+    except tmux_input.TmuxInputError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True, "ignored": False}
+
+
+@router.get("/sessions/{session_id}/messages")
+async def session_messages(
+    request: Request,
+    session_id: str,
+    limit: int = Query(default=30, ge=1, le=200),
+):
+    """The last messages of the session (user, assistant, one-line tool
+    calls), read from the CLI's transcript. Empty when the Hub does not
+    know the transcript, as for a Codex session that has not had its
+    first prompt yet."""
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    config = request.app.state.config
+    path = conversation.find_transcript(session, ["~/.claude", config.claude2_config_dir])
+    if not path:
+        return {"session_id": session_id, "items": []}
+    items = await asyncio.to_thread(conversation.read_messages, path, session.get("tool"), limit)
+    return {"session_id": session_id, "items": items}
 
 
 class ForkRequest(BaseModel):
@@ -491,24 +618,15 @@ async def set_title(request: Request, session_id: str, body: TitleRequest):
 
 class NotifyRequest(BaseModel):
     message: str
+    title: str | None = None
 
 
 @router.post("/notify")
-async def send_notification(request: Request, body: NotifyRequest):
-    """Send a message to the configured Telegram chat."""
-    from agent_hub.services.telegram_bot import _bot_instance
-
-    if not _bot_instance or not _bot_instance.chat_id:
-        raise HTTPException(
-            status_code=503,
-            detail="Telegram bot not configured or no chat_id",
-        )
-    try:
-        await _bot_instance.app.bot.send_message(
-            chat_id=_bot_instance.chat_id,
-            text=body.message,
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Telegram send failed: {e}")
-    return {"ok": True}
+async def send_notification(body: NotifyRequest):
+    """Send a free-form message to the phone, for scripts that want to
+    say they are done. It goes out on GET /api/stream as a notice, and a
+    client that connects within the hour still gets it."""
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is empty")
+    return {"ok": True, "notice": attention.notice(message[:4000], (body.title or "").strip()[:200] or None)}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -11,10 +11,23 @@ router = APIRouter()
 
 
 class Broadcaster:
-    """Manages connected WebSocket clients and broadcasts events."""
+    """Manages connected WebSocket clients and broadcasts events.
+
+    Listeners are plain functions called with every broadcast message,
+    after the clients; services/attention.py uses one to learn that
+    session state may have changed.
+    """
 
     def __init__(self):
         self._clients: list[WebSocket] = []
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
+
+    def add_listener(self, fn: Callable[[dict[str, Any]], None]) -> None:
+        self._listeners.append(fn)
+
+    def remove_listener(self, fn: Callable[[dict[str, Any]], None]) -> None:
+        if fn in self._listeners:
+            self._listeners.remove(fn)
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -35,6 +48,11 @@ class Broadcaster:
                 dead.append(ws)
         for ws in dead:
             self._clients.remove(ws)
+        for fn in list(self._listeners):
+            try:
+                fn(message)
+            except Exception:
+                logger.exception("Broadcast listener failed")
 
 
 # Singleton broadcaster

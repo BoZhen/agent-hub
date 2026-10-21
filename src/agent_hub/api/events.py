@@ -45,15 +45,35 @@ async def receive_event(
     return {"ok": True}
 
 
+# One lock per session, with the number of tasks holding or waiting for
+# it. A CLI sends its hooks one after another, but each is processed in
+# its own task, and a fast one can overtake a slow one: a Stop processed
+# before the PostToolUse ahead of it leaves the finished session marked
+# active, and the phone is never told. Taking the session's lock before
+# the task's first await keeps processing in arrival order, because
+# tasks start in the order they were created and asyncio.Lock is FIFO.
+_session_locks: dict[str, list] = {}
+
+
 async def _process_safe(db, payload, hub_id, hostname):
+    sid = payload.get("session_id")
+    entry = _session_locks.get(sid)
+    if entry is None:
+        entry = _session_locks[sid] = [asyncio.Lock(), 0]
+    entry[1] += 1
     try:
-        await event_processor.process_event(db, payload, hub_id, hostname)
+        async with entry[0]:
+            await event_processor.process_event(db, payload, hub_id, hostname)
     except Exception:
         logger.exception(
             "Failed to process event: session=%s type=%s",
             payload.get("session_id"),
             payload.get("hook_event_name"),
         )
+    finally:
+        entry[1] -= 1
+        if entry[1] == 0:
+            _session_locks.pop(sid, None)
 
 
 def _task_done(task: asyncio.Task):

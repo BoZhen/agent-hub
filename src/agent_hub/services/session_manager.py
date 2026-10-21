@@ -13,10 +13,6 @@ import aiosqlite
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
 from agent_hub.services.pane_pipe import get_pipe_manager
-from agent_hub.services.telegram_bot import (
-    cancel_pending as tg_cancel_pending,
-    notify_pending as tg_notify_pending,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -1427,7 +1423,6 @@ async def parse_one(
         if db_tool:
             _APPROVED_SUPPRESS.pop(session_id, None)
             await db.update_session_pending_tool(conn, session_id, None, None)
-            await tg_cancel_pending(session_id)
             await _broadcast_pending_clear(conn, session_id, tmux_name)
         return
 
@@ -1451,7 +1446,6 @@ async def parse_one(
             # Prompt gone — tool was approved or cancelled.
             _APPROVED_SUPPRESS.pop(session_id, None)
             await db.update_session_pending_tool(conn, session_id, None, None)
-            await tg_cancel_pending(session_id)
             await _broadcast_pending_clear(conn, session_id, tmux_name)
         return
 
@@ -1489,10 +1483,6 @@ async def parse_one(
             "tmux_session": tmux_name,
             "waiting_count": stats["waiting_sessions"],
         })
-        updated_session = await db.get_session(conn, session_id)
-        await tg_notify_pending(
-            session_id, updated_session or session, has_always, always_label,
-        )
 
 
 def make_pane_pipe_callback(conn: aiosqlite.Connection):

@@ -8,8 +8,6 @@ class HubConfig:
     port: int = 7800
     db_path: str = "hub.db"
     terminal_port: int = 7700
-    telegram_bot_token: str | None = None
-    telegram_chat_id: int | None = None
     # Auto-prune stopped sessions (and their events) older than this many
     # days on each sweep. Stopped sessions are terminal in the Hub's model
     # (tmux gone; restore only revives active/idle), so old ones are pure

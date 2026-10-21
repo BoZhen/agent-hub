@@ -22,6 +22,7 @@ from agent_hub.api import (
     events,
     internal as internal_api,
     sessions,
+    stream,
     tmux,
     ws,
 )
@@ -36,9 +37,9 @@ from agent_hub.services.session_manager import (
     periodic_pending_check,
     periodic_sweep,
 )
+from agent_hub.services.attention import attention
 from agent_hub.services.pane_pipe import PanePipeManager, set_pipe_manager
 from agent_hub.services.restore import restore_on_startup
-from agent_hub.services.telegram_bot import start_bot, stop_bot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,10 +49,9 @@ logging.basicConfig(
 # busy claude session emits dozens per minute and drowns out useful log
 # entries. WARNING+ is enough; we never need to see normal activity.
 logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
-# httpx logs every request URL at INFO. python-telegram-bot puts the bot
-# token in the URL path (/bot<TOKEN>/getUpdates), so INFO writes the token
-# to the journal on every poll. httpx reports failures by raising
-# exceptions rather than logging them, so WARNING drops no error information.
+# httpx logs every request URL at INFO (the approve path calls the Web
+# Terminal through it). httpx reports failures by raising exceptions
+# rather than logging them, so WARNING drops no error information.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -148,14 +148,15 @@ def create_app(config: HubConfig) -> FastAPI:
             app.state.pipe_manager = pipe_manager
             await attach_all_active_pipes(conn)
             await install_tmux_session_hook(config.port, verbose=True)
+            # Session states for GET /api/stream (phones).
+            await attention.start(conn)
             logger.info("Database initialized: %s", config.db_path)
-            await start_bot(config, conn)
             yield
             # Shutdown — release the manager singleton FIRST so any
             # session-status changes that race with shutdown don't
             # try to call attach/detach on a half-stopped manager.
             set_pipe_manager(None)
-            await stop_bot()
+            await attention.stop()
             await pipe_manager.stop()
             sweep_task.cancel()
             codex_task.cancel()
@@ -199,6 +200,7 @@ def create_app(config: HubConfig) -> FastAPI:
 
     app.include_router(events.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
+    app.include_router(stream.router, prefix="/api")
     app.include_router(tmux.router, prefix="/api")
     app.include_router(agent_api.router, prefix="/api")
     app.include_router(internal_api.router, prefix="/api")
@@ -240,7 +242,6 @@ def cli():
     args = parser.parse_args()
 
     if args.command == "serve":
-        tg_chat_id_raw = os.environ.get("TELEGRAM_CHAT_ID")
         retention_raw = os.environ.get("AGENT_HUB_STOPPED_RETENTION_DAYS")
         try:
             retention_days = (
@@ -257,8 +258,6 @@ def cli():
             host=args.host,
             port=args.port,
             db_path=args.db,
-            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
-            telegram_chat_id=int(tg_chat_id_raw) if tg_chat_id_raw else None,
             stopped_retention_days=retention_days,
             restore_mode=restore_mode,
             claude2_config_dir=os.environ.get("AGENT_HUB_CLAUDE2_CONFIG_DIR", HubConfig.claude2_config_dir),

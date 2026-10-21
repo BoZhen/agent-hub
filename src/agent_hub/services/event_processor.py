@@ -152,6 +152,9 @@ async def process_event(
     # via tmux capture-pane (ground truth). No event-driven pending here.
 
     if event_type == "Stop":
+        # Record the turn end before going idle: an idle session with a
+        # newer turn_ended_at than seen_at is what a phone is told about.
+        await db.record_turn_end(conn, session_id, _last_message(payload))
         await session_manager.mark_session_idle(conn, session_id)
         status = "idle"
     else:
@@ -296,6 +299,15 @@ def _extract_pending_detail(tool_name: str, tool_input: Any) -> str:
     if tool_name == "WebFetch":
         return _truncate(_safe_get(tool_input, "url", ""), 100)
     return ""
+
+
+def _last_message(payload: dict[str, Any]) -> str | None:
+    """The reply a turn ended with. Claude and Codex both put it in the
+    Stop hook's last_assistant_message."""
+    text = payload.get("last_assistant_message")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return _truncate(text.strip(), 4000)
 
 
 def _extract_bash_command(tool_input: Any) -> str:

@@ -52,6 +52,13 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN tool TEXT DEFAULT 'claude'",
     "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT",
     "ALTER TABLE sessions ADD COLUMN title TEXT",
+    # Set by the Stop hook: when the agent last finished a turn, and the
+    # reply it ended with (the hook's last_assistant_message).
+    "ALTER TABLE sessions ADD COLUMN turn_ended_at TEXT",
+    "ALTER TABLE sessions ADD COLUMN last_message TEXT",
+    # When the user last looked at the session (phone, or input at its
+    # terminal). A turn that ended later is unseen.
+    "ALTER TABLE sessions ADD COLUMN seen_at TEXT",
 ]
 
 
@@ -213,6 +220,37 @@ async def update_session_status(
             (status, session_id),
         )
     await db.commit()
+
+
+async def record_turn_end(
+    db: aiosqlite.Connection, session_id: str, last_message: str | None
+) -> None:
+    """The agent finished a turn and waits for the user."""
+    await db.execute(
+        "UPDATE sessions SET turn_ended_at = ?, last_message = ? WHERE session_id = ?",
+        (_now(), last_message, session_id),
+    )
+    await db.commit()
+
+
+async def mark_session_seen(db: aiosqlite.Connection, session_id: str) -> None:
+    await db.execute(
+        "UPDATE sessions SET seen_at = ? WHERE session_id = ?",
+        (_now(), session_id),
+    )
+    await db.commit()
+
+
+async def get_attention_rows(db: aiosqlite.Connection) -> list[dict]:
+    """Sessions a phone may need to hear about: live (active or idle),
+    in tmux, and not a sub-agent of another session."""
+    cursor = await db.execute(
+        "SELECT * FROM sessions WHERE status IN ('active', 'idle') "
+        "AND tmux_session IS NOT NULL AND parent_session_id IS NULL "
+        "ORDER BY started_at"
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def set_session_title(

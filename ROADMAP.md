@@ -8,7 +8,7 @@
 观察层:  Agent Hub (:7800) — 实时监控所有 Claude Code 会话、token 用量、waiting 状态
 执行层:  Claude Code / Codex — 在本机执行代码、研究、写作
 知识层:  Paper Reader (MCP), Obsidian (笔记), Web Search
-通信层:  Zulip (Tailscale 内网), Telegram (待接入)
+通信层:  Zulip (Tailscale 内网), 手机 App (GET /api/stream)
 接入层:  Web Terminal (:7683) + tmux (手机操作, 改造中)
 ```
 
@@ -19,7 +19,7 @@ Agent Hub 能观察，但不能主动推送通知、不能分配任务、不能�
 ## 2. 目标架构
 
 ```
-用户 ──(Telegram / Dashboard / Zulip)──▶ 创建任务 / 下发指令
+用户 ──(手机 App / Dashboard / Zulip)──▶ 创建任务 / 下发指令
                                               │
                                          Agent Hub
                                         (Task Router)
@@ -30,58 +30,29 @@ Agent Hub 能观察，但不能主动推送通知、不能分配任务、不能�
              Claude: 读论文           Codex: 复现代码          Claude: 搜补充文献
                      │                       │                       │
                      └────── progress → Zulip (结构化记录) ──────────┘
-                     └────── stuck/complete → Telegram → 用户回复 → 继续 ─┘
+                     └────── stuck/complete → 手机通知 → 用户回复 → 继续 ─┘
 ```
 
 ## 3. 服务集成优先级
 
 | 集成 | 价值 | 优先级 | 理由 |
 |------|------|--------|------|
-| **Telegram Bot** | 双向异步通道 | P0 | 解决"不在电脑前"的通知+指令问题，手机随时可达 |
+| **手机 App** | 双向异步通道 | P0 | 解决"不在电脑前"的通知+指令问题，手机随时可达 |
 | **Zulip 深度集成** | 结构化研究日志 | P1 | 已有 MCP，作为 agent 工作过程的持久化记录 |
 | **Paper Reader** | 知识输入 | P1 | 文献阅读工作流的核心依赖 |
 | **Web Terminal (tmux)** | 直接操作 | P1 | 另一个 Claude 已在改造中 |
-| Slack | 移动通知 | P2 | 和 Telegram 重叠，除非有团队协作需求 |
+| Slack | 移动通知 | P2 | 和手机 App 重叠，除非有团队协作需求 |
 | OpenClaw | 待定 | P3 | 取决于其在工作流中的角色 |
 
-## 4. Telegram Bot — 双向异步通道
+## 4. 手机 App — 双向异步通道
 
-### 4.1 核心功能
+Hub 端的接口（见 README「手机接口」）：
 
-```
-Agent Hub                    Telegram Bot                    📱 用户
-  │                              │                              │
-  │ session waiting ────────────▶│──── 通知: "Claude 等审批"  ──▶│
-  │                              │                              │
-  │◀──── /approve 9eae ─────────│◀─── 用户回复 ────────────────│
-  │                              │                              │
-  │ tmux send-keys "y"          │                              │
-  │ ✓ approved                   │                              │
-  │                              │                              │
-  │ task complete ──────────────▶│──── "论文阅读完成，摘要:" ──▶│
-  │                              │                              │
-  │◀──── /status ───────────────│◀─── 查询当前状态 ────────────│
-  │                              │                              │
-  │ dashboard summary ──────────▶│──── "2 active, 1 waiting" ─▶│
-```
+- `GET /api/stream`：Server-Sent Events，只推送 session 状态的变化。一轮结束后还没看过的、等待审批的 session 标为 `needs_you`。
+- `POST /api/sessions/{id}/send`、`/interrupt`、`/seen` 与 `GET /api/sessions/{id}/messages`：在手机上回复、停止、标记已看、读最近的消息。
+- `POST /api/notify`：脚本给手机发消息。
 
-### 4.2 Bot 命令设计
-
-| 命令 | 说明 |
-|------|------|
-| `/status` | 全局概览（active/idle/waiting 数量） |
-| `/sessions` | 列出活跃 sessions |
-| `/approve <session_prefix>` | 审批 waiting 状态的 tool call |
-| `/start <task>` | 创建新任务（启动 tmux + Claude） |
-| `/stop <session_prefix>` | 停止指定 session |
-| `/ask <session_prefix> <message>` | 向指定 session 注入用户消息（未来） |
-
-### 4.3 技术实现
-
-- 库：`python-telegram-bot` (async)
-- 集成方式：Hub 内嵌 Bot，在 lifespan 中启动
-- 触发通知：`periodic_pending_check` 检测到 waiting 时推送
-- 安全：Bot Token 通过环境变量注入，仅响应白名单 chat_id
+手机 App 是独立的项目：WebView 加载 Hub 提供的手机页面，后台服务保持与 `GET /api/stream` 的连接并发出系统通知，在通知上可以直接回复或审批。
 
 ## 5. 文献阅读工作流
 
@@ -133,7 +104,7 @@ Agent Hub                    Telegram Bot                    📱 用户
 - **Skill 文件** (`~/.claude/skills/read-paper.md`)：定义工作流模板、检查点、输出格式
 - **Zulip 日志**：每个阶段完成后自动发消息到对应 stream/topic
 - **Agent Hub 监控**：跟踪任务进度，检测卡住
-- **Telegram 通知**：关键节点推送（复现失败、需要确认理解、任务完成）
+- **手机通知**：关键节点推送（复现失败、需要确认理解、任务完成）
 - **多 Session 可能**：阶段 3（搜索文献）和阶段 4（复现代码）可以并行
 
 ### 5.4 需要的工具链
@@ -170,7 +141,7 @@ Stream: #research
 ### 6.2 Zulip 作为异步指令通道
 
 用户在 Zulip 中回复 → agent 读取 → 继续工作。
-（当 Telegram 不可用或需要长文本交互时的备选方案）
+（需要长文本交互时的备选方案）
 
 ## 7. Hub 进化路径：Task Router
 
@@ -193,7 +164,7 @@ CREATE TABLE tasks (
 ### 7.2 工作流
 
 ```
-1. 用户创建任务（Dashboard / Telegram / Zulip）
+1. 用户创建任务（Dashboard / 手机 App / Zulip）
 2. Hub 分配任务：
    - 创建 tmux session
    - 启动 Claude Code + 加载对应 Skill
@@ -201,7 +172,7 @@ CREATE TABLE tasks (
 3. Agent 自主工作：
    - 按 Skill 定义的阶段推进
    - 进度自动发到 Zulip
-   - 遇到阻塞 → 通知用户（Telegram）
+   - 遇到阻塞 → 通知用户（手机通知）
 4. 用户干预（可选）：
    - 审批 tool calls
    - 回答 agent 的问题
@@ -215,8 +186,8 @@ CREATE TABLE tasks (
 ## 8. 实施顺序
 
 ### 立即做
-- [ ] **Telegram Bot 基础** — waiting 通知 + `/status` + `/approve` 命令
-- [ ] Hub 增加通知端点，waiting 检测自动触发 Telegram 推送
+- [x] **Hub 手机接口** — `GET /api/stream` 推送需要处理的 session，回复、停止、已看、最近消息的接口
+- [ ] **手机 App** — 系统通知，在通知上回复与审批（独立项目）
 
 ### 短期（1-2 周）
 - [ ] **Paper Reading Skill** — 写 `~/.claude/skills/read-paper.md` 定义结构化流程
@@ -225,7 +196,7 @@ CREATE TABLE tasks (
 
 ### 中期（2-4 周）
 - [ ] **Task 系统** — Hub 增加 tasks 表 + API + Dashboard 展示
-- [ ] **Telegram 创建任务** — `/start read-paper arxiv:2401.xxxxx`
+- [ ] **从手机创建任务** — 例如 `read-paper arxiv:2401.xxxxx`
 - [ ] **Multi-session 任务** — 一个 task 拆分给多个 agent 并行处理
 
 ### 远期
@@ -238,5 +209,5 @@ CREATE TABLE tasks (
 - **渐进式**：每个集成独立可用，不依赖其他集成全部完成
 - **异步优先**：agent 不应该阻塞等待用户，用户不应该盯着终端
 - **结构化记录**：所有工作产出都有持久化存储（Zulip topic / Obsidian note / Hub DB）
-- **Mobile-first**：关键操作都能在手机上完成（Telegram + Dashboard + Web Terminal）
+- **Mobile-first**：关键操作都能在手机上完成（手机 App + Dashboard + Web Terminal）
 - **MCP 统一接口**：所有服务通过 MCP tools 暴露给 Claude，形成工具生态
