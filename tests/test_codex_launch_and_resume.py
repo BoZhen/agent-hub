@@ -11,6 +11,7 @@ from agent_hub.api.tmux import (
     _NAME_PREFIX,
     claude2_config_dir,
     launch_env,
+    session_path,
 )
 from agent_hub.services import session_manager
 from agent_hub.services.restore import (
@@ -137,3 +138,14 @@ def test_shell_pane_command_prints_the_hint():
     assert cmd[:2] == ["bash", "-c"]
     assert f"claude --resume {UUID} --dangerously-skip-permissions" in cmd[2]
     assert "exec ${SHELL:-bash} -i" in cmd[2]
+
+
+def test_session_path_leaves_out_the_hubs_virtualenv():
+    """`uv run` puts the Hub's .venv/bin first. Pinned onto a session, it
+    made `python` there the Hub's interpreter."""
+    env = {
+        "VIRTUAL_ENV": "/srv/hub/.venv",
+        "PATH": "/srv/hub/.venv/bin:/home/u/.local/bin:/usr/bin:/srv/hub/.venv/bin/",
+    }
+    assert session_path(env) == "/home/u/.local/bin:/usr/bin"
+    assert session_path({"PATH": "/home/u/.local/bin:/usr/bin"}) == "/home/u/.local/bin:/usr/bin"

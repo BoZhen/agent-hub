@@ -479,6 +479,7 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
         _tmux_ls,
         _valid_tmux_name,
         launch_env,
+        session_path,
     )
     from agent_hub.services.session_manager import (
         mark_hub_launched,
@@ -547,9 +548,9 @@ async def fork_session(request: Request, session_id: str, body: ForkRequest):
     # node/nvm/fnm dirs even when the long-running tmux server's PATH
     # predates them (see tmux.py for the same rationale).
     tmux_args = ["tmux", "new-session", "-d", "-s", name, "-c", str(resolved_cwd)]
-    hub_path = os.environ.get("PATH", "")
-    if hub_path:
-        tmux_args.extend(["-e", f"PATH={hub_path}"])
+    path = session_path()
+    if path:
+        tmux_args.extend(["-e", f"PATH={path}"])
     for key, value in launch_env(tool, request.app.state.config).items():
         tmux_args.extend(["-e", f"{key}={value}"])
     tmux_args.extend([cmd_path, *claude_args])

@@ -5,6 +5,8 @@ import asyncio
 import logging
 import os
 import re
+import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,24 @@ def launch_env(tool: str, config: Any) -> dict[str, str]:
         if directory:
             return {"CLAUDE_CONFIG_DIR": directory}
     return {}
+
+
+def session_path(env: Mapping[str, str] | None = None) -> str:
+    """PATH pinned onto a session the Hub starts (launch, resume, fork).
+
+    It is the Hub's own PATH, which main._augment_path extends with the
+    user's CLI directories, minus the Hub's virtualenv: `uv run` puts
+    .venv/bin first, and pinning that made `python` in every session the
+    Hub started resolve to the Hub's interpreter.
+    """
+    env = os.environ if env is None else env
+    drop = set()
+    if env.get("VIRTUAL_ENV"):
+        drop.add(os.path.normpath(os.path.join(env["VIRTUAL_ENV"], "bin")))
+    if sys.prefix != sys.base_prefix:
+        drop.add(os.path.normpath(os.path.join(sys.prefix, "bin")))
+    parts = env.get("PATH", "").split(os.pathsep)
+    return os.pathsep.join(p for p in parts if p and os.path.normpath(p) not in drop)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -267,10 +287,11 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
     # PATH (set when the user first ran tmux outside the hub), not
     # the hub process's. claude/codex hooks inside the pane then can't
     # find user-installed node, codex, etc. -e is per-session, so other
-    # tmux sessions are unaffected.
-    hub_path = os.environ.get("PATH", "")
-    if hub_path:
-        tmux_args.extend(["-e", f"PATH={hub_path}"])
+    # tmux sessions are unaffected. session_path() leaves out the Hub's
+    # own virtualenv.
+    path = session_path()
+    if path:
+        tmux_args.extend(["-e", f"PATH={path}"])
     for key, value in launch_env(req.command or "", request.app.state.config).items():
         tmux_args.extend(["-e", f"{key}={value}"])
     if cmd_path:

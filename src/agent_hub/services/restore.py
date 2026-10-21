@@ -290,12 +290,13 @@ async def restore_session(
         effective_mode = "shell"
 
     tmux_args = ["tmux", "new-session", "-d", "-s", name, "-c", cwd]
+    from agent_hub.api.tmux import launch_env, session_path  # local: api imports this module
+
     # Same reasoning as the launcher: the tmux server's PATH predates the
     # hub's, so pin the hub's augmented PATH for hooks inside the pane.
-    hub_path = os.environ.get("PATH", "")
-    if hub_path:
-        tmux_args.extend(["-e", f"PATH={hub_path}"])
-    from agent_hub.api.tmux import launch_env  # local: api imports this module
+    path = session_path()
+    if path:
+        tmux_args.extend(["-e", f"PATH={path}"])
 
     for key, value in launch_env(tool, config).items():
         tmux_args.extend(["-e", f"{key}={value}"])
