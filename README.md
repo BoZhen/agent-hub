@@ -15,7 +15,7 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
   <img src="figs/modern-phone-sessions.png" alt="移动端 Session 导航" width="28%">
   <img src="figs/modern-phone-terminal.png" alt="移动端原生 TUI" width="28%">
 </p>
-<p align="center"><em>移动端：Session 列表与全屏 Terminal 两个模式，保留触控特殊键</em></p>
+<p align="center"><em>手机页面 <code>/m</code>：需要你处理的 session 排在最前；点进去是原生 TUI，底部用手机键盘回复，Esc 打断这一轮</em></p>
 
 ## 核心能力
 
@@ -23,8 +23,10 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 - 记录会话事件并在 Dashboard 中实时展示
 - 基于 tmux 进行远程审批与终端接入
 - 按项目分组的 session 导航（活跃 / 空闲 / 已结束同组展示）、待处理队列、浏览器工作集标签、session 重命名与详情抽屉
-- 单一样式表（无 Tailwind / 无前端构建），5 套暗色 + 5 套亮色主题，并与 Web Terminal 同步
+- 单一样式表（无 Tailwind / 无前端构建），6 套暗色 + 6 套亮色主题，并与 Web Terminal 同步
 - 手机端独立 Session/Terminal 模式
+- 终端里的文件路径可以点击，在右侧面板（手机上全屏）预览图片、PDF、Markdown 与代码（见「文件预览」）
+- 运行中的 session 可一键重启 CLI，升级 claude / codex 后用上新版本（见「恢复会话」）
 - 通过 MCP SSE 暴露查询接口
 - 通过 `GET /api/stream`（Server-Sent Events）向手机推送需要你处理的 session：一轮结束后还没看过的，以及等待审批的（见「手机接口」）
 
@@ -63,6 +65,15 @@ Dashboard 右侧的嵌入式终端由独立的伴生服务 **[web-terminal](http
 现代工作台通过 `embed=1`、`theme=<id>` 与受限的父子页面生命周期消息协调 Web Terminal。主题切换、连接状态与移动端可见性会同步，但终端输入仍只走 Web Terminal 自己的 PTY/WebSocket 通道。
 
 该服务需单独部署，安装方式见其仓库说明与本仓库 `SETUP.md` 的「Web Terminal」一节。
+
+### 文件预览
+
+终端里出现的文件路径（`/a/b/report.pdf`、`~/notes.md`）以及程序发出的 `file://` 超链接（OSC 8，Claude Code 会发）都可以点击：桌面端在终端右侧的面板里打开，手机页面全屏打开。点面板以外的任意位置（包括终端）或按 Esc 收起，点另一条路径则换成那个文件。文件内容由伴生服务 **[web-file-manager](https://github.com/BoZhen/web-file-manager)** 显示，图片、PDF、Markdown（含公式）与代码都能直接看。
+
+- web-file-manager 的地址默认是打开 Hub 时所用主机的 7701 端口，可用环境变量 `AGENT_HUB_WEBFM_URL` 改（例如 `http://<TAILSCALE_IP>:7701`）。
+- web-file-manager 需要登录。面板里出现登录框或 401 时，点面板右上角的 ↗ 在新标签页登录一次，之后面板直接显示。
+- tmux 只把超链接转给声明支持它的终端：在 `~/.tmux.conf` 的 `terminal-features` 里给 `xterm*` 加上 `hyperlinks`（或执行 `tmux set -as terminal-features ',xterm*:hyperlinks'`），已打开的终端重连后生效。普通的文件路径不需要这一项。
+- 终端自动换行的长路径整条可点；由 TUI 自己断开的长路径只能识别其中一段。
 
 ### Claude Code
 

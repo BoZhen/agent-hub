@@ -230,3 +230,42 @@ def test_phone_page_reloads_when_the_hub_serves_a_newer_one() -> None:
     stream = (ROOT / "src/agent_hub/api/stream.py").read_text()
     assert 'snapshot["page_version"] = _static_version()' in stream
     assert "data.page_version !== PAGE_VERSION) reloadWhenIdle()" in PHONE_JS
+
+
+def test_brand_mark_is_the_panes_icon_everywhere() -> None:
+    macros = (WEB / "templates/_macros.html").read_text()
+    mobile_html = (WEB / "templates/mobile.html").read_text()
+    assert "{% macro brand_mark() -%}" in macros and 'class="bm-light"' in macros
+    assert "{{ brand_mark() }}Agent Hub" in DASHBOARD
+    assert "{{ brand_mark() }}Agent Hub" in mobile_html
+    assert "&gt;_" not in DASHBOARD + mobile_html
+    # The browser tab gets the same mark.
+    assert '<link rel="icon" type="image/svg+xml" href="/static/icon.svg' in BASE
+    assert (WEB / "static/icon.svg").is_file()
+
+
+def test_file_paths_from_a_terminal_open_in_a_preview_panel() -> None:
+    mobile_html = (WEB / "templates/mobile.html").read_text()
+    mobile_js = (WEB / "static/mobile.js").read_text()
+    # Desktop: the right-hand panel shows web-file-manager.
+    assert "'webterminal:open-file'" in WORKSPACE_JS
+    assert 'id="file-preview"' in DASHBOARD and 'id="file-preview-frame"' in DASHBOARD
+    assert "`${WEBFM_URL}/?open=${encodeURIComponent(path)}`" in WORKSPACE_JS
+    # A click elsewhere closes it, a click into a terminal frame included.
+    assert "if (filePreviewOpen() && !event.target.closest('#file-preview')) closeFilePreview();" in WORKSPACE_JS
+    assert "if (active?.tagName === 'IFRAME' && active.id !== 'file-preview-frame') closeFilePreview();" in WORKSPACE_JS
+    # Guarded: the running Hub reloads templates before it reloads Python.
+    assert 'data-webfm-url="{{ webfm_url() if webfm_url is defined else \'\' }}"' in BASE
+    # Phone: a full-screen view over the session; Back closes it.
+    assert 'id="m-file"' in mobile_html
+    assert "if (!$('m-file').hidden) { closeFile(); return true; }" in mobile_js
+    assert "webterminal:open-file" in mobile_js
+
+
+def test_no_live_label_only_a_reconnecting_notice() -> None:
+    mobile_html = (WEB / "templates/mobile.html").read_text()
+    mobile_js = (WEB / "static/mobile.js").read_text()
+    assert ">Live<" not in DASHBOARD + mobile_html
+    assert 'id="ws-conn" hidden' in DASHBOARD and 'id="m-conn" hidden' in mobile_html
+    assert "if (conn) conn.hidden = state !== 'down';" in HUB_JS
+    assert "$('m-conn').hidden = state === 'live';" in mobile_js

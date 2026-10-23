@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_session_card.html" import session_card %}
+{% from "_macros.html" import brand_mark %}
 {% block title %}Agent Hub{% endblock %}
 {% block nav %}{% endblock %}
 
@@ -9,7 +10,7 @@
   <script>try { if (localStorage.getItem('agentHubSidebar') === 'hidden') document.getElementById('shell').classList.add('is-sidebar-hidden'); } catch (_) {}</script>
   <header class="topbar">
     <button type="button" class="btn btn-ghost icon-btn desktop-only" id="sidebar-toggle" data-action="toggle-sidebar" aria-controls="sidebar" aria-expanded="true" title="Hide sidebar"><svg class="icon"><use href="#i-sidebar"/></svg></button>
-    <a class="brand" href="/"><span class="brand-mark">&gt;_</span>Agent Hub</a>
+    <a class="brand" href="/">{{ brand_mark() }}Agent Hub</a>
     {# Shown only while the live connection is down. #}
     <span class="conn" id="ws-conn" hidden><span class="dot dot-danger" id="ws-dot"></span><span id="ws-label">Reconnecting</span></span>
     <div class="stats">
@@ -89,6 +90,11 @@
       <aside class="drawer" id="inspector" aria-label="Session details" aria-hidden="true">
         <div class="drawer-head"><span class="drawer-title" id="inspector-title">Details</span><button type="button" class="btn btn-ghost icon-btn btn-rename" id="inspector-rename" data-action="rename-current" title="Rename" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button type="button" class="btn btn-ghost icon-btn" data-action="close-inspector" aria-label="Close details"><svg class="icon"><use href="#i-x"/></svg></button></div>
         <div class="drawer-body" id="inspector-body"></div>
+      </aside>
+      {# A file path clicked in a terminal, shown by web-file-manager. #}
+      <aside class="drawer drawer-file" id="file-preview" tabindex="-1" aria-label="File preview" aria-hidden="true">
+        <div class="drawer-head"><span class="drawer-title" id="file-preview-title"></span><a class="btn btn-ghost icon-btn" id="file-preview-open" href="#" target="_blank" rel="noopener" title="Open in a new tab"><svg class="icon"><use href="#i-external"/></svg></a><button type="button" class="btn btn-ghost icon-btn" data-action="close-file-preview" aria-label="Close preview"><svg class="icon"><use href="#i-x"/></svg></button></div>
+        <iframe class="file-frame" id="file-preview-frame" title="File preview"></iframe>
       </aside>
     </div>
   </section>

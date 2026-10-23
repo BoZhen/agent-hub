@@ -96,8 +96,16 @@ def _static_version() -> str:
         return "0"
 
 
+def _webfm_url() -> str:
+    """web-file-manager that previews a file path clicked in a terminal
+    (AGENT_HUB_WEBFM_URL). Empty: the page uses its own host on port 7701,
+    the file manager's default."""
+    return os.environ.get("AGENT_HUB_WEBFM_URL", "").rstrip("/")
+
+
 # Register custom filters / globals
 templates.env.filters["basename"] = _basename
+templates.env.globals["webfm_url"] = _webfm_url
 templates.env.globals["static_v"] = _static_version
 
 

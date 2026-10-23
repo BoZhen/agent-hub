@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import tool_icon %}
+{% from "_macros.html" import tool_icon, brand_mark %}
 {% block title %}Agent Hub{% endblock %}
 {# resizes-content: the on-screen keyboard shrinks the page, so the reply box stays above it. #}
 {% block viewport %}width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content{% endblock %}
@@ -14,8 +14,9 @@
 
 <section class="m-view" id="m-home" aria-label="Sessions">
   <header class="m-bar">
-    <span class="brand"><span class="brand-mark">&gt;_</span>Agent Hub</span>
-    <span class="conn"><span class="dot dot-idle" id="m-dot"></span><span id="m-conn">Connecting</span></span>
+    <span class="brand">{{ brand_mark() }}Agent Hub</span>
+    {# Shown only while the stream to the Hub is down. #}
+    <span class="conn" id="m-conn" hidden><span class="dot dot-danger"></span><span>Reconnecting</span></span>
     <span class="topbar-spacer"></span>
     <a class="btn btn-ghost" href="/">Workspace</a>
   </header>
@@ -51,6 +52,16 @@
     </form>
     <p class="m-hint" id="m-hint" hidden></p>
   </div>
+</section>
+
+{# A file path tapped in the terminal, shown by web-file-manager over the session. #}
+<section class="m-view m-file" id="m-file" aria-label="File" hidden>
+  <header class="m-bar">
+    <button type="button" class="btn btn-ghost icon-btn" data-action="close-file" aria-label="Back to the session"><svg class="icon"><use href="#i-chevron-left"/></svg></button>
+    <span class="m-title"><span class="m-name" id="m-file-name"></span><span class="m-state" id="m-file-path"></span></span>
+    <a class="btn btn-ghost icon-btn" id="m-file-open" href="#" target="_blank" rel="noopener" aria-label="Open in a new tab"><svg class="icon"><use href="#i-external"/></svg></a>
+  </header>
+  <iframe class="file-frame" id="m-file-frame" title="File preview"></iframe>
 </section>
 {% endblock %}
 

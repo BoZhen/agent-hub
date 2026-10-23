@@ -12,7 +12,7 @@ const $ = id => document.getElementById(id);
 
 const TERMINAL_URL = document.body.dataset.terminalUrl;
 const TERMINAL_ORIGIN = new URL(TERMINAL_URL, location.href).origin;
-const TERMINAL_EVENT_TYPES = new Set(['webterminal:ready', 'webterminal:connected', 'webterminal:reconnecting', 'webterminal:disconnected', 'webterminal:focus']);
+const TERMINAL_EVENT_TYPES = new Set(['webterminal:ready', 'webterminal:connected', 'webterminal:reconnecting', 'webterminal:disconnected', 'webterminal:focus', 'webterminal:open-file']);
 const FILTER_KEY = 'agentHubToolFilter';
 const WORKSPACE_KEY = 'agentHubWorkspaceTabs';
 const ACTIVE_TAB_KEY = 'agentHubActiveTab';
@@ -654,6 +654,10 @@ window.addEventListener('message', event => {
   if (!frame) return;
   const type = event.data.type;
   if (!TERMINAL_EVENT_TYPES.has(type)) return;
+  if (type === 'webterminal:open-file') {
+    if (typeof event.data.path === 'string' && event.data.path) openFilePreview(event.data.path);
+    return;
+  }
   const name = frame.iframe.dataset.tmux;
   if (type === 'webterminal:ready') {
     postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()}, frame);
@@ -683,6 +687,7 @@ function eventItem(e) {
   return `<li><time>${esc(t)}</time><span class="ev ${EVENT_CLASS[e.event_type] || 'ev-start'}">${esc(verbFor(e))}</span><span class="sum">${esc(e.summary || '—')}</span></li>`;
 }
 async function openInspector(sid) {
+  if (filePreviewOpen()) closeFilePreview();
   const drawer = $('inspector');
   inspectorSid = sid;
   drawer.classList.add('is-open');
@@ -758,6 +763,45 @@ function inspectorOnEvent(data) {
   const ul = $('inspector-timeline');
   if (!ul) { openInspector(data.session_id); return; }
   ul.insertAdjacentHTML('afterbegin', eventItem({...data, created_at: new Date().toISOString()}));
+}
+/* ------------------------------------------------------------------ */
+/* File preview                                                        */
+/* ------------------------------------------------------------------ */
+/* A file path clicked in a terminal opens in web-file-manager inside the
+   right-hand panel. Its address comes from AGENT_HUB_WEBFM_URL, else this
+   host on port 7701 (the file manager's default). */
+const WEBFM_URL = (document.body.dataset.webfmUrl || `${location.protocol}//${location.hostname}:7701`).replace(/\/+$/, '');
+let previewWatch = null;  // interval that closes the panel once a terminal has the focus
+function openFilePreview(path) {
+  if (inspectorSid) closeInspector();
+  const url = `${WEBFM_URL}/?open=${encodeURIComponent(path)}`;
+  const title = $('file-preview-title');
+  title.textContent = path.replace(/\/+$/, '').split('/').pop() || path;
+  title.title = path;
+  $('file-preview-open').href = url;
+  $('file-preview-frame').src = url;
+  const drawer = $('file-preview');
+  drawer.classList.add('is-open');
+  drawer.setAttribute('aria-hidden', 'false');
+  // Like the menus, a click anywhere else closes the panel. A click in a
+  // terminal never reaches this page, but it moves the focus into that
+  // terminal's frame, also from the preview's own frame, which this page is
+  // not told about; so take the focus here and watch where it goes.
+  drawer.focus({preventScroll: true});
+  clearInterval(previewWatch);
+  previewWatch = setInterval(() => {
+    const active = document.activeElement;
+    if (active?.tagName === 'IFRAME' && active.id !== 'file-preview-frame') closeFilePreview();
+  }, 200);
+}
+function filePreviewOpen() { return $('file-preview').classList.contains('is-open'); }
+function closeFilePreview() {
+  clearInterval(previewWatch);
+  previewWatch = null;
+  const drawer = $('file-preview');
+  drawer.classList.remove('is-open');
+  drawer.setAttribute('aria-hidden', 'true');
+  $('file-preview-frame').src = 'about:blank';
 }
 function closeInspector() {
   inspectorSid = null;
@@ -1009,6 +1053,7 @@ document.addEventListener('click', event => {
     case 'mobile-sessions': setMobileMode('sessions'); break;
     case 'toggle-sidebar': setSidebarHidden(!sidebarHidden()); break;
     case 'close-inspector': closeInspector(); break;
+    case 'close-file-preview': closeFilePreview(); break;
     case 'inspect-current': if (previewState.sid) openInspector(previewState.sid); break;
     default: break;
   }
@@ -1054,6 +1099,7 @@ $('theme-button').addEventListener('click', () => togglePopover($('theme-button'
 $('utility-button').addEventListener('click', () => togglePopover($('utility-button'), $('utility-menu')));
 document.addEventListener('click', event => {
   if (!event.target.closest('.popover, [aria-haspopup]')) closePopovers();
+  if (filePreviewOpen() && !event.target.closest('#file-preview')) closeFilePreview();
 });
 // A click inside a terminal frame never reaches this document, but it takes
 // the focus away from this window, so close the menus then as well.
@@ -1149,6 +1195,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     if (!$('modal-new').hidden) { ncClose(); return; }
     if (Array.from(document.querySelectorAll('.popover')).some(p => !p.hidden)) { closePopovers(); return; }
+    if (filePreviewOpen()) { closeFilePreview(); return; }
     if (inspectorSid) { closeInspector(); return; }
     return;
   }

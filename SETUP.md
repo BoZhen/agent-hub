@@ -69,6 +69,7 @@ systemctl --user enable --now webterminal
 关键配置：
 - 环境变量 `TMUX_TMPDIR=$HOME/.tmux` — 确保和用户 shell 使用同一 tmux socket
 - 端口 7700
+- 文件预览（可选）：点击终端里的文件路径时，由 [web-file-manager](https://github.com/BoZhen/web-file-manager)（默认端口 7701）显示文件；要让 Claude Code 发出的 `file://` 超链接也能点，在 `~/.tmux.conf` 的 `terminal-features` 里给 `xterm*` 加上 `hyperlinks`。详见 README「文件预览」
 
 ### 1.4 验证
 

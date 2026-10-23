@@ -16,3 +16,17 @@
   </svg>
   {%- endif -%}
 {%- endmacro %}
+
+{# The Agent Hub mark: tmux panes on the brand square, one pane holding a
+   prompt and one an amber light (a session that needs you). Drawn on a
+   24 x 24 grid; colours come from the theme (see .brand-mark in hub.css).
+   static/icon.svg is the same mark without the prompt, for 16 px tabs. #}
+{% macro brand_mark() -%}
+  <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect class="bm-tile" width="24" height="24" rx="5.5"/>
+    <rect class="bm-line" x="4.5" y="5" width="15" height="14" rx="2.2"/>
+    <path class="bm-line" d="M11 5v14M11 12h8.5"/>
+    <path class="bm-line bm-thin" d="M6.6 9.6l1.8 1.6-1.8 1.6"/>
+    <circle class="bm-light" cx="15.3" cy="8.5" r="2.1"/>
+  </svg>
+{%- endmacro %}

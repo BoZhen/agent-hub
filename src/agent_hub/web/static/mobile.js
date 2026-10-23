@@ -103,10 +103,10 @@
     location.reload();
   }
 
+  /* The header shows nothing while the stream is up; "Reconnecting"
+     appears only while it is down. */
   function setConn(state) {
-    const live = state === 'live';
-    $('m-dot').className = 'dot ' + (live ? 'dot-active' : state === 'connecting' ? 'dot-idle' : 'dot-danger');
-    $('m-conn').textContent = live ? 'Live' : state === 'connecting' ? 'Connecting' : 'Reconnecting';
+    $('m-conn').hidden = state === 'live';
   }
 
   // ── Routing ─────────────────────────────────────────────────
@@ -115,6 +115,7 @@
     const match = location.hash.match(/^#\/s\/(.+)$/);
     const sid = match ? decodeURIComponent(match[1]) : null;
     if (sid !== openSid) {
+      closeFile();
       if (openSid) drafts.set(openSid, $('m-input').value);
       detachTerminal();
       openSid = sid;
@@ -142,16 +143,39 @@
     location.hash = '#/s/' + encodeURIComponent(sid);
   }
 
-  /* The Android Back key calls this. Closes a dialog, or leaves the
-     session view; false means there was nothing to close. */
+  /* The Android Back key calls this. Closes a dialog or the file view, or
+     leaves the session view; false means there was nothing to close. */
   function back() {
     const dialog = document.querySelector('.modal-backdrop [data-cancel]');
     if (dialog) { dialog.click(); return true; }
+    if (!$('m-file').hidden) { closeFile(); return true; }
     if (!openSid) return false;
     if (cameFromList) history.back();
     else location.replace('#/');
     cameFromList = false;
     return true;
+  }
+
+  // ── File view ───────────────────────────────────────────────
+
+  /* A file path tapped in the terminal opens in web-file-manager over the
+     session. Its address comes from AGENT_HUB_WEBFM_URL, else this host on
+     port 7701 (the file manager's default). */
+  const WEBFM_URL = (document.body.dataset.webfmUrl || `${location.protocol}//${location.hostname}:7701`).replace(/\/+$/, '');
+
+  function openFile(path) {
+    const url = `${WEBFM_URL}/?open=${encodeURIComponent(path)}`;
+    $('m-file-name').textContent = path.replace(/\/+$/, '').split('/').pop() || path;
+    $('m-file-path').textContent = path;
+    $('m-file-open').href = url;
+    $('m-file-frame').src = url;
+    $('m-file').hidden = false;
+  }
+
+  function closeFile() {
+    if ($('m-file').hidden) return;
+    $('m-file').hidden = true;
+    $('m-file-frame').src = 'about:blank';
   }
 
   // ── Rendering ───────────────────────────────────────────────
@@ -482,6 +506,10 @@
     if (!terminal || event.origin !== TERMINAL_ORIGIN || event.source !== terminal.iframe.contentWindow) return;
     if (event.data?.source !== 'web-terminal') return;
     const type = event.data.type;
+    if (type === 'webterminal:open-file') {
+      if (typeof event.data.path === 'string' && event.data.path) openFile(event.data.path);
+      return;
+    }
     if (type === 'webterminal:ready') {
       postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()});
       postToTerminal({type: 'agent-hub:visibility', visible: mode === 'terminal' && document.visibilityState === 'visible'});
@@ -519,6 +547,7 @@
     if (!button) return;
     switch (button.dataset.action) {
       case 'back': back(); break;
+      case 'close-file': closeFile(); break;
       case 'approve': act(button, () => H.api('POST', sessionUrl('/approve')), 'Approved'); break;
       case 'always': act(button, () => H.api('POST', sessionUrl('/approve?always=true')), 'Approved for good'); break;
       case 'deny': act(button, () => H.api('POST', sessionUrl('/interrupt')), 'Denied'); break;
