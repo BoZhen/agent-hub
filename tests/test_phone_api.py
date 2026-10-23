@@ -238,6 +238,8 @@ def test_stream_sends_snapshot_then_changes():
             first = await body.__anext__()
             kind, data = _parse_event(first)
             assert kind == "snapshot"
+            # A phone app checks this before it relies on the rest.
+            assert data["api"] == 1
             assert [(s["session_id"], s["unseen"], s["last_message"]) for s in data["sessions"]] == [("s1", True, "All done.")]
 
             await sessions_api.mark_seen(_request(conn), "s1")

@@ -31,6 +31,13 @@ from agent_hub.api.ws import broadcaster
 
 logger = logging.getLogger(__name__)
 
+# Version of the phone API: GET /api/stream, GET /api/attention and the
+# session actions a phone calls (seen, send, interrupt, approve). Sent in
+# every snapshot, so a phone app can tell a Hub it cannot work with. Raise
+# it only for a change that breaks an existing client; a new field or a new
+# endpoint keeps it.
+PHONE_API_VERSION = 1
+
 # Recompute at least this often, for changes nobody broadcasts.
 TICK_S = 10.0
 # A broadcast usually comes in a burst (event, then pending, then stats);
@@ -238,6 +245,7 @@ class Attention:
     def snapshot(self) -> dict:
         cutoff = time.time() - NOTICE_REPLAY_S
         return {
+            "api": PHONE_API_VERSION,
             "sessions": list(self._states.values()),
             "notices": [n for n in self._notices if n["id"] / 1000 >= cutoff],
             "server_time": datetime.now(timezone.utc).isoformat(),

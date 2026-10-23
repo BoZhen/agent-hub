@@ -102,7 +102,8 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`，Codex 是 `codex resume <id>`（有真实 UUID 时；只有扫描得到的合成 id 时退回选择器）。审批与沙箱跟随你自己的 Claude / Codex 配置，Hub 不加参数；旧版本启动的行（`claude-yolo` / `codex-yolo` / `omx-yolo`）恢复时仍按当时的参数补上。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
 
-- **已结束的 session**：侧栏行 hover 或抽屉里的 **Resume**。升级 claude / codex 后退出重开就走这里。CLI 退出或恢复失败时窗格退回一个交互 shell，tmux 和记录都还在。
+- **运行中的 session（升级 claude / codex 之后）**：侧栏行 hover、抽屉或手机页 `/m` 里的 **Restart**。CLI 退出后在同一个 tmux、同一个 pane 里运行上面的恢复命令，用上刚装的版本；打开着的终端不断开。正在跑一轮的 session 要再确认一次，因为重启会中断这一轮。右上角菜单里的 **Restart Claude sessions** / **Restart Codex sessions** 一次重启某个工具的全部运行中 session，正在跑一轮或等待审批的跳过并列出。接口：`POST /api/sessions/{id}/restart`（`?force=true` 跳过“正在跑一轮”的检查），`POST /api/restart-sessions`，body `{"tool": "claude"}` 或 `{"tool": "codex"}`。
+- **已结束的 session**：侧栏行 hover 或抽屉里的 **Resume**，恢复时就用上当前安装的版本。CLI 退出或恢复失败时窗格退回一个交互 shell，tmux 和记录都还在。
 - **整机重启**：Hub 启动 2 秒后自动把 tmux 已消失的 active/idle session 逐个恢复（间隔 0.5 s）。`AGENT_HUB_RESTORE_MODE=shell` 可改为只重建 tmux、打印命令、由你手动决定。
 - Hub 服务自身重启不影响任何 session（tmux 都还在）。
 - 抽屉里的 "Resume with" 一行显示将要运行的命令；`GET /api/sessions/{id}` 的 `resume_command` 字段是同一个值。
@@ -112,13 +113,14 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 
 手机不在电脑前，只需要知道哪个 session 需要你，并能直接回复。下面这组接口为此而设。
 
-- `GET /api/stream`：Server-Sent Events。连接后先发 `snapshot`（所有运行中的 tmux session 的状态，以及一小时内的 notice），之后只在某个状态变化时发 `session`，session 结束或被删除时发 `removed`，`POST /api/notify` 的消息作为 `notice` 发出；每 20 秒发一行注释，两端都能发现断开的连接。`GET /api/attention` 以一次 JSON 返回同样的快照。
+- `GET /api/stream`：Server-Sent Events。连接后先发 `snapshot`（接口版本 `api`、所有运行中的 tmux session 的状态，以及一小时内的 notice），之后只在某个状态变化时发 `session`，session 结束或被删除时发 `removed`，`POST /api/notify` 的消息作为 `notice` 发出；每 20 秒发一行注释，两端都能发现断开的连接。`GET /api/attention` 以一次 JSON 返回同样的快照。
 - 状态里的 `unseen` 表示上一轮结束之后还没人看过，`needs_you` 再加上等待审批的。一轮结束由 `Stop` hook 记录，hook 自带的 `last_assistant_message`（Claude 与 Codex 都有）就是 `last_message`。子代理和不在 tmux 里的 session 不在其中。
 - 以下情况算看过：手机打开这个 session（`POST /api/sessions/{id}/seen`）、从手机发出消息，或这个 session 的 tmux 终端在这一轮结束后收到输入。人在电脑前操作这个终端，手机不会被打扰；人走开了就没有输入，手机照常收到通知。
 - `POST /api/sessions/{id}/send`，body `{"text": "...", "submit": true}`：把文字以 bracketed paste 一次粘贴进 agent 所在的 pane，再按 Enter，多行文字是一条 prompt。正在等待审批（菜单里粘贴的字母可能选中选项），或 tmux 里的 agent 已经退出、只剩 shell（文字会被当成命令执行）时，返回 409。
 - `POST /api/sessions/{id}/interrupt`：在 agent 的 pane 里按 Esc，停止正在运行的这一轮，或拒绝正在等待的审批。2 秒内的第二次会被忽略，因为 Claude Code 连按两次 Esc 会打开回到之前消息的菜单。
 - `GET /api/sessions/{id}/messages?limit=30`：从 Claude / Codex 自己的 transcript 读出最近的消息（用户、助手、一行一个的工具调用）。
 - `POST /api/notify`，body `{"message": "...", "title": "..."}`：脚本给手机发一条消息，例如长任务跑完时。
+- 接口版本：`snapshot` 里的 `api`，现在是 `1`。只有会让已有客户端出错的改动才升版本；新增字段或新增接口不升。手机 App 据此判断这个 Hub 能不能用。
 
 ## 常用页面
 

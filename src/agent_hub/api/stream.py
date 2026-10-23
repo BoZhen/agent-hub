@@ -2,11 +2,12 @@
 when a session needs the user (services/attention.py).
 
 Events:
-  snapshot  {"sessions": [state…], "notices": [notice…], "server_time",
-             "page_version"}
+  snapshot  {"api", "sessions": [state…], "notices": [notice…],
+             "server_time", "page_version"}
             sent first on every connection, so a client that was offline
-            catches up by replacing what it had; page_version tells an open
-            phone page that the Hub now serves a newer one
+            catches up by replacing what it had; api is the phone API
+            version (attention.PHONE_API_VERSION); page_version tells an
+            open phone page that the Hub now serves a newer one
   session   one session's state after it changed
   removed   {"session_id"}: the session ended or was deleted
   notice    a message from POST /api/notify
