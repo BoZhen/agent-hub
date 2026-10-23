@@ -16,6 +16,11 @@ Two entry points share one implementation:
 - POST /api/sessions/{id}/resume: the same for one row, including ended
   ones.
 
+restart_session runs the same resume command for a session whose CLI is
+still running, in place of that CLI, so the session picks up a newly
+installed version (POST /api/sessions/{id}/restart and
+/api/restart-sessions).
+
 When the resumed CLI reports in (Claude fires SessionStart at once, Codex
 with the first prompt), ensure_session finds the existing row and marks
 it active. The pane falls back to an interactive shell if the CLI exits
@@ -34,7 +39,8 @@ from typing import Any
 import aiosqlite
 
 from agent_hub import db
-from agent_hub.services.session_manager import mark_hub_launched
+from agent_hub.services import tmux_input
+from agent_hub.services.session_manager import _is_claude_thinking, mark_hub_launched
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +337,131 @@ async def restore_session(
         "mode": effective_mode,
         "command": shlex.join(argv) if argv else None,
     }
+
+
+async def session_is_busy(session_row: dict[str, Any]) -> bool:
+    """Whether the session is in the middle of a turn: waiting for an
+    approval, or its pane shows the CLI's working status line (thinking,
+    streaming or running a tool)."""
+    if session_row.get("pending_tool"):
+        return True
+    name = session_row.get("tmux_session")
+    return bool(name) and await _is_claude_thinking(name)
+
+
+async def restart_session(session_row: dict[str, Any], *, config: Any = None) -> dict[str, Any]:
+    """Replace a live session's CLI with a fresh one that resumes the same
+    conversation, so the session runs the version installed now.
+
+    `tmux respawn-pane -k` swaps the process in the agent's pane for the
+    resume command. The tmux session, its name and the pane stay, so an
+    attached terminal keeps showing the pane and sees the old CLI end and
+    the new one start. The old CLI gets SIGHUP, as when its terminal
+    closes; the conversation is on disk and the resume reads it back.
+
+    Returns {"ok": True, "name", "tool", "command"} or
+    {"ok": False, "name", "error"}.
+    """
+    sid = session_row["session_id"]
+    tool = (session_row.get("tool") or "").strip()
+    name = session_row.get("tmux_session")
+    if not name:
+        return {"ok": False, "name": name, "error": "Session has no tmux"}
+    argv = resume_argv(tool, sid)
+    if not argv:
+        return {"ok": False, "name": name, "error": f"No resume command is known for tool {tool or '(none)'}"}
+    if is_codex_tool(tool) and not _UUID_RE.match(sid):
+        # Found by pane scanning only: `codex resume` would open its picker.
+        return {"ok": False, "name": name, "error": "Codex never reported this session's id, so it cannot be resumed by id"}
+    cwd = extract_cwd_from_transcript(session_row.get("transcript_path")) or session_row.get("cwd")
+    if not cwd or not os.path.isdir(cwd):
+        return {"ok": False, "name": name, "error": f"cwd not found: {cwd}"}
+
+    from agent_hub.api.tmux import _resolve_command, launch_env, session_path  # local: api imports this module
+
+    binary = _resolve_command(argv[0])
+    if not binary:
+        return {"ok": False, "name": name, "error": f"{argv[0]} not found in PATH"}
+    try:
+        pane = await tmux_input.agent_pane(name)
+    except tmux_input.TmuxInputError as e:
+        return {"ok": False, "name": name, "error": str(e)}
+
+    tmux_args = ["tmux", "respawn-pane", "-k", "-t", pane, "-c", cwd]
+    path = session_path()
+    if path:
+        tmux_args.extend(["-e", f"PATH={path}"])
+    for key, value in launch_env(tool, config).items():
+        tmux_args.extend(["-e", f"{key}={value}"])
+    tmux_args.extend(_resume_pane_command([binary, *argv[1:]]))
+    proc = await asyncio.create_subprocess_exec(
+        *tmux_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
+        return {"ok": False, "name": name, "error": f"tmux respawn-pane failed: {err}"}
+
+    # Same as a resume: keep the launch flags in `tool` should the CLI
+    # report under a new session id.
+    mark_hub_launched(name, tool)
+    logger.info("Restarted session %s in tmux=%s pane=%s (tool=%s)", sid, name, pane, tool)
+    return {"ok": True, "name": name, "tool": tool, "command": shlex.join(argv)}
+
+
+async def restart_live_sessions(
+    conn: aiosqlite.Connection, family: str, *, config: Any = None
+) -> dict[str, Any]:
+    """Restart every live Claude session (family "claude") or every live
+    Codex session (family "codex"), one after another.
+
+    A session in the middle of a turn is skipped, since the restart would
+    end that turn, and so is one that cannot be restarted (no CLI running
+    in its tmux, no session id). Subagents run inside their parent's CLI
+    and are not restarted on their own. Ended sessions need no restart:
+    resuming one starts the version installed now.
+    """
+    alive = await _list_alive_tmux_names()
+    cursor = await conn.execute(
+        "SELECT * FROM sessions "
+        "WHERE status IN ('active', 'idle') "
+        "AND tmux_session IS NOT NULL "
+        "AND parent_session_id IS NULL "
+        "ORDER BY last_seen_at DESC"
+    )
+    rows = [dict(r) for r in await cursor.fetchall()]
+    restarted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen_tmux: set[str] = set()
+    for row in rows:
+        tool = row.get("tool") or ""
+        in_family = is_codex_tool(tool) if family == "codex" else tool.startswith("claude")
+        name = row["tmux_session"]
+        if not in_family or name not in alive or name in seen_tmux:
+            continue
+        seen_tmux.add(name)
+        entry = {"session_id": row["session_id"], "name": row.get("title") or name}
+        if await session_is_busy(row):
+            skipped.append({**entry, "reason": "in the middle of a turn"})
+            continue
+        try:
+            result = await restart_session(row, config=config)
+        except Exception as e:
+            logger.exception("Restart failed for %s", row["session_id"])
+            result = {"ok": False, "error": str(e)}
+        if result.get("ok"):
+            restarted.append(entry)
+            # Same throttle as restore_all_orphans: let each CLI start
+            # before the next one.
+            await asyncio.sleep(0.5)
+        else:
+            skipped.append({**entry, "reason": result.get("error")})
+    logger.info(
+        "Restart %s sessions: %d restarted, %d skipped", family, len(restarted), len(skipped)
+    )
+    return {"tool": family, "restarted": restarted, "skipped": skipped}
 
 
 async def restore_all_orphans(

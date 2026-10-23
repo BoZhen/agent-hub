@@ -20,8 +20,11 @@ from agent_hub.services.restore import (
     _resume_hint_command,
     is_codex_tool,
     find_orphan_sessions,
+    restart_live_sessions,
+    restart_session,
     restore_all_orphans,
     restore_session,
+    session_is_busy,
 )
 
 router = APIRouter()
@@ -166,6 +169,49 @@ async def resume_one(request: Request, session_id: str):
 async def restore_one(request: Request, session_id: str):
     """Older name for /resume, kept for existing callers."""
     return await resume_one(request, session_id)
+
+
+@router.post("/sessions/{session_id}/restart")
+async def restart_one(
+    request: Request,
+    session_id: str,
+    force: bool = Query(default=False),
+):
+    """Restart a running session's CLI in its own tmux, resuming the same
+    conversation, so it runs the version installed now. A session in the
+    middle of a turn is refused unless `force` is set, since the restart
+    ends that turn."""
+    conn = request.app.state.db
+    session = await db.get_session(conn, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tmux_name = session.get("tmux_session")
+    if session["status"] == "stopped" or not tmux_name or tmux_name not in await _list_alive_tmux_names():
+        raise HTTPException(status_code=409, detail="Session is not running; resume it instead")
+    if session.get("parent_session_id"):
+        raise HTTPException(status_code=409, detail="A subagent runs inside its parent's CLI; restart the parent")
+    if not force and await session_is_busy(session):
+        raise HTTPException(status_code=409, detail="Session is in the middle of a turn")
+    result = await restart_session(session, config=request.app.state.config)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error"))
+    return result
+
+
+class RestartAllRequest(BaseModel):
+    tool: str  # "claude" or "codex"
+
+
+@router.post("/restart-sessions")
+async def restart_all(request: Request, req: RestartAllRequest):
+    """Restart every running Claude session, or every running Codex
+    session, so they run the version installed now. Sessions in the middle
+    of a turn are skipped and listed with the reason."""
+    if req.tool not in ("claude", "codex"):
+        raise HTTPException(status_code=400, detail="tool must be claude or codex")
+    return await restart_live_sessions(
+        request.app.state.db, req.tool, config=request.app.state.config
+    )
 
 
 @router.post("/sessions/{session_id}/approve")

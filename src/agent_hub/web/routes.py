@@ -28,7 +28,7 @@ def _format_elapsed(seconds: int) -> str:
 async def _enrich_running(conn, session: dict) -> dict:
     """If this session is an active session currently running a tool
     for more than RUNNING_THRESHOLD_SECONDS *and* the tmux pane still
-    shows the agent's "(N s · esc to interrupt)" marker, annotate with
+    shows the agent's working status line, annotate with
     `running_tool` and `running_elapsed_label`.
 
     The pane-state check is the ground-truth guard: without it, a
@@ -58,11 +58,11 @@ async def _enrich_running(conn, session: dict) -> dict:
         return session
 
     # Ground-truth guard against stale "running" labels: if the tmux
-    # pane no longer shows the "(... esc to interrupt ...)" status
-    # line, the tool has stopped running (user interrupted, or the
-    # agent completed its turn but never emitted a PostToolUse due
-    # to how the hook is delivered in that flow). Claude and Codex
-    # both emit this marker, so one check covers both tools.
+    # pane no longer shows the working status line, the tool has
+    # stopped running (user interrupted, or the agent completed its
+    # turn but never emitted a PostToolUse due to how the hook is
+    # delivered in that flow). _pane_shows_working knows the status
+    # lines of Claude and Codex, so one check covers both tools.
     tmux_name = session.get("tmux_session")
     if tmux_name:
         panes = await _tmux_capture(tmux_name)

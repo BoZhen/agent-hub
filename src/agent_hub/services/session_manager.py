@@ -419,25 +419,31 @@ async def mark_session_idle(
         await mgr.detach(session_id)
 
 
-_INTERRUPT_RE = None  # lazy-compiled regex (see _pane_shows_working)
+# A running turn's status line. Codex and older Claude Code end it with an
+# "esc to interrupt" hint: "(11s • esc to interrupt)", "(3s · esc to
+# interrupt)". Current Claude Code dropped the hint and shows a verb with
+# an ellipsis, then the elapsed time: "✻ Elucidating… (9m 25s · ↓ 50.6k
+# tokens · thought for 22s)". A finished turn leaves neither behind.
+_WORKING_RES = (
+    _re.compile(r"\([^)]*esc to interrupt[^)]*\)"),
+    _re.compile(r"\u2026\s*\(\d+[hms]\b"),
+)
+# Lines read from the bottom of the pane's content. The status line sits
+# above the input box, the footer and any task list.
+_WORKING_TAIL = 25
 
 
 def _pane_shows_working(pane_text: str) -> bool:
-    """Return True if a TUI status line near the pane bottom shows the
-    agent is actively running a tool / thinking / streaming.
+    """Return True if a TUI status line near the bottom of the pane's
+    content shows the agent is running a turn: thinking, streaming or
+    running a tool.
 
-    Both Claude and Codex emit a parenthesised \"(... esc to interrupt ...)\"
-    hint in their status line (Claude: \"(3s esc to interrupt)\", Codex:
-    \"(11s · esc to interrupt)\"). The parentheses requirement makes this
-    robust against free text that merely mentions the phrase.
+    tmux pads a screen the TUI has not filled with blank rows, so those
+    are dropped before taking the tail. Both patterns need the
+    parentheses, which keeps free text that mentions the phrase out.
     """
-    global _INTERRUPT_RE
-    if _INTERRUPT_RE is None:
-        import re
-        _INTERRUPT_RE = re.compile(r"\([^)]*esc to interrupt[^)]*\)")
-    lines = pane_text.splitlines()
-    tail = "\n".join(lines[-10:])
-    return bool(_INTERRUPT_RE.search(tail))
+    tail = "\n".join(pane_text.rstrip().splitlines()[-_WORKING_TAIL:])
+    return any(r.search(tail) for r in _WORKING_RES)
 
 
 async def _is_claude_thinking(tmux_name: str) -> bool:
@@ -455,8 +461,8 @@ async def _soft_idle_pass(
 
     A session is preserved as active when any of these holds:
     - Last event is PreToolUse (a tool is currently running).
-    - The pane shows Claude's \"esc to interrupt\" status line
-      (thinking, streaming, or running a tool with UI output).
+    - The pane shows the CLI's working status line (thinking,
+      streaming, or running a tool with UI output).
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=cutoff_minutes)
     cursor = await conn.execute(
@@ -760,7 +766,7 @@ async def sweep_stale_sessions(
        an idle session stays idle indefinitely as long as its tmux is
        alive, so you can resume it days later.
     2. Soft-idle: demote stale active → idle unless Claude is still
-       working (PreToolUse in flight or pane shows 'esc to interrupt').
+       working (PreToolUse in flight or the pane shows its working status line).
     """
     swept = await _sweep_dead_tmux(conn)
     await _soft_idle_pass(conn, soft_idle_minutes)

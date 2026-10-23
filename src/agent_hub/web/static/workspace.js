@@ -716,6 +716,7 @@ function renderInspector(s, events, isOrphan) {
   const fmt = iso => String(iso || '').replace('T', ' ').slice(0, 19);
   const canFork = s.tool && s.tool.includes('claude') && s.tmux_session && !s.transferred && live;
   const canResume = (isOrphan || status === 'stopped') && /^(claude|codex|omx)/.test(s.tool || '');
+  const canRestart = live && !isOrphan && s.tmux_session && !s.parent_session_id && /^(claude|codex|omx)/.test(s.tool || '') && !s.session_id.startsWith('codex-');
   $('inspector-title').textContent = s.title || s.tmux_session || s.hostname;
   let html = '';
   if (s.pending_tool) {
@@ -743,6 +744,7 @@ function renderInspector(s, events, isOrphan) {
     + (s.tmux_session && live && !isOrphan ? `<a class="btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.tmux_session)}" target="_blank">${icon('external')}New tab</a>` : '')
     + (canFork ? `<button type="button" class="btn" data-action="fork" data-sid="${esc(s.session_id)}" data-tmux="${esc(s.tmux_session)}">${icon('fork')}Fork</button>` : '')
     + `<a class="btn" href="/sessions/${encodeURIComponent(s.session_id)}">${icon('book')}Full page</a>`
+    + (canRestart ? `<button type="button" class="btn" data-action="restart" data-sid="${esc(s.session_id)}" title="Restart the CLI, resuming this conversation (picks up an update)">${icon('refresh')}Restart</button>` : '')
     + (canResume ? `<button type="button" class="btn btn-primary" data-action="resume" data-sid="${esc(s.session_id)}">${icon('play')}Resume</button>` : '')
     + (s.tmux_session && live && !isOrphan ? `<button type="button" class="btn btn-danger" data-action="kill" data-sid="${esc(s.session_id)}" data-tmux="${esc(s.tmux_session)}">${icon('power')}Kill tmux</button>` : '')
     + (status === 'idle' || status === 'stopped' ? `<button type="button" class="btn btn-danger" data-action="delete" data-sid="${esc(s.session_id)}">${icon('trash')}Delete record</button>` : '')
@@ -921,6 +923,46 @@ async function resumeSession(sid) {
     if (inspectorSid === sid) openInspector(sid);
   } catch (e) { toast(e.message, 'error'); }
 }
+/* Restart a running session's CLI so it runs a newly installed version:
+   the Hub respawns the agent's pane with the resume command, so the
+   conversation goes on in the same tmux and the open terminal stays on
+   it. A session in the middle of a turn needs a second confirmation. */
+async function restartSession(sid, btn) {
+  const card = cardFor(sid);
+  const name = card ? rowInfo(card).name : sid.slice(0, 8);
+  const ok = await H.confirmDialog({title: `Restart ${name}?`, body: 'The CLI exits and resumes this conversation in the same tmux, so it runs the version installed now. Text typed but not sent is lost.', confirmLabel: 'Restart'});
+  if (!ok) return;
+  btn?.classList.add('is-busy');
+  try {
+    try {
+      await api('POST', `/api/sessions/${sid}/restart`);
+    } catch (e) {
+      if (!/middle of a turn/.test(e.message)) throw e;
+      const force = await H.confirmDialog({title: `${name} is working`, body: 'Restarting now stops the current turn. The conversation so far is kept.', confirmLabel: 'Restart anyway', danger: true});
+      if (!force) return;
+      await api('POST', `/api/sessions/${sid}/restart?force=true`);
+    }
+    toast(`Restarted ${name}`, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn?.classList.remove('is-busy'); }
+}
+/* Restart every running Claude or every running Codex session. The Hub
+   skips sessions in the middle of a turn and says which. */
+async function restartAll(family) {
+  closePopovers();
+  const label = family === 'codex' ? 'Codex' : 'Claude';
+  const count = allRows().filter(r => r.dataset.raw !== '1' && r.dataset.toolFamily === family && r.dataset.status !== 'stopped' && r.dataset.tmux && !r.dataset.parentSid).length;
+  if (!count) { toast(`No running ${label} sessions`); return; }
+  const ok = await H.confirmDialog({title: `Restart ${count} ${label} session${count > 1 ? 's' : ''}?`, body: `Each ${label} CLI exits and resumes its conversation in the same tmux, so it runs the version installed now. Sessions in the middle of a turn are left alone.`, confirmLabel: 'Restart'});
+  if (!ok) return;
+  try {
+    const data = await api('POST', '/api/restart-sessions', {tool: family});
+    const n = data.restarted.length;
+    let message = `Restarted ${n} ${label} session${n === 1 ? '' : 's'}`;
+    if (data.skipped.length) message += ` · skipped ${data.skipped.map(s => `${s.name} (${s.reason})`).join(', ')}`;
+    toast(message, data.skipped.length ? '' : 'success', data.skipped.length ? 8000 : 2800);
+  } catch (e) { toast(e.message, 'error'); }
+}
 async function clearStopped() {
   const ok = await H.confirmDialog({title: 'Clear all ended sessions?', body: 'Removes every ended session and its events from the Hub. Transcripts on disk are untouched.', confirmLabel: 'Clear', danger: true});
   if (!ok) return;
@@ -969,6 +1011,8 @@ document.addEventListener('click', event => {
     case 'restore':
     case 'resume': resumeSession(sid); break;
     case 'restore-all': restoreAll(btn); break;
+    case 'restart': restartSession(sid, btn); break;
+    case 'restart-all': restartAll(btn.dataset.tool); break;
     case 'clear-stopped': clearStopped(); break;
     case 'toggle-group': toggleGroup(btn.closest('.group')); break;
     case 'toggle-ended': { const g = btn.closest('.group'); g.dataset.showEnded = g.dataset.showEnded === '1' ? '0' : '1'; updateGroupCounts(); break; }
