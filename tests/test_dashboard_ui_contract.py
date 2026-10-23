@@ -293,3 +293,13 @@ def test_row_buttons_are_redrawn_when_a_session_starts_or_stops_running() -> Non
     # Buttons are drawn with the row; Delete appears only on idle and ended rows.
     assert "LIVE_STATES.has(before) !== LIVE_STATES.has(status)) redrawRow(card.dataset.sid);" in WORKSPACE_JS
     assert "await replaceCard(sid);" in WORKSPACE_JS.split("function redrawRow(sid)")[1]
+
+
+def test_sidebar_width_can_be_dragged_and_is_remembered() -> None:
+    assert 'id="sidebar-resizer" role="separator"' in DASHBOARD
+    # Applied before the first paint, clamped like the drag.
+    assert "localStorage.getItem('agentHubSidebarWidth')" in DASHBOARD
+    assert "Math.min(px, 560, window.innerWidth * 0.45)" in WORKSPACE_JS
+    # Terminal frames do not take the pointer while dragging.
+    assert ".shell.is-resizing iframe { pointer-events: none; }" in HUB_CSS
+    assert "--sidebar-w: 300px;" in HUB_CSS

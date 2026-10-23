@@ -6,8 +6,13 @@
 
 {% block content %}
 <div class="shell" id="shell">
-  {# A hidden sidebar is applied before the first paint, so it does not flash. #}
-  <script>try { if (localStorage.getItem('agentHubSidebar') === 'hidden') document.getElementById('shell').classList.add('is-sidebar-hidden'); } catch (_) {}</script>
+  {# A hidden sidebar and a dragged width are applied before the first paint, so nothing jumps. #}
+  <script>try {
+    const shell = document.getElementById('shell');
+    if (localStorage.getItem('agentHubSidebar') === 'hidden') shell.classList.add('is-sidebar-hidden');
+    const w = Number(localStorage.getItem('agentHubSidebarWidth'));
+    if (w) shell.style.setProperty('--sidebar-w', Math.round(Math.max(220, Math.min(w, 560, innerWidth * 0.45))) + 'px');
+  } catch (_) {}</script>
   <header class="topbar">
     <button type="button" class="btn btn-ghost icon-btn desktop-only" id="sidebar-toggle" data-action="toggle-sidebar" aria-controls="sidebar" aria-expanded="true" title="Hide sidebar"><svg class="icon"><use href="#i-sidebar"/></svg></button>
     <a class="brand" href="/">{{ brand_mark() }}Agent Hub</a>
@@ -38,6 +43,7 @@
     </div>
   </header>
 
+  <div class="sidebar-resizer desktop-only" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-controls="sidebar" aria-label="Resize the sidebar" title="Drag to resize; double-click for the default width" tabindex="0"></div>
   <aside class="sidebar" id="sidebar" aria-label="Sessions">
     <div class="sidebar-tools">
       <label class="input-icon"><svg class="icon"><use href="#i-search"/></svg><input class="input" id="session-search" type="search" placeholder="Filter" aria-label="Filter sessions" title="Filter sessions (Ctrl+K)" autocomplete="off"></label>

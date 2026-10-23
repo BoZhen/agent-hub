@@ -652,6 +652,55 @@ function setSidebarHidden(hidden) {
   try { localStorage.setItem(SIDEBAR_KEY, hidden ? 'hidden' : 'shown'); } catch (_) {}
 }
 
+/* Sidebar width (desktop): drag its right edge, or use the arrow keys on
+   it; double-click returns to the default. The width is remembered and
+   applied before the first paint (dashboard.html). */
+const SIDEBAR_WIDTH_KEY = 'agentHubSidebarWidth';
+function clampSidebarWidth(px) { return Math.round(Math.max(220, Math.min(px, 560, window.innerWidth * 0.45))); }
+function setSidebarWidth(px, save = true) {
+  const shell = $('shell');
+  if (px == null) shell.style.removeProperty('--sidebar-w');
+  else shell.style.setProperty('--sidebar-w', clampSidebarWidth(px) + 'px');
+  if (!save) return;
+  try {
+    if (px == null) localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+    else localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(px)));
+  } catch (_) {}
+}
+(() => {
+  const handle = $('sidebar-resizer');
+  const width = () => $('sidebar').getBoundingClientRect().width;
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    $('shell').classList.add('is-resizing');
+    const left = $('shell').getBoundingClientRect().left;
+    const move = e => setSidebarWidth(e.clientX - left, false);
+    const end = e => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      $('shell').classList.remove('is-resizing');
+      setSidebarWidth(e.clientX - left);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  });
+  handle.addEventListener('dblclick', () => setSidebarWidth(null));
+  // A narrower window keeps the remembered width within 45 % of it.
+  window.addEventListener('resize', () => {
+    const set = parseFloat($('shell').style.getPropertyValue('--sidebar-w'));
+    if (set) setSidebarWidth(set, false);
+  });
+  handle.addEventListener('keydown', event => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === 'ArrowLeft') { event.preventDefault(); setSidebarWidth(width() - step); }
+    if (event.key === 'ArrowRight') { event.preventDefault(); setSidebarWidth(width() + step); }
+  });
+})();
+
 function setMobileMode(mode) {
   document.body.dataset.mobileMode = mode === 'terminal' ? 'terminal' : 'sessions';
   syncTerminalVisibility();
