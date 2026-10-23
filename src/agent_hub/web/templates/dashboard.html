@@ -113,8 +113,14 @@
       <p class="field-hint">Default model. Approvals follow your own Claude and Codex settings. Codex asks once before working in a directory it has not seen.</p>
     </div>
     <div class="field">
-      <label for="nc-name">Name</label>
-      <input class="input" id="nc-name" type="text" placeholder="Leave empty to generate one" autocomplete="off">
+      <label for="nc-display">Agent session name</label>
+      <input class="input" id="nc-display" type="text" placeholder="Optional" maxlength="80" autocomplete="off">
+      <p class="field-hint">Shown in the Hub instead of the tmux session name. You can rename it any time.</p>
+    </div>
+    <div class="field">
+      <label for="nc-name">tmux session name</label>
+      <input class="input mono" id="nc-name" type="text" placeholder="Leave empty to generate one" autocomplete="off" spellcheck="false">
+      <p class="field-hint">Fixed once created: the Hub and the terminal find the session by it. Letters, digits, - and _.</p>
     </div>
     <div class="field">
       <label for="nc-path">Working directory</label>

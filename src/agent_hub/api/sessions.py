@@ -660,6 +660,9 @@ async def set_title(request: Request, session_id: str, body: TitleRequest):
     if len(title) > 80:
         raise HTTPException(status_code=400, detail="Title is limited to 80 characters")
     await db.set_session_title(conn, session_id, title or None)
+    # The next conversation in this tmux takes the name over.
+    if session.get("tmux_session") and not session.get("parent_session_id"):
+        await tmux_input.set_tmux_title(session["tmux_session"], title or None)
     return {"ok": True, "title": title or None}
 
 

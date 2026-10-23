@@ -20,7 +20,6 @@ from agent_hub import db
 from agent_hub.api import (
     agent as agent_api,
     events,
-    internal as internal_api,
     sessions,
     stream,
     tmux,
@@ -31,11 +30,10 @@ from agent_hub.config import HubConfig
 from agent_hub.mcp.server import mcp as mcp_server, set_db as mcp_set_db
 from agent_hub.services.session_manager import (
     attach_all_active_pipes,
-    install_tmux_session_hook,
     make_pane_pipe_callback,
-    periodic_codex_discovery,
     periodic_pending_check,
     periodic_sweep,
+    remove_legacy_tmux_session_hook,
 )
 from agent_hub.services.attention import attention
 from agent_hub.services.pane_pipe import PanePipeManager, set_pipe_manager
@@ -128,13 +126,6 @@ def create_app(config: HubConfig) -> FastAPI:
             sweep_task = asyncio.create_task(
                 periodic_sweep(conn, config.stopped_retention_days)
             )
-            # Codex discovery: push (tmux session-created hook) is the
-            # fast path; this 60 s polling task is the safety net AND
-            # re-asserts the hook each tick to self-heal across tmux
-            # server restarts.
-            codex_task = asyncio.create_task(
-                periodic_codex_discovery(conn, config.hub_id, config.port)
-            )
             pending_task = asyncio.create_task(periodic_pending_check(conn, config.hub_id))
             restore_task = asyncio.create_task(restore_on_startup(conn, config.restore_mode, config))
             # Push-based pane observability: tmux pipe-pane → file →
@@ -147,7 +138,7 @@ def create_app(config: HubConfig) -> FastAPI:
             set_pipe_manager(pipe_manager)
             app.state.pipe_manager = pipe_manager
             await attach_all_active_pipes(conn)
-            await install_tmux_session_hook(config.port, verbose=True)
+            await remove_legacy_tmux_session_hook()
             # Session states for GET /api/stream (phones).
             await attention.start(conn)
             logger.info("Database initialized: %s", config.db_path)
@@ -159,15 +150,10 @@ def create_app(config: HubConfig) -> FastAPI:
             await attention.stop()
             await pipe_manager.stop()
             sweep_task.cancel()
-            codex_task.cancel()
             pending_task.cancel()
             restore_task.cancel()
             try:
                 await sweep_task
-            except asyncio.CancelledError:
-                pass
-            try:
-                await codex_task
             except asyncio.CancelledError:
                 pass
             try:
@@ -203,7 +189,6 @@ def create_app(config: HubConfig) -> FastAPI:
     app.include_router(stream.router, prefix="/api")
     app.include_router(tmux.router, prefix="/api")
     app.include_router(agent_api.router, prefix="/api")
-    app.include_router(internal_api.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(web_routes.router)
 

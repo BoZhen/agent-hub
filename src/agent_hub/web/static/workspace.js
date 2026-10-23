@@ -54,8 +54,10 @@ function rowInfo(card) {
     title: d.title || '',
   };
 }
+const LIVE_STATES = new Set(['waiting', 'running', 'active']);
 function setRowStatus(card, status, label) {
-  const changed = card.dataset.status !== status;
+  const before = card.dataset.status;
+  const changed = before !== status;
   card.dataset.status = status;
   const dot = card.querySelector('[data-role="dot"]');
   if (dot) dot.className = 'dot dot-' + status;
@@ -63,6 +65,23 @@ function setRowStatus(card, status, label) {
   if (state) state.textContent = label || STATE_LABELS[status] || status;
   if (changed) placeCard(card);
   renderWorkspaceTabs();
+  // A row's buttons follow its state (Delete on idle and ended rows, Pin
+  // and Restart until it ends), and they are drawn with the row: redraw it
+  // when it starts or stops running.
+  if (card.dataset.raw !== '1' && LIVE_STATES.has(before) !== LIVE_STATES.has(status)) redrawRow(card.dataset.sid);
+}
+/* Fetch a row again from the Hub, at most once per burst of events. */
+const rowRedraws = new Set();
+function redrawRow(sid) {
+  if (rowRedraws.has(sid)) return;
+  rowRedraws.add(sid);
+  setTimeout(async () => {
+    rowRedraws.delete(sid);
+    try {
+      await replaceCard(sid);
+      if (previewState.sid === sid) highlightRow(sid);
+    } catch (_) { /* the next reconcile tries again */ }
+  }, 400);
 }
 function setRowEvent(card, data) {
   const line = card.querySelector('[data-role="event-line"]');
@@ -373,8 +392,11 @@ function rawRowHtml(s) {
   const status = s.dead ? 'stopped' : (s.attached ? 'active' : 'idle');
   const key = RAW + s.name;
   const label = s.dead ? 'Dead' : (s.attached ? 'Attached' : 'Detached');
-  return `<div class="session-row" id="card-${esc(key)}" data-sid="${esc(key)}" data-raw="1" data-tool="tmux" data-tool-family="other" data-project="${esc(basename(s.cwd) || 'Other')}" data-cwd="${esc(s.cwd || '')}" data-host="" data-session-name="${esc(s.name)}" data-title="" data-model="" data-status="${status}" data-pending="0" data-pinned="0" data-tmux="${s.dead ? '' : esc(s.name)}">`
-    + `<button type="button" class="session-select" data-action="open" aria-label="Open ${esc(s.name)}"><span class="session-tool" aria-hidden="true">${icon('terminal')}</span><span class="session-body"><span class="session-line1"><span class="dot dot-${status}" data-role="dot"></span><span class="session-name" data-role="name">${esc(s.name)}</span><span class="badge" title="tmux session without a Hub record">shell</span><span class="session-state" data-role="state-label">${label}</span></span><span class="session-line2" data-role="event-line">${esc(s.cwd || '')}</span></span></button>`
+  // A name given at launch shows until the agent reports in (Codex does
+  // with its first prompt).
+  const shown = s.title || s.name;
+  return `<div class="session-row" id="card-${esc(key)}" data-sid="${esc(key)}" data-raw="1" data-tool="tmux" data-tool-family="other" data-project="${esc(basename(s.cwd) || 'Other')}" data-cwd="${esc(s.cwd || '')}" data-host="" data-session-name="${esc(shown)}" data-title="" data-model="" data-status="${status}" data-pending="0" data-pinned="0" data-tmux="${s.dead ? '' : esc(s.name)}">`
+    + `<button type="button" class="session-select" data-action="open" aria-label="Open ${esc(shown)}"><span class="session-tool" aria-hidden="true">${icon('terminal')}</span><span class="session-body"><span class="session-line1"><span class="dot dot-${status}" data-role="dot"></span><span class="session-name" data-role="name" title="${esc(s.name)}">${esc(shown)}</span><span class="badge" title="tmux session without a Hub record">shell</span><span class="session-state" data-role="state-label">${label}</span></span><span class="session-line2" data-role="event-line">${esc(s.cwd || '')}</span></span></button>`
     + '<div class="session-approve" data-role="approve-host"></div>'
     + `<div class="session-actions">${s.dead ? '' : `<a class="btn icon-btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(s.name)}" target="_blank" title="Open in a new tab">${icon('external', 'icon icon-sm')}</a>`}<button type="button" class="btn icon-btn btn-danger" data-action="kill" data-tmux="${esc(s.name)}" title="Kill tmux">${icon('power', 'icon icon-sm')}</button></div></div>`;
 }
@@ -1171,10 +1193,11 @@ function ncRenderDirList(data) {
 function ncOpen() {
   ncClearError();
   $('nc-name').value = '';
+  $('nc-display').value = '';
   ncSetTool('claude');
   $('modal-new').hidden = false;
   ncBrowse(ncBrowsePath || '').catch(e => ncShowError(e.message));
-  setTimeout(() => $('nc-name').focus(), 30);
+  setTimeout(() => $('nc-display').focus(), 30);
 }
 function ncClose() { $('modal-new').hidden = true; }
 async function ncCreate() {
@@ -1185,12 +1208,13 @@ async function ncCreate() {
   }
   if (!ncBrowsePath) { ncShowError('Pick a working directory first'); return; }
   const name = $('nc-name').value.trim().replace(/[–—]/g, '-');
+  const title = $('nc-display').value.trim();
   const create = $('nc-create');
   create.classList.add('is-busy');
   try {
-    const data = await api('POST', '/api/tmux/new', {name: name || null, cwd: ncBrowsePath, command: ncTool});
+    const data = await api('POST', '/api/tmux/new', {name: name || null, cwd: ncBrowsePath, command: ncTool, title: title || null});
     ncClose();
-    toast(`Started ${data.name}`, 'success');
+    toast(`Started ${data.title || data.name}`, 'success');
     await openRawTmux(data.name);
   } catch (e) {
     ncShowError(e.message);
@@ -1202,7 +1226,7 @@ document.querySelectorAll('#nc-tools .choice').forEach(el => el.addEventListener
 $('nc-cancel').addEventListener('click', ncClose);
 $('nc-create').addEventListener('click', ncCreate);
 $('nc-path').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ncBrowse($('nc-path').value.trim()).catch(e => ncShowError(e.message)); } });
-$('nc-name').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ncCreate(); } });
+['nc-name', 'nc-display'].forEach(id => $(id).addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); ncCreate(); } }));
 $('modal-new').addEventListener('click', ev => { if (ev.target.id === 'modal-new') ncClose(); });
 
 /* ------------------------------------------------------------------ */

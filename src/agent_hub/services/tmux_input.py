@@ -173,6 +173,30 @@ async def codex_panes(cwd: str) -> list[tuple[str, float]]:
     return found
 
 
+# tmux user option that holds a session's name in the Hub (its title).
+TITLE_OPTION = "@agent_hub_title"
+
+
+async def tmux_title(name: str) -> str | None:
+    """The Hub name stored on a tmux session, or None (see set_tmux_title)."""
+    # "=name:" is an exact match; set-option and show-options reject "=name".
+    rc, out, _ = await _tmux("show-options", "-qv", "-t", f"={name}:", TITLE_OPTION)
+    title = out.strip()
+    return title if rc == 0 and title else None
+
+
+async def set_tmux_title(name: str, title: str | None) -> None:
+    """Keep a session's name in the Hub on its tmux session, as a tmux user
+    option. It outlives the Hub process, so a session named at launch keeps
+    the name though Codex reports only with its first prompt, and the next
+    conversation in the same tmux (Claude's /clear, a new Codex session)
+    takes it over. A tmux that is gone is ignored."""
+    if title:
+        await _tmux("set-option", "-t", f"={name}:", TITLE_OPTION, title)
+    else:
+        await _tmux("set-option", "-u", "-t", f"={name}:", TITLE_OPTION)
+
+
 def pick_agent_pane(panes: list[tuple[str, bool, bool]]) -> str | None:
     """The pane an agent runs in, from (pane id, runs an agent, active)
     rows. Among several, the active one wins. None when no pane runs an

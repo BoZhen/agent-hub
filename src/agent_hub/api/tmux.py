@@ -13,6 +13,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from agent_hub.services import tmux_input
+
 # The launcher offers Claude Code, Codex, and — when a second config
 # directory exists — Claude Code on a second account. Each runs plain
 # with the tool's default model. Approvals and sandboxing follow the
@@ -104,6 +106,7 @@ _FORMAT = _SEP.join([
     "#{session_attached}",
     "#{session_created}",
     "#{pane_dead}",
+    "#{@agent_hub_title}",
 ])
 
 
@@ -163,6 +166,7 @@ async def _tmux_ls() -> list[dict[str, Any]]:
         if len(parts) < 5:
             continue
         name, cwd, attached, created, dead = parts[:5]
+        title = parts[5] if len(parts) > 5 else ""
         try:
             created_ts = int(created)
         except ValueError:
@@ -173,6 +177,7 @@ async def _tmux_ls() -> list[dict[str, Any]]:
             "attached": attached == "1",
             "created_at": created_ts,
             "dead": dead == "1",
+            "title": title or None,
         })
     return sessions
 
@@ -198,6 +203,15 @@ class NewTmuxRequest(BaseModel):
     name: str | None = None
     cwd: str
     command: str | None = None  # e.g. "claude" — launched inside the new tmux
+    title: str | None = None  # the session's name in the Hub; renamable later
+
+
+def clean_title(raw: str | None) -> str:
+    """A Hub name: one line, at most 80 characters (400 otherwise)."""
+    title = " ".join((raw or "").split())
+    if len(title) > 80:
+        raise HTTPException(400, "Session name is limited to 80 characters")
+    return title
 
 
 # Matches the web-terminal server's accepted name regex so every name
@@ -239,6 +253,7 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
     if not os.access(resolved, os.R_OK | os.X_OK):
         raise HTTPException(400, f"cwd is not accessible: {req.cwd}")
 
+    title = clean_title(req.title)
     cmd_path: str | None = None
     if req.command:
         if req.command not in _ALLOWED_COMMANDS:
@@ -311,8 +326,10 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
     if cmd_path:
         from agent_hub.services.session_manager import mark_hub_launched
         mark_hub_launched(name, req.command or "")
+    if title:
+        await tmux_input.set_tmux_title(name, title)
 
-    return {"name": name, "cwd": str(resolved), "command": req.command}
+    return {"name": name, "cwd": str(resolved), "command": req.command, "title": title or None}
 
 
 class KillTmuxRequest(BaseModel):

@@ -241,7 +241,7 @@ claude mcp list
 
 如果这台机器跑 Codex CLI(不只是 Claude Code),可以让 codex 事件也推送到 Hub,享受和 Claude 一致的 event feed、running state、以及 MCP 和 Bash 审批推送。hook 是 Codex 自带的功能,不需要 oh-my-codex 之类的包装层。
 
-**不配 hook 也能工作**:Hub 会 fall back 到 pane-scan 轮询(扫 tmux 找 codex TUI),session discovery + 远程审批仍然可用,只是 session 只有合成 id(`codex-<tmux>-<ts>`),dashboard 上没有事件时间线,重启后也只能用 `codex resume` 的选择器而不是精确 id 恢复。
+**Codex 会话靠 hook 进入 Hub**:不配 hook 的 Codex 会话不会出现在 Hub 里(早期版本的 tmux pane 扫描回退已经去掉)。
 
 #### 2.6.1 服务端(Hub 主机)
 
@@ -311,7 +311,7 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
    curl -s "$AGENT_HUB_URL/api/sessions?status=active" | \
      python3 -c "import sys,json; [print(s['session_id'], s['tool']) for s in json.load(sys.stdin) if s['tool']=='codex']"
    ```
-   期望:`session_id` 是 UUID 格式(如 `019d85a5-7035-...`),`tool=codex`。如果看到 `codex-<tmux>-<ts>` 格式那是 pane-scan 的 placeholder,说明 hook 没 fire 到 Hub(检查 `AGENT_HUB_URL` 和 hooks.json)。
+   期望:`session_id` 是 UUID 格式(如 `019d85a5-7035-...`),`tool=codex`。发过 prompt 仍然查不到,说明 hook 没送到 Hub(检查 `AGENT_HUB_URL`、hooks.json,以及 Hub 日志里的 `Matched codex session` / `no single tmux pane to match`)。
 
 3. 查看 event feed:
    ```bash
@@ -321,9 +321,11 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 
 #### 2.6.3 已知行为(不是 bug,但得心里有数)
 
-- **codex(0.120.0 起,0.152.1 实测仍如此)把 SessionStart hook 延迟到第一个 turn 开始**,不是进程启动。所以你刚起 codex 时 dashboard 卡片可能先是 pane-scan 创建的 placeholder;发第一条 prompt 后 hook 接管,placeholder 被自动 retire 掉,真 UUID session 显示出来。两条路径的 hybrid push + pull 就是为这种情况设计的。
+- **codex(0.120.0 起,0.163.0 实测仍如此)把 SessionStart hook 延迟到第一个 turn 开始**,不是进程启动。所以刚起的 codex 在 dashboard 上先是一个普通 tmux 会话;发第一条 prompt 后才以 Codex 的 UUID 出现。
 
-- **MCP tool 调用不触发 PreToolUse hook**(验证过 `omx_state.*`、`omx_memory.*` 等)。Codex 给 MCP 工具配了独立的 4 选项审批 UI(`› 1. Allow`),Hub 的 pane-scan parser 识别这个 UI,dashboard 仍然显示 waiting 徽章 + Approve/Always 按钮,但这条路径靠 pane-scan 而不是 hook push。MCP 审批的 detail 格式是 `<server>: <tool>`(如 `omx_state: state_get_status`)。
+- **新版 codex 在后台 app-server 里运行会话并从那里执行 hook**,hook 进程没有 `$TMUX`,`codex-hub-hook.sh` 发出的 tmux 名为空。Hub 把这样的 SessionStart 对应到同一目录下运行 codex、且此刻刚有输出的 tmux pane(恰好一个时才对应;正在跑一轮的会话所在的 pane 不算)。
+
+- **MCP tool 调用不触发 PreToolUse hook**(验证过 `omx_state.*`、`omx_memory.*` 等)。Codex 给 MCP 工具配了独立的 4 选项审批 UI(`› 1. Allow`),Hub 从 pane 的画面识别这个 UI,dashboard 仍然显示 waiting 徽章 + Approve/Always 按钮,但这条路径靠读取画面而不是 hook push。MCP 审批的 detail 格式是 `<server>: <tool>`(如 `omx_state: state_get_status`)。
 
 - **PreToolUse 每次 tool call 可能 fire 两次**(dry-run + real),两次 `tool_use_id` 不同,第一次的常常没有对应的 PostToolUse。这是 codex 内部行为,对 `_enrich_running`(基于最后一条 event 的启发式)没有影响,可以忽略。
 
@@ -343,10 +345,10 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 | tmux attach 失败 | Web Terminal 报 4404 | tmux session 已被 kill，DB 中的记录过期 |
 | Waiting 检测不到 | 远程 session 无 waiting 显示 | 依赖读取本地 transcript 文件，远程机器不支持 |
 | Model 显示 unknown | SessionStart resume 无 model | Hub 从 transcript 最后一条 assistant message 读取 |
-| codex 卡片先是 placeholder | session_id 格式 `codex-<tmux>-<ts>`，发完第一条 prompt 才变 UUID | codex 0.120.0 的 SessionStart hook 延迟到首个 turn;pane-scan 先创建 placeholder,hook 到了自动 retire(这是设计) |
+| 新起的 codex 先显示成普通 tmux 会话 | 发完第一条 prompt 才出现 codex 卡片 | codex 的 SessionStart hook 延迟到首个 turn(这是 codex 的行为) |
 | codex TUI 报 `hook returned invalid JSON output` | 控制台出现 red error 但功能正常 | wrapper 脚本必须 `echo "{}"` 作为 stdout;检查 `scripts/codex-hub-hook.sh` 最后一行 |
-| Hub 收不到 codex 事件 | dashboard 有卡但 event feed 空，session_id 是 placeholder 格式 | 检查 `~/.codex/hooks.json` 第二个 hook group 是否指向 `codex-hub-hook.sh`;辅助机检查 `AGENT_HUB_URL`;确认 `scripts/codex-hub-hook.sh` 有 `chmod +x` |
-| codex MCP 审批无 waiting 徽章 | codex 卡住等 MCP tool，dashboard 无反应 | MCP 调用不走 hook，只靠 pane-scan 3s tick —— 等一个 tick;检查 API 返回的 `pending_tool=MCP` 字段是否出现 |
+| Hub 收不到 codex 事件 | 发过 prompt 仍没有 codex 卡片 | Hub 日志若有 `no single tmux pane to match`,说明同一目录下有多个刚输出的 codex pane 或该 pane 正在跑一轮;否则检查 `~/.codex/hooks.json` 第二个 hook group 是否指向 `codex-hub-hook.sh`;辅助机检查 `AGENT_HUB_URL`;确认 `scripts/codex-hub-hook.sh` 有 `chmod +x` |
+| codex MCP 审批无 waiting 徽章 | codex 卡住等 MCP tool，dashboard 无反应 | MCP 调用不走 hook，只靠读取 pane 画面 —— 等下一次检查;检查 API 返回的 `pending_tool=MCP` 字段是否出现 |
 | `/clear` 后卡片跳到 From Tmux | 原 Sessions 标签里的会话在 `/clear` 后错误地变成 "From Tmux" | `ensure_session` 顺序反了 —— `_detect_transferred`(5s 启发式)先跑,看到 tmux 已老就返回 1。修复 `acd87b6`:orphan 查询提前,有 orphan 就继承它的 `transferred`,没有再跑启发式 |
 | 打断工具后 Running 状态卡死 | Esc/Ctrl-C 中断工具后 dashboard 一直显示 `Running Bash (7m 33s)`,永不清除 | `_enrich_running` 只看 "last event=PreToolUse + elapsed>30s",中断后没 PostToolUse 收尾,elapsed 无界。修复 `2f163d1`:在条件满足后加 `_pane_shows_working` ground truth 校验,pane 不再显示 `(N s · esc to interrupt)` 就不标 running |
 | 连续审批 dashboard 不显示新 pending | 点击 Approve 后马上出现的第二个 pending(尤其是同签名,如两次 `Bash ls`)在 dashboard 不显示,必须刷新页面才看到 | `approve_session` 原本只发 tmux key,不清 DB 的 `pending_tool/detail/always_label`,`periodic_pending_check` 的 diff 比较是对 DB 缓存的 → 下一次 tick parse 出完全相同的签名时被"无变化"过滤掉。**两个协作修复**:(1) `approve_session` 成功发 key 后清 DB + 调用 `mark_approved_suppress(sid, *sig)` 记录 3s 内存宽限;(2) `periodic_pending_check` 在 `if parsed:` 分支检查 `_APPROVED_SUPPRESS`,sig 匹配且在窗口内则 `continue` 跳过(防止 Claude/Codex 还没 dismiss 导致徽章闪回),超时或 sig 变了则 `pop` 并正常广播。最坏延迟 6s(同签名 + 刚好赶在宽限末尾) |

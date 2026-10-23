@@ -10,8 +10,8 @@
 # No wrapper such as oh-my-codex is required. See SETUP.md 2.6.
 #
 # Codex fires SessionStart when the first prompt of a session is
-# submitted, not at process start. Until then the Hub only knows the
-# session from tmux pane scanning (session_manager.py).
+# submitted, not at process start. Until then the session shows in the
+# Hub as a plain tmux session.
 #
 # Current Codex runs a session in its app-server, a background process
 # outside the session's terminal, and runs the hooks from there, so $TMUX

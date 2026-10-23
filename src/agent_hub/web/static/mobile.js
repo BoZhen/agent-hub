@@ -332,7 +332,8 @@
     $('m-send').disabled = !!hint;
     $('m-esc').disabled = !s;
     // Restart needs a running CLI in tmux and an id to resume; a Codex
-    // session found only by pane scanning (codex-<tmux>-<time>) has none.
+    // session found by pane scanning in earlier Hub versions
+    // (codex-<tmux>-<time>) has none.
     $('m-restart').hidden = !(s && s.tmux_session && /^(claude|codex|omx)/.test(s.tool) && !s.session_id.startsWith('codex-'));
     $('m-hint').hidden = !hint;
     $('m-hint').textContent = hint;

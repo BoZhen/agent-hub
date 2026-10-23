@@ -81,17 +81,13 @@ Claude 通过本地 hooks 将事件推送到 Hub。推荐按 `SETUP.md` 或本�
 
 ### Codex CLI
 
-支持两种方式：
+Codex 通过自带的 hook 机制接入（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.codex/hooks.json`）。把 `scripts/codex-hub-hook.sh` 注册进去，Codex 事件就会桥接到 Hub，不需要 oh-my-codex 之类的包装层。配置步骤见 `SETUP.md` 2.6。
 
-1. **推荐：Codex 原生 hook 模式**  
-   Codex 自带 hook 机制（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.codex/hooks.json`）。把 `scripts/codex-hub-hook.sh` 注册进去，Codex 事件就会桥接到 Hub，不需要 oh-my-codex 之类的包装层。配置步骤见 `SETUP.md` 2.6。
-
-2. **回退：tmux 扫描模式**  
-   未配置 hook 时，Hub 仍可通过 tmux pane 扫描发现 Codex 会话并提供基础管理能力，但会话只有合成 id，没有事件时间线。
-
-注意：Codex 在第一条 prompt 提交时才触发 SessionStart hook。刚启动、还没说话的 Codex 会话在 Hub 里先以扫描得到的合成 id 出现，第一条 prompt 之后自动换成 Codex 自己的会话 id。
+注意：Codex 在第一条 prompt 提交时才触发 SessionStart hook。刚启动、还没说话的 Codex 会话在 Hub 里先是一个普通的 tmux 会话，发出第一条 prompt 之后才以 Codex 自己的会话 id 出现。
 
 新版 Codex 在后台的 app-server 里运行会话，hook 也从那里执行，不在会话所在的终端里，所以 hook 拿不到 tmux 名。Hub 收到没有 tmux 名的 Codex SessionStart 时，找在同一目录运行 codex、并且此刻刚有输出的那个 tmux pane（提交第一条 prompt 时 TUI 会重画），只有恰好一个时才对应上；正在跑一轮的会话所在的 pane 不算。同一目录下 tmux 外的 Codex 不会改动这个 pane，因此不会被认错。
+
+早期版本的 Hub 还会扫描 tmux pane，给没有 hook 的 Codex 会话建一个合成 id（`codex-<tmux>-<ts>`）的记录。这个回退已经去掉。等待审批的提示仍然从 pane 的画面识别：Codex 没有审批 hook，Claude 也是这样识别的。
 
 ## 会话跟踪范围（仅 tmux）
 
@@ -113,7 +109,7 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 ## 恢复会话（升级 CLI、重启机器之后）
 
-Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`，Codex 是 `codex resume <id>`（有真实 UUID 时；只有扫描得到的合成 id 时退回选择器）。审批与沙箱跟随你自己的 Claude / Codex 配置，Hub 不加参数；旧版本启动的行（`claude-yolo` / `codex-yolo` / `omx-yolo`）恢复时仍按当时的参数补上。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
+Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`，Codex 是 `codex resume <id>`（早期版本扫描得到的合成 id 不是 Codex 的会话 id，这类旧记录退回选择器）。审批与沙箱跟随你自己的 Claude / Codex 配置，Hub 不加参数；旧版本启动的行（`claude-yolo` / `codex-yolo` / `omx-yolo`）恢复时仍按当时的参数补上。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
 
 - **运行中的 session（升级 claude / codex 之后）**：侧栏行 hover、抽屉或手机页 `/m` 里的 **Restart**。CLI 退出后在同一个 tmux、同一个 pane 里运行上面的恢复命令，用上刚装的版本；打开着的终端不断开。正在跑一轮的 session 要再确认一次，因为重启会中断这一轮。右上角菜单里的 **Restart Claude sessions** / **Restart Codex sessions** 一次重启某个工具的全部运行中 session，正在跑一轮或等待审批的跳过并列出。接口：`POST /api/sessions/{id}/restart`（`?force=true` 跳过“正在跑一轮”的检查），`POST /api/restart-sessions`，body `{"tool": "claude"}` 或 `{"tool": "codex"}`。
 - **已结束的 session**：侧栏行 hover 或抽屉里的 **Resume**，恢复时就用上当前安装的版本。CLI 退出或恢复失败时窗格退回一个交互 shell，tmux 和记录都还在。

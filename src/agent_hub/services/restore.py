@@ -119,8 +119,8 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
 
     A codex session that reported through the hook carries Codex's own
     UUID, which `codex resume` accepts directly. A session that was only
-    discovered by pane scanning has a synthetic id (codex-<tmux>-<ts>), so
-    the interactive picker is used. "omx-yolo" rows predate the bare-codex
+    discovered by pane scanning (earlier Hub versions) has a synthetic id
+    (codex-<tmux>-<ts>), so the interactive picker is used. "omx-yolo" rows predate the bare-codex
     launcher; `omx --madmax` was an alias for the bypass flag, so the same
     codex command resumes them whether or not oh-my-codex is installed.
     """
@@ -203,7 +203,7 @@ async def find_orphan_sessions(conn: aiosqlite.Connection) -> list[dict[str, Any
     """
     alive = await _list_alive_tmux_names()
     cursor = await conn.execute(
-        "SELECT session_id, tmux_session, cwd, tool, model, status, transcript_path "
+        "SELECT session_id, tmux_session, cwd, tool, model, status, transcript_path, title "
         "FROM sessions "
         "WHERE tmux_session IS NOT NULL "
         "AND status IN ('active', 'idle') "
@@ -320,6 +320,9 @@ async def restore_session(
     # Mark as hub-launched so the CLI's SessionStart keeps the launch
     # flags in `tool` and is never classified as "transferred".
     mark_hub_launched(name, tool)
+    # The new tmux carries the session's name in the Hub, as at launch.
+    if session_row.get("title"):
+        await tmux_input.set_tmux_title(name, session_row["title"])
     if name != old_name:
         await db.update_session_tmux(conn, sid, name)
     if session_row.get("status") == "stopped":
@@ -371,7 +374,8 @@ async def restart_session(session_row: dict[str, Any], *, config: Any = None) ->
     if not argv:
         return {"ok": False, "name": name, "error": f"No resume command is known for tool {tool or '(none)'}"}
     if is_codex_tool(tool) and not _UUID_RE.match(sid):
-        # Found by pane scanning only: `codex resume` would open its picker.
+        # Found by pane scanning (earlier Hub versions): `codex resume`
+        # would open its picker.
         return {"ok": False, "name": name, "error": "Codex never reported this session's id, so it cannot be resumed by id"}
     cwd = extract_cwd_from_transcript(session_row.get("transcript_path")) or session_row.get("cwd")
     if not cwd or not os.path.isdir(cwd):

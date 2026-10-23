@@ -48,7 +48,7 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
     The hooks report the path (stored as transcript_path). Without it the
     file is looked up by session id: Claude under each config directory,
     Codex under ~/.codex/sessions. A Codex session the Hub only knows from
-    pane scanning has a made-up id and no transcript yet.
+    pane scanning (earlier Hub versions) has a made-up id and no transcript.
     """
     path = session.get("transcript_path")
     if path and os.path.isfile(path):

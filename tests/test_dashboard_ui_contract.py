@@ -279,3 +279,17 @@ def test_tab_bar_folder_button_browses_the_session_directory() -> None:
     assert 'id="preview-folder" data-action="open-folder"' in tabbar
     assert "case 'open-folder': toggleSessionFolder(); break;" in WORKSPACE_JS
     assert "else openFilePreview(previewState.cwd);" in WORKSPACE_JS
+
+
+def test_new_session_dialog_names_tmux_and_the_agent_session_apart() -> None:
+    assert '<label for="nc-display">Agent session name</label>' in DASHBOARD
+    assert '<label for="nc-name">tmux session name</label>' in DASHBOARD
+    assert "title: title || null" in WORKSPACE_JS
+    # A launched session's plain tmux row shows the name until the agent reports in.
+    assert "const shown = s.title || s.name;" in WORKSPACE_JS
+
+
+def test_row_buttons_are_redrawn_when_a_session_starts_or_stops_running() -> None:
+    # Buttons are drawn with the row; Delete appears only on idle and ended rows.
+    assert "LIVE_STATES.has(before) !== LIVE_STATES.has(status)) redrawRow(card.dataset.sid);" in WORKSPACE_JS
+    assert "await replaceCard(sid);" in WORKSPACE_JS.split("function redrawRow(sid)")[1]

@@ -70,20 +70,17 @@ Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观�
 1. **Claude Code（Hook Push）**  
    通过本地 hook 将事件推送到 Hub。
 
-2. **Codex CLI + OMX（Hook Push）**  
-   借助 oh-my-codex 提供的原生 hook，再由桥接脚本转发到 Hub。
-
-3. **Codex CLI（tmux 扫描回退）**  
-   未启用 OMX 时，Hub 通过周期性扫描 tmux pane 识别 Codex 会话并推断状态。
+2. **Codex CLI（Hook Push）**  
+   Codex 自带 hook，由桥接脚本 `scripts/codex-hub-hook.sh` 转发到 Hub。hook 不带 tmux 名时，Hub 按目录和 pane 输出把会话对应到 tmux（见 10.1）。
 
 总体关系如下：
 
 ```text
 Claude Code hooks  ───────┐
                           │
-Codex + OMX hooks ────────┼──▶ Agent Hub (FastAPI)
+Codex hooks ──────────────┼──▶ Agent Hub (FastAPI)
                           │       ├─ REST API
-Bare Codex tmux scan ─────┘       ├─ Web UI
+tmux panes (approvals) ───┘       ├─ Web UI
                                   ├─ WebSocket
                                   ├─ MCP SSE
                                   ├─ Phone stream (SSE)
@@ -132,7 +129,7 @@ Other Agents   ◀──────────── MCP SSE
 位于 `src/agent_hub/services/`，承载主要业务逻辑：
 
 - `event_processor.py`：事件落库、摘要生成、广播
-- `session_manager.py`：状态机、tmux 扫描、审批检测、生命周期维护
+- `session_manager.py`：状态机、审批检测（读取 pane 画面）、Codex 会话与 tmux 的对应、生命周期维护
 - `attention.py`：手机推送用的 session 状态（见 13.3）
 - `tmux_input.py`：从终端之外向 agent 所在的 pane 粘贴文字、按键（见 9.3）
 - `conversation.py`：从 Claude / Codex 的 transcript 读出最近的消息
@@ -157,9 +154,9 @@ Other Agents   ◀──────────── MCP SSE
 ```text
 Claude Code CLI       ──[HTTP / command hooks]────────┐
                                                       │
-Codex CLI + OMX      ──[native hook -> bridge]────────┼──▶ Agent Hub
+Codex CLI            ──[native hook -> bridge]────────┼──▶ Agent Hub
                                                       │      ├─ FastAPI API
-Bare Codex CLI       ◀─[tmux capture-pane polling]────┘      ├─ Web UI
+tmux panes           ◀─[capture-pane: approvals]──────┘      ├─ Web UI
                                                              ├─ WebSocket
                                                              ├─ MCP SSE
                                                              ├─ Phone stream (SSE)
@@ -173,8 +170,7 @@ Other MCP Clients     ◀──────────── /mcp/sse
 该拓扑反映了三类输入路径：
 
 - Claude 通过 hook 主动推送事件
-- Codex + OMX 通过桥接脚本复用相同事件入口
-- 未接入 hook 的 Codex 通过 tmux 扫描维持发现与状态判断
+- Codex 通过自带 hook 和桥接脚本复用相同事件入口
 
 ### 5.4 外部接口总览
 
@@ -401,9 +397,6 @@ tmux 是 Agent Hub 的关键基础设施，用于承载以下能力：
    - 是否仍在运行工具
    - 是否属于 Codex pane
 
-4. **回退发现机制**  
-   对未接入原生 hook 的 Codex 会话，tmux 扫描是发现与状态维持的基础。
-
 ### 9.1 远程审批策略
 
 审批逻辑按 CLI 类型区分：
@@ -463,26 +456,20 @@ Codex 解析器把**检测**和**分类**解耦，以避免 Claude 解析器从�
 
 ## 10. Codex 支持策略
 
-Codex 支持分为两个层次：
+### 10.1 原生 Hook
 
-### 10.1 首选路径：OMX Hook
+Codex 自带 hook（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.codex/hooks.json`），桥接脚本把事件转发到 `/api/events?tool=codex`。此路径具备完整事件时间线、工具名称与上下文，以及按 Codex 会话 id 的恢复与重启。
 
-在启用 oh-my-codex 后，Codex 可通过桥接脚本向 `/api/events?tool=codex` 推送原生事件。此路径具备：
+两点 Codex 自身的行为决定了 Hub 的处理方式：
 
-- 完整事件时间线
-- 更准确的工具名称与上下文
-- 更及时的状态更新
+- SessionStart 在第一条 prompt 提交时才触发。之前的会话在 Hub 里是一个普通 tmux 会话。
+- 新版 Codex 在后台的 app-server 里运行会话，hook 也从那里执行，不在会话所在的终端里，所以 hook 没有 `$TMUX`，桥接脚本发出的 tmux 名为空。Hub 把这样的 SessionStart 对应到在同一目录运行 codex、且在 15 秒内有输出的 tmux pane（提交 prompt 时 TUI 会重画），恰好一个时才对应；正在跑一轮的会话所在的 pane 不算（`session_manager.match_codex_tmux`）。同一目录下 tmux 外的 Codex 不改动这个 pane，因此不会被认错。之后的事件按会话 id 找到这一行。
 
-### 10.2 回退路径：tmux Pane 扫描
+等待审批仍从 pane 的画面识别（第 9 节），因为 Codex 没有审批 hook。
 
-未启用 OMX 时，系统通过周期性扫描 tmux pane：
+### 10.2 已去掉的 tmux 扫描
 
-- 识别 Codex pane
-- 基于 pane 内容 hash 判断是否有活动
-- 解析审批界面
-- 更新活跃/空闲状态
-
-该模式能够提供基础管理能力，但事件流不如 hook 模式完整。
+早期 Codex 没有 hook，Hub 周期性扫描 tmux pane：识别 Codex pane，为它建一个合成 id（`codex-<tmux>-<ts>`）的记录，并按 pane 内容 hash 的变化判断活跃。2026-10 去掉：原生 hook 已覆盖发现与状态，而按 hash 判断活跃会把任何重画都算作活动。旧版本留下的合成 id 记录仍可显示与删除，恢复时退回 `codex resume` 的选择器。Hub 启动时会移除旧版本在 tmux 里装的 `session-created` hook。
 
 ---
 
@@ -709,7 +696,7 @@ src/agent_hub/
 
 Agent Hub 的核心设计可以概括为：
 
-- 以 **hook + tmux 扫描** 作为事件与状态来源
+- 以 **hook + pane 画面读取（审批）** 作为事件与状态来源
 - 以 **SQLite** 作为单机状态存储
 - 以 **FastAPI + WebSocket + Jinja2** 作为交互层
 - 以 **tmux** 作为会话持久化与远程控制基础设施
