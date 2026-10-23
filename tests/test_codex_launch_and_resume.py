@@ -26,8 +26,8 @@ BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 
 
 def test_launcher_runs_plain_claude_and_plain_codex():
-    assert _ALLOWED_COMMANDS == {"claude", "claude2", "codex"}
-    for key in ("claude", "codex"):
+    assert _ALLOWED_COMMANDS == {"claude", "claude2", "codex", "pi"}
+    for key in ("claude", "codex", "pi"):
         assert _COMMAND_BIN[key] == key
         assert _COMMAND_ARGS[key] == []
         assert _NAME_PREFIX[key] == key

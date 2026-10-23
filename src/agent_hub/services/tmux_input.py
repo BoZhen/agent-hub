@@ -18,8 +18,9 @@ import time
 
 TMUX = "tmux"
 # Process names of an agent CLI. An npm install runs as `node`, so a node
-# process counts when its command line names one of them.
-AGENT_COMMANDS = ("claude", "codex")
+# process counts when its command line names one of them. pi sets its
+# process title to "pi".
+AGENT_COMMANDS = ("claude", "codex", "pi")
 _TREE_DEPTH = 6
 
 _buffers = itertools.count(1)
@@ -30,7 +31,7 @@ class TmuxInputError(RuntimeError):
 
 
 class NoAgentError(TmuxInputError):
-    """The tmux exists but no pane runs claude or codex (the CLI exited
+    """The tmux exists but no pane runs an agent CLI (the CLI exited
     and a shell is left). Typing there would run the text as a command."""
 
 
@@ -84,11 +85,12 @@ def _is_agent(pid: int, name: str) -> bool:
         os.path.basename(script) in AGENT_COMMANDS
         or "@anthropic-ai/claude-code" in script
         or "@openai/codex" in script
+        or "/pi-coding-agent/" in script
     )
 
 
 def runs_agent(pane_pid: int, table: dict[int, tuple[int, str]]) -> bool:
-    """Whether claude or codex runs in the pane's process tree.
+    """Whether an agent CLI (claude, codex, pi) runs in the pane's process tree.
 
     A pane's own foreground process is not enough: the Hub resumes a
     session as `bash -c '...; claude --resume <id>; exec $SHELL -i'`, and

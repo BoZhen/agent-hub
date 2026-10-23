@@ -199,16 +199,16 @@ async def restart_one(
 
 
 class RestartAllRequest(BaseModel):
-    tool: str  # "claude" or "codex"
+    tool: str  # "claude", "codex" or "pi"
 
 
 @router.post("/restart-sessions")
 async def restart_all(request: Request, req: RestartAllRequest):
-    """Restart every running Claude session, or every running Codex
-    session, so they run the version installed now. Sessions in the middle
-    of a turn are skipped and listed with the reason."""
-    if req.tool not in ("claude", "codex"):
-        raise HTTPException(status_code=400, detail="tool must be claude or codex")
+    """Restart every running session of one CLI (Claude, Codex or pi), so
+    they run the version installed now. Sessions in the middle of a turn
+    are skipped and listed with the reason."""
+    if req.tool not in ("claude", "codex", "pi"):
+        raise HTTPException(status_code=400, detail="tool must be claude, codex or pi")
     return await restart_live_sessions(
         request.app.state.db, req.tool, config=request.app.state.config
     )

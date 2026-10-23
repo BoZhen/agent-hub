@@ -22,7 +22,8 @@ from agent_hub.services import tmux_input
 # settings.json; Codex: approval_policy and sandbox_mode in config.toml),
 # so no flag is added. Codex runs bare: its hooks are a native feature
 # (`[features] hooks = true` plus ~/.codex/hooks.json), so no wrapper
-# such as oh-my-codex is needed.
+# such as oh-my-codex is needed. pi reports through the extension in
+# scripts/pi-hub-extension.js and does not ask before running tools.
 # The keys double as the session's `tool` value once hooks report in, so
 # restore.py can rebuild the same command and environment on resume;
 # keep them stable. "claude-yolo", "codex-yolo" and "omx-yolo" are
@@ -32,6 +33,7 @@ _ALLOWED_COMMANDS = {
     "claude",
     "claude2",
     "codex",
+    "pi",
 }
 
 # Maps a virtual command key → the actual binary name that gets resolved
@@ -40,6 +42,7 @@ _COMMAND_BIN: dict[str, str] = {
     "claude": "claude",
     "claude2": "claude",
     "codex": "codex",
+    "pi": "pi",
 }
 
 # Extra args appended after the resolved command path.
@@ -47,14 +50,16 @@ _COMMAND_ARGS: dict[str, list[str]] = {
     "claude": [],
     "claude2": [],
     "codex": [],
+    "pi": [],
 }
 
 # Auto-name prefix for the generated tmux name: "claude-<workdir>-N",
-# "claude2-<workdir>-N" and "codex-<workdir>-N".
+# "claude2-<workdir>-N", "codex-<workdir>-N" and "pi-<workdir>-N".
 _NAME_PREFIX: dict[str, str] = {
     "claude": "claude",
     "claude2": "claude2",
     "codex": "codex",
+    "pi": "pi",
 }
 
 
@@ -339,6 +344,9 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
         tmux_args.extend(["-e", f"{key}={value}"])
     if cmd_path:
         argv = [cmd_path, *_COMMAND_ARGS.get(req.command or "", [])]
+        if req.command == "pi" and title:
+            # pi keeps a session name of its own; give it the same one.
+            argv += ["--name", title]
         tmux_args.extend(wait_for_terminal(argv) if req.command == "codex" else argv)
 
     proc = await asyncio.create_subprocess_exec(

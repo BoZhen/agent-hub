@@ -73,6 +73,9 @@ Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观�
 2. **Codex CLI（Hook Push）**  
    Codex 自带 hook，由桥接脚本 `scripts/codex-hub-hook.sh` 转发到 Hub。hook 不带 tmux 名时，Hub 按目录和 pane 输出把会话对应到 tmux（见 10.1）。
 
+3. **pi（扩展 Push）**  
+   pi 扩展 `scripts/pi-hub-extension.js` 在 pi 进程内接收事件，按 Claude hook 的格式发到 Hub（见 10.3）。
+
 总体关系如下：
 
 ```text
@@ -454,7 +457,7 @@ Codex 解析器把**检测**和**分类**解耦，以避免 Claude 解析器从�
 
 ---
 
-## 10. Codex 支持策略
+## 10. Codex 与 pi 支持策略
 
 ### 10.1 原生 Hook
 
@@ -471,7 +474,15 @@ Codex 自带 hook（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.c
 
 Codex 只在启动时向终端询问一次背景色（OSC 11，等 250 ms），得到回答才给用户的 prompt 和输入框加底色，之后不再询问。tmux 只在有终端连着这个会话时才回答。Hub 启动的 tmux 在后台，Web Terminal 还没连上，Codex 得不到回答，用户的文字和 Codex 的回答就没有区别。所以 Hub 启动、恢复、重启 Codex 时，pane 先由 bash 每 0.25 秒问一次背景色，有终端回答就启动 Codex，最多等 `CODEX_TERMINAL_WAIT_S`（10 秒，`api/tmux.py` 的 `wait_for_terminal` / `terminal_wait_sh`）。新建会话后界面马上打开终端，通常等一秒左右。没有人打开的会话到时照常启动，只是没有底色。底色按启动时终端的主题计算，换主题后要 Restart 才跟着变。Claude Code 不询问背景色，不等。
 
-### 10.3 已去掉的 tmux 扫描
+### 10.3 pi
+
+pi 没有 hook 配置，扩展在 pi 进程内接收它的生命周期事件。`scripts/pi-hub-extension.js` 把这些事件换成 Claude hook 的格式发到 `/api/events?tool=pi`：`session_start` → SessionStart（`reload` 不发），`before_agent_start`（用户输入）→ UserPromptSubmit，`tool_execution_start/end` → PreToolUse / PostToolUse，`agent_settled` → Stop（带最后一条回复）。`session_info_changed`（`/name`）发到 `/api/sessions/{id}/title`。工具名换成 Claude 的名字（`bash` → Bash，`read` → Read，`find` → Glob 等），参数只带命令、文件路径或搜索模式，所以摘要、脱敏和手机页沿用 Claude 的处理。请求一个接一个地发，Hub 收到的顺序与 pi 触发的顺序一致。
+
+扩展在 pi 进程里运行，`$TMUX` 可用，tmux 名在第一次发事件时取一次。只在 mode 为 `tui` 且有 `$TMUX` 时发，RPC / JSON / print 模式（把 pi 当子进程运行的控制台）不发。
+
+Hub 侧：`tool` 为 `pi`，进程名 `pi`（pi 设置了 process title），恢复与重启用 `pi --session <id>`，启动时有名字就加 `--name`。pi 不在运行工具前询问，`parse_one` 对 pi 直接返回，不读画面找审批。“工作中”提示 `Working (escape to interrupt)` 由 `_WORKING_RES` 识别。会话文件 `~/.pi/agent/sessions/--<dir>--/<时间>_<id>.jsonl` 供手机页的 Text 视图（`conversation._pi_items`）与用量统计（`read_usage`）读取。
+
+### 10.4 已去掉的 tmux 扫描
 
 早期 Codex 没有 hook，Hub 周期性扫描 tmux pane：识别 Codex pane，为它建一个合成 id（`codex-<tmux>-<ts>`）的记录，并按 pane 内容 hash 的变化判断活跃。2026-10 去掉：原生 hook 已覆盖发现与状态，而按 hash 判断活跃会把任何重画都算作活动。旧版本留下的合成 id 记录仍可显示与删除，恢复时退回 `codex resume` 的选择器。Hub 启动时会移除旧版本在 tmux 里装的 `session-created` hook。
 
@@ -623,6 +634,7 @@ Hook 配置与脚本接入属于部署说明，不在本文档展开写入本机
 - `README.md`
 - `SETUP.md`
 - `scripts/codex-hub-hook.sh`
+- `scripts/pi-hub-extension.js`
 
 ---
 

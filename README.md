@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服务，用于集中查看会话状态、事件时间线、审批状态与 tmux 终端入口。
+Agent Hub 是一个面向 **Claude Code**、**Codex CLI** 与 **pi** 的会话管理服务，用于集中查看会话状态、事件时间线、审批状态与 tmux 终端入口。
 
 ## 界面预览
 
@@ -19,14 +19,14 @@ Agent Hub 是一个面向 **Claude Code** 与 **Codex CLI** 的会话管理服�
 
 ## 核心能力
 
-- 统一管理 Claude Code 与 Codex CLI 会话
+- 统一管理 Claude Code、Codex CLI 与 pi 会话
 - 记录会话事件并在 Dashboard 中实时展示
 - 基于 tmux 进行远程审批与终端接入
 - 按项目分组的 session 导航（活跃 / 空闲 / 已结束同组展示）、待处理队列、浏览器工作集标签、session 重命名与详情抽屉
 - 单一样式表（无 Tailwind / 无前端构建），6 套暗色 + 6 套亮色主题，并与 Web Terminal 同步
 - 手机端独立 Session/Terminal 模式
 - 终端里的文件路径可以点击，在右侧面板（手机上全屏）预览图片、PDF、Markdown 与代码（见「文件预览」）
-- 运行中的 session 可一键重启 CLI，升级 claude / codex 后用上新版本（见「恢复会话」）
+- 运行中的 session 可一键重启 CLI，升级 claude / codex / pi 后用上新版本（见「恢复会话」）
 - 通过 MCP SSE 暴露查询接口
 - 通过 `GET /api/stream`（Server-Sent Events）向手机推送需要你处理的 session：一轮结束后还没看过的，以及等待审批的（见「手机接口」）
 
@@ -91,6 +91,17 @@ Codex 只在启动时向终端询问一次背景色，得到回答才给你输�
 
 早期版本的 Hub 还会扫描 tmux pane，给没有 hook 的 Codex 会话建一个合成 id（`codex-<tmux>-<ts>`）的记录。这个回退已经去掉。等待审批的提示仍然从 pane 的画面识别：Codex 没有审批 hook，Claude 也是这样识别的。
 
+### pi
+
+[pi](https://pi.dev)（`@earendil-works/pi-coding-agent`）没有 hook 配置，由扩展接收它的事件。`scripts/pi-hub-extension.js` 是一个 pi 扩展：链接到 `~/.pi/agent/extensions/` 之后，tmux 里运行的 pi 会把 SessionStart、UserPromptSubmit、PreToolUse、PostToolUse、Stop 按 Claude hook 的格式发到 Hub。pi 不在 tmux 里、或者不是终端界面（RPC / JSON / print 模式，例如把 pi 当子进程运行的控制台）时，扩展什么都不发。配置步骤见 `SETUP.md` 2.7。
+
+- 在 pi 里用 `/name` 或 `--name` 起的名字就是 Hub 里的名字。在 Hub 的 New session 里填了名字，Hub 用 `pi --name` 把同一个名字交给 pi。
+- 恢复与重启用 `pi --session <id>`。
+- pi 运行工具前不询问，所以 pi 的 session 没有“等待审批”，只有活跃、空闲和一轮结束后未看。
+- 手机页的 Text 视图从 pi 自己的会话文件（`~/.pi/agent/sessions/`）读消息。pi 的会话文件是树形的（`/tree` 分支），读出的是文件末尾最近写入的部分。
+- 本机安装了 `pi` 时，New session、侧栏的工具筛选和右上角菜单的 Restart 才出现 pi。
+- tmux 3.4 需要在 `~/.tmux.conf` 加 `set -g extended-keys on`，pi 才能区分 Shift+Enter 与 Enter；否则 pi 启动时会提示。
+
 ## 会话跟踪范围（仅 tmux）
 
 Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体，因此**只跟踪运行在 tmux 中的会话**。
@@ -111,9 +122,9 @@ Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体�
 
 ## 恢复会话（升级 CLI、重启机器之后）
 
-Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`，Codex 是 `codex resume <id>`（早期版本扫描得到的合成 id 不是 Codex 的会话 id，这类旧记录退回选择器）。审批与沙箱跟随你自己的 Claude / Codex 配置，Hub 不加参数；旧版本启动的行（`claude-yolo` / `codex-yolo` / `omx-yolo`）恢复时仍按当时的参数补上。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
+Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢复就是用这些重建 tmux，并在里面运行 CLI 自己的恢复命令：Claude 是 `claude --resume <id>`，Codex 是 `codex resume <id>`，pi 是 `pi --session <id>`（早期版本扫描得到的合成 id 不是 Codex 的会话 id，这类旧记录退回选择器）。审批与沙箱跟随你自己的 Claude / Codex 配置，Hub 不加参数；旧版本启动的行（`claude-yolo` / `codex-yolo` / `omx-yolo`）恢复时仍按当时的参数补上。TUI 由 CLI 自己从 transcript 重画，tmux 的滚屏缓冲不会保留。
 
-- **运行中的 session（升级 claude / codex 之后）**：侧栏行 hover、抽屉或手机页 `/m` 里的 **Restart**。CLI 退出后在同一个 tmux、同一个 pane 里运行上面的恢复命令，用上刚装的版本；打开着的终端不断开。正在跑一轮的 session 要再确认一次，因为重启会中断这一轮。右上角菜单里的 **Restart Claude sessions** / **Restart Codex sessions** 一次重启某个工具的全部运行中 session，正在跑一轮或等待审批的跳过并列出。接口：`POST /api/sessions/{id}/restart`（`?force=true` 跳过“正在跑一轮”的检查），`POST /api/restart-sessions`，body `{"tool": "claude"}` 或 `{"tool": "codex"}`。
+- **运行中的 session（升级 claude / codex / pi 之后）**：侧栏行 hover、抽屉或手机页 `/m` 里的 **Restart**。CLI 退出后在同一个 tmux、同一个 pane 里运行上面的恢复命令，用上刚装的版本；打开着的终端不断开。正在跑一轮的 session 要再确认一次，因为重启会中断这一轮。右上角菜单里的 **Restart Claude sessions** / **Restart Codex sessions** / **Restart pi sessions** 一次重启某个工具的全部运行中 session，正在跑一轮或等待审批的跳过并列出。接口：`POST /api/sessions/{id}/restart`（`?force=true` 跳过“正在跑一轮”的检查），`POST /api/restart-sessions`，body `{"tool": "claude"}`、`{"tool": "codex"}` 或 `{"tool": "pi"}`。
 - **已结束的 session**：侧栏行 hover 或抽屉里的 **Resume**，恢复时就用上当前安装的版本。CLI 退出或恢复失败时窗格退回一个交互 shell，tmux 和记录都还在。
 - **整机重启**：Hub 启动 2 秒后自动把 tmux 已消失的 active/idle session 逐个恢复（间隔 0.5 s）。`AGENT_HUB_RESTORE_MODE=shell` 可改为只重建 tmux、打印命令、由你手动决定。
 - Hub 服务自身重启不影响任何 session（tmux 都还在）。

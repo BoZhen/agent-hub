@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from agent_hub import db
-from agent_hub.api.tmux import claude2_config_dir
+from agent_hub.api.tmux import _resolve_command, claude2_config_dir
 from agent_hub.services.session_manager import _pane_shows_working, _tmux_capture
 
 RUNNING_THRESHOLD_SECONDS = 30
@@ -178,6 +178,7 @@ async def dashboard(request: Request):
             "terminal_url": terminal_url,
             "current_page": "dashboard",
             "claude2_available": bool(claude2_config_dir(request.app.state.config)),
+            "pi_available": bool(_resolve_command("pi")),
         },
     )
 

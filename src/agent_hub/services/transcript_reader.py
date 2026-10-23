@@ -8,7 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 def read_usage(transcript_path: str) -> dict | None:
-    """Parse a Claude Code transcript (.jsonl) and return aggregated usage and latest model."""
+    """Parse a Claude Code or pi transcript (.jsonl) and return aggregated
+    usage and latest model. pi records a reply as a "message" entry whose
+    message has role "assistant" and usage {input, output, cacheRead,
+    cacheWrite}."""
     path = Path(transcript_path)
     if not path.exists():
         return None
@@ -23,13 +26,22 @@ def read_usage(transcript_path: str) -> dict | None:
         with open(path) as f:
             for line in f:
                 msg = json.loads(line)
-                if msg.get("type") != "assistant" or "message" not in msg:
+                message = msg.get("message")
+                if not isinstance(message, dict):
                     continue
-                message = msg["message"]
+                pi = msg.get("type") == "message" and message.get("role") == "assistant"
+                if msg.get("type") != "assistant" and not pi:
+                    continue
                 if message.get("model"):
                     model = message["model"]
                 usage = message.get("usage")
                 if not usage:
+                    continue
+                if pi:
+                    input_tokens += usage.get("input", 0)
+                    output_tokens += usage.get("output", 0)
+                    cache_read_tokens += usage.get("cacheRead", 0)
+                    cache_create_tokens += usage.get("cacheWrite", 0)
                     continue
                 input_tokens += usage.get("input_tokens", 0)
                 output_tokens += usage.get("output_tokens", 0)

@@ -274,12 +274,13 @@ async def ensure_session(
                 # this is a subagent or a /clear reuse — in both cases
                 # the new session lives inside the same tmux lineage.
                 transferred = int(orphan_rows[0]["transferred"] or 0)
-            elif not tool.startswith(("codex", "omx")):
+            elif tool.startswith("claude"):
                 # Fresh tmux (no same-tmux predecessor) — run the
                 # Claude workspace-trust prompt delay heuristic.
                 # Codex fires SessionStart only with the first prompt,
                 # so tmux age says nothing about how it was launched;
-                # codex hook arrivals stay first-class regardless.
+                # codex hook arrivals stay first-class regardless, and
+                # so do pi's (pi has no workspace-trust prompt).
                 transferred = await _detect_transferred(tmux_session)
 
             # Retire the orphans only if this is NOT a subagent spawn.
@@ -477,11 +478,12 @@ async def mark_session_idle(
 
 # A running turn's status line. Codex and older Claude Code end it with an
 # "esc to interrupt" hint: "(11s • esc to interrupt)", "(3s · esc to
-# interrupt)". Current Claude Code dropped the hint and shows a verb with
-# an ellipsis, then the elapsed time: "✻ Elucidating… (9m 25s · ↓ 50.6k
-# tokens · thought for 22s)". A finished turn leaves neither behind.
+# interrupt)"; pi shows "Working (escape to interrupt)". Current Claude
+# Code dropped the hint and shows a verb with an ellipsis, then the
+# elapsed time: "✻ Elucidating… (9m 25s · ↓ 50.6k tokens · thought for
+# 22s)". A finished turn leaves neither behind.
 _WORKING_RES = (
-    _re.compile(r"\([^)]*esc to interrupt[^)]*\)"),
+    _re.compile(r"\([^)]*esc(?:ape)? to interrupt[^)]*\)"),
     _re.compile(r"\u2026\s*\(\d+[hms]\b"),
 )
 # Lines read from the bottom of the pane's content. The status line sits
@@ -564,6 +566,10 @@ async def _list_alive_tmux_names() -> set[str]:
         for line in stdout.decode("utf-8", errors="replace").splitlines()
         if line.strip()
     }
+
+
+def _is_pi_tool(tool: str | None) -> bool:
+    return (tool or "").startswith("pi")
 
 
 def _is_codex_tool(tool: str | None) -> bool:
@@ -1267,6 +1273,9 @@ async def parse_one(
     if not tmux_name:
         return
     db_tool = session.get("pending_tool")
+    if _is_pi_tool(session.get("tool")):
+        # pi runs tools without asking, so its pane never holds a prompt.
+        return
 
     panes = await _tmux_capture(tmux_name)
     if not panes:

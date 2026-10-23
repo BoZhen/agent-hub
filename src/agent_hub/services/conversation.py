@@ -1,10 +1,11 @@
 """Recent messages of a session, read from the CLI's own transcript.
 
-Claude Code writes ~/.claude/projects/<dir>/<session id>.jsonl and Codex
-writes ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session id>.jsonl.
-Both are JSON Lines and can be large (Claude keeps whole API requests in
-some records), so the file is read backwards in blocks until enough
-messages are found.
+Claude Code writes ~/.claude/projects/<dir>/<session id>.jsonl, Codex
+writes ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session id>.jsonl and
+pi writes ~/.pi/agent/sessions/--<dir>--/<time>_<session id>.jsonl. All
+are JSON Lines and can be large (Claude keeps whole API requests in some
+records), so the file is read backwards in blocks until enough messages
+are found.
 
 Each message is {"role": "user" | "assistant" | "tool" | "note",
 "text": ..., "ts": ...}. "tool" is a one-line summary of a tool call;
@@ -20,7 +21,7 @@ import re
 from collections.abc import Iterator
 
 from agent_hub.services.event_processor import _summarize_tool_use
-from agent_hub.services.restore import is_codex_tool
+from agent_hub.services.restore import is_codex_tool, is_pi_tool
 
 BLOCK = 256 * 1024
 MAX_SCAN = 32 * 1024 * 1024
@@ -47,8 +48,9 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
 
     The hooks report the path (stored as transcript_path). Without it the
     file is looked up by session id: Claude under each config directory,
-    Codex under ~/.codex/sessions. A Codex session the Hub only knows from
-    pane scanning (earlier Hub versions) has a made-up id and no transcript.
+    Codex under ~/.codex/sessions, pi under its session directory. A Codex
+    session the Hub only knows from pane scanning (earlier Hub versions)
+    has a made-up id and no transcript.
     """
     path = session.get("transcript_path")
     if path and os.path.isfile(path):
@@ -59,6 +61,9 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
             return None
         pattern = os.path.expanduser(f"~/.codex/sessions/*/*/*/rollout-*-{sid}.jsonl")
         hits = glob.glob(pattern)
+    elif is_pi_tool(session.get("tool")):
+        root = os.environ.get("PI_CODING_AGENT_SESSION_DIR") or "~/.pi/agent/sessions"
+        hits = glob.glob(os.path.join(os.path.expanduser(root), "*", f"*_{glob.escape(sid)}.jsonl"))
     else:
         hits = []
         for root in claude_config_dirs:
@@ -68,7 +73,7 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
 
 def read_messages(path: str, tool: str | None, limit: int = 30) -> list[dict]:
     """The last `limit` messages of a transcript, oldest first."""
-    parse = _codex_items if is_codex_tool(tool) else _claude_items
+    parse = _codex_items if is_codex_tool(tool) else _pi_items if is_pi_tool(tool) else _claude_items
     found: list[dict] = []
     for record in _records_backwards(path):
         found.extend(reversed(parse(record)))
@@ -237,3 +242,74 @@ def _codex_command(command) -> str:
         text = str(command or "")
     text = " ".join(text.split())
     return text if len(text) <= 200 else text[:199] + "…"
+
+
+# ── pi ────────────────────────────────────────────────────────
+
+# pi's built-in tools under the names _summarize_tool_use knows (Claude's):
+# pi name -> (Claude name, pi argument, Claude argument). Kept in step with
+# scripts/pi-hub-extension.js.
+_PI_TOOLS = {
+    "bash": ("Bash", "command", "command"),
+    "read": ("Read", "path", "file_path"),
+    "write": ("Write", "path", "file_path"),
+    "edit": ("Edit", "path", "file_path"),
+    "grep": ("Grep", "pattern", "pattern"),
+    "find": ("Glob", "pattern", "pattern"),
+    "ls": ("LS", "path", "path"),
+}
+
+
+def _pi_items(record: dict) -> list[dict]:
+    """pi stores the conversation as a tree of entries; a "message" entry
+    holds one message. Read backwards, the newest branch comes first."""
+    message = record.get("message")
+    if record.get("type") != "message" or not isinstance(message, dict):
+        return []
+    ts = record.get("timestamp")
+    role = message.get("role")
+    content = message.get("content")
+    if role == "user":
+        text = _pi_text(content)
+        return [_item("user", text, ts)] if text else []
+    if role == "bashExecution":
+        return [_item("user", "! " + str(message.get("command") or ""), ts)]
+    if role != "assistant" or not isinstance(content, list):
+        return []
+    items = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text" and (block.get("text") or "").strip():
+            items.append(_item("assistant", block["text"], ts))
+        elif block.get("type") == "toolCall":
+            items.append(_item("tool", _pi_tool_summary(block.get("name"), block.get("arguments")), ts))
+    if message.get("stopReason") == "aborted":
+        items.append(_item("note", "Interrupted", ts))
+    elif message.get("stopReason") == "error" and message.get("errorMessage"):
+        items.append(_item("note", str(message["errorMessage"]), ts))
+    return items
+
+
+def _pi_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            parts.append(block.get("text") or "")
+        elif block.get("type") == "image":
+            parts.append("[image]")
+    return "\n".join(p for p in parts if p).strip()
+
+
+def _pi_tool_summary(name, arguments) -> str:
+    spec = _PI_TOOLS.get(name or "")
+    if spec is None:
+        return str(name or "Tool use")
+    value = arguments.get(spec[1]) if isinstance(arguments, dict) else None
+    return _summarize_tool_use(spec[0], {spec[2]: value} if value is not None else {})

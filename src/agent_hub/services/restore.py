@@ -113,6 +113,21 @@ def is_codex_tool(tool: str | None) -> bool:
     return (tool or "").startswith(("codex", "omx"))
 
 
+def is_pi_tool(tool: str | None) -> bool:
+    return (tool or "").startswith("pi")
+
+
+def tool_family(tool: str | None) -> str | None:
+    """"claude", "codex" or "pi" for a session's `tool`, else None."""
+    if is_codex_tool(tool):
+        return "codex"
+    if is_pi_tool(tool):
+        return "pi"
+    if (tool or "").startswith("claude"):
+        return "claude"
+    return None
+
+
 def resume_argv(tool: str, session_id: str) -> list[str] | None:
     """The command that resumes this session, as argv with the bare binary
     name first, or None when the tool is unknown.
@@ -123,6 +138,7 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
     (codex-<tmux>-<ts>), so the interactive picker is used. "omx-yolo" rows predate the bare-codex
     launcher; `omx --madmax` was an alias for the bypass flag, so the same
     codex command resumes them whether or not oh-my-codex is installed.
+    pi opens a session by id with `--session`.
     """
     tool = (tool or "").strip()
     if tool.startswith("claude"):
@@ -134,6 +150,8 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
         if "yolo" in tool:
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         return argv
+    if is_pi_tool(tool):
+        return ["pi", "--session", session_id]
     return None
 
 
@@ -191,7 +209,7 @@ def _free_tmux_name(preferred: str | None, tool: str, cwd: str, alive: set[str])
     if not preferred:
         from agent_hub.api.tmux import _auto_name  # local: api imports this module
 
-        prefix = "codex" if is_codex_tool(tool) else ("claude2" if tool == "claude2" else "claude")
+        prefix = "claude2" if tool == "claude2" else (tool_family(tool) or "claude")
         return _auto_name(cwd, alive, prefix=prefix)
     name, n = preferred, 2
     while name in alive:
@@ -424,8 +442,8 @@ async def restart_session(session_row: dict[str, Any], *, config: Any = None) ->
 async def restart_live_sessions(
     conn: aiosqlite.Connection, family: str, *, config: Any = None
 ) -> dict[str, Any]:
-    """Restart every live Claude session (family "claude") or every live
-    Codex session (family "codex"), one after another.
+    """Restart every live session of one CLI, family "claude", "codex" or
+    "pi", one after another.
 
     A session in the middle of a turn is skipped, since the restart would
     end that turn, and so is one that cannot be restarted (no CLI running
@@ -447,7 +465,7 @@ async def restart_live_sessions(
     seen_tmux: set[str] = set()
     for row in rows:
         tool = row.get("tool") or ""
-        in_family = is_codex_tool(tool) if family == "codex" else tool.startswith("claude")
+        in_family = tool_family(tool) == family
         name = row["tmux_session"]
         if not in_family or name not in alive or name in seen_tmux:
             continue

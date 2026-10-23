@@ -331,6 +331,36 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 
 - **PreToolUse 每次 tool call 可能 fire 两次**(dry-run + real),两次 `tool_use_id` 不同,第一次的常常没有对应的 PostToolUse。这是 codex 内部行为,对 `_enrich_running`(基于最后一条 event 的启发式)没有影响,可以忽略。
 
+### 2.7 pi 扩展配置（可选）
+
+pi 没有 hook 配置文件,事件由扩展接收。`scripts/pi-hub-extension.js` 把 pi 的事件按 Claude hook 的格式发到 Hub(SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop),`/name` 起的名字发到 Hub 的重命名接口。
+
+**Step 1 —— 安装扩展**(每台跑 pi 的机器;链接而不是复制,仓库更新后扩展跟着更新):
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+ln -s ~/Git/agent-home/scripts/pi-hub-extension.js ~/.pi/agent/extensions/agent-hub.js
+```
+
+Hub 不在本机 `127.0.0.1:7800` 时,在启动 pi 的环境里设 `AGENT_HUB_URL`。
+
+**Step 2 —— tmux 3.4 打开 extended keys**(否则 pi 分不清 Shift+Enter 与 Enter,启动时会提示):
+
+```tmux
+set -g extended-keys on
+```
+
+tmux 3.5 及以上再加 `set -g extended-keys-format csi-u`。改完对 tmux server 生效(`tmux source-file ~/.tmux.conf` 或新开 server)。
+
+**Step 3 —— 验证**:在 tmux 里启动 `pi`,Hub 侧栏应马上出现一行 pi 的 session(pi 在启动时就发 SessionStart,不像 Codex 要等第一条 prompt)。
+
+**已知行为**:
+
+- 扩展只在 pi 的终端界面(mode `tui`)且 `$TMUX` 存在时发事件。RPC / JSON / print 模式和 tmux 外的 pi 不发,Hub 本来也只跟踪 tmux 会话。
+- 只发工具名和一个参数(命令、文件路径或搜索模式)。写入或编辑的文件内容不离开 pi。
+- pi 运行工具前不询问,Hub 里 pi 的 session 不会出现“等待审批”。
+- pi 的“工作中”提示是 `Working (escape to interrupt)`,Hub 据此判断一轮是否还在进行(Restart 时跳过正在工作的 session)。
+
 ---
 
 ## Part 3: 踩坑总结
