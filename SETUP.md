@@ -325,6 +325,8 @@ export AGENT_HUB_URL="http://<TAILSCALE_IP>:7800"   # 替换为 Hub 主机的 Ta
 
 - **新版 codex 在后台 app-server 里运行会话并从那里执行 hook**,hook 进程没有 `$TMUX`,`codex-hub-hook.sh` 发出的 tmux 名为空。Hub 把这样的 SessionStart 对应到同一目录下运行 codex、且此刻刚有输出的 tmux pane(恰好一个时才对应;正在跑一轮的会话所在的 pane 不算)。
 
+- **codex 只在启动时询问一次终端背景色(OSC 11)**,没有回答就不给用户的 prompt 加底色。tmux 只在有终端连着时回答,所以 Hub 启动、恢复、重启的 Codex pane 先等终端回答(最多 10 秒)再启动 codex。自己在终端里 `tmux new` 再运行 codex 不受影响。
+
 - **MCP tool 调用不触发 PreToolUse hook**(验证过 `omx_state.*`、`omx_memory.*` 等)。Codex 给 MCP 工具配了独立的 4 选项审批 UI(`› 1. Allow`),Hub 从 pane 的画面识别这个 UI,dashboard 仍然显示 waiting 徽章 + Approve/Always 按钮,但这条路径靠读取画面而不是 hook push。MCP 审批的 detail 格式是 `<server>: <tool>`(如 `omx_state: state_get_status`)。
 
 - **PreToolUse 每次 tool call 可能 fire 两次**(dry-run + real),两次 `tool_use_id` 不同,第一次的常常没有对应的 PostToolUse。这是 codex 内部行为,对 `_enrich_running`(基于最后一条 event 的启发式)没有影响,可以忽略。

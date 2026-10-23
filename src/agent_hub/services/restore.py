@@ -167,15 +167,21 @@ def _shell_pane_command(tool: str, session_id: str) -> list[str]:
     return ["bash", "-c", f"echo -e '{banner}'; exec ${{SHELL:-bash}} -i"]
 
 
-def _resume_pane_command(argv: list[str]) -> list[str]:
+def _resume_pane_command(argv: list[str], *, wait_for_terminal: bool = False) -> list[str]:
     """Pane command for mode "resume": run the resolved resume command,
     then drop to an interactive shell so the pane survives if the CLI
     exits or fails to resume. argv travels as positional parameters, so
-    nothing is re-quoted by the shell."""
+    nothing is re-quoted by the shell. With wait_for_terminal (Codex), the
+    command starts once a terminal answers the colour query; see
+    api.tmux.CODEX_TERMINAL_WAIT_S."""
     script = (
         "printf '\\033[2m  agent-hub: %s\\033[0m\\n' \"$1\"; shift; \"$@\"; "
         "exec \"${SHELL:-bash}\" -i"
     )
+    if wait_for_terminal:
+        from agent_hub.api.tmux import terminal_wait_sh  # local: api imports this module
+
+        script = terminal_wait_sh() + script
     return ["bash", "-c", script, "_", shlex.join(argv), *argv]
 
 
@@ -289,7 +295,7 @@ async def restore_session(
                 "Resume: %s not found in PATH; leaving a shell in tmux=%s", argv[0], name
             )
     if binary:
-        pane_cmd = _resume_pane_command([binary, *argv[1:]])
+        pane_cmd = _resume_pane_command([binary, *argv[1:]], wait_for_terminal=is_codex_tool(tool))
         effective_mode = "resume"
     else:
         pane_cmd = _shell_pane_command(tool, sid)
@@ -397,7 +403,7 @@ async def restart_session(session_row: dict[str, Any], *, config: Any = None) ->
         tmux_args.extend(["-e", f"PATH={path}"])
     for key, value in launch_env(tool, config).items():
         tmux_args.extend(["-e", f"{key}={value}"])
-    tmux_args.extend(_resume_pane_command([binary, *argv[1:]]))
+    tmux_args.extend(_resume_pane_command([binary, *argv[1:]], wait_for_terminal=is_codex_tool(tool)))
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,
         stdout=asyncio.subprocess.PIPE,

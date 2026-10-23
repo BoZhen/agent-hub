@@ -467,7 +467,11 @@ Codex 自带 hook（`~/.codex/config.toml` 的 `[features] hooks = true` + `~/.c
 
 等待审批仍从 pane 的画面识别（第 9 节），因为 Codex 没有审批 hook。
 
-### 10.2 已去掉的 tmux 扫描
+### 10.2 启动前等终端
+
+Codex 只在启动时向终端询问一次背景色（OSC 11，等 250 ms），得到回答才给用户的 prompt 和输入框加底色，之后不再询问。tmux 只在有终端连着这个会话时才回答。Hub 启动的 tmux 在后台，Web Terminal 还没连上，Codex 得不到回答，用户的文字和 Codex 的回答就没有区别。所以 Hub 启动、恢复、重启 Codex 时，pane 先由 bash 每 0.25 秒问一次背景色，有终端回答就启动 Codex，最多等 `CODEX_TERMINAL_WAIT_S`（10 秒，`api/tmux.py` 的 `wait_for_terminal` / `terminal_wait_sh`）。新建会话后界面马上打开终端，通常等一秒左右。没有人打开的会话到时照常启动，只是没有底色。底色按启动时终端的主题计算，换主题后要 Restart 才跟着变。Claude Code 不询问背景色，不等。
+
+### 10.3 已去掉的 tmux 扫描
 
 早期 Codex 没有 hook，Hub 周期性扫描 tmux pane：识别 Codex pane，为它建一个合成 id（`codex-<tmux>-<ts>`）的记录，并按 pane 内容 hash 的变化判断活跃。2026-10 去掉：原生 hook 已覆盖发现与状态，而按 hash 判断活跃会把任何重画都算作活动。旧版本留下的合成 id 记录仍可显示与删除，恢复时退回 `codex resume` 的选择器。Hub 启动时会移除旧版本在 tmux 里装的 `session-created` hook。
 

@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from agent_hub import db
 from agent_hub.api import sessions as sessions_api
+from agent_hub.api import tmux as tmux_api
 from agent_hub.config import HubConfig
 from agent_hub.services.session_manager import _pane_shows_working
 
@@ -186,7 +187,9 @@ def test_restart_refuses_sessions_it_cannot_restart(tmp_path, private_tmux, stan
     _run(check)
 
 
-def test_restart_all_restarts_one_tool_and_skips_busy_sessions(tmp_path, private_tmux, stand_ins):
+def test_restart_all_restarts_one_tool_and_skips_busy_sessions(tmp_path, private_tmux, stand_ins, monkeypatch):
+    # No terminal is attached, so the Codex pane starts after the wait.
+    monkeypatch.setattr(tmux_api, "CODEX_TERMINAL_WAIT_S", 0.5)
     for name, program in (("c-idle", "claude"), ("c-busy", "claude"), ("c-shell", None), ("x-idle", "codex")):
         _start(tmp_path, name, program)
 

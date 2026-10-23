@@ -87,6 +87,8 @@ Codex 通过自带的 hook 机制接入（`~/.codex/config.toml` 的 `[features]
 
 新版 Codex 在后台的 app-server 里运行会话，hook 也从那里执行，不在会话所在的终端里，所以 hook 拿不到 tmux 名。Hub 收到没有 tmux 名的 Codex SessionStart 时，找在同一目录运行 codex、并且此刻刚有输出的那个 tmux pane（提交第一条 prompt 时 TUI 会重画），只有恰好一个时才对应上；正在跑一轮的会话所在的 pane 不算。同一目录下 tmux 外的 Codex 不会改动这个 pane，因此不会被认错。
 
+Codex 只在启动时向终端询问一次背景色，得到回答才给你输入的 prompt 和输入框加底色。tmux 只在有终端连着时才回答，而 Hub 是在后台启动 tmux 的，所以 Hub 启动、恢复、重启 Codex 时，pane 先问背景色，有终端回答再启动 Codex，最多等 10 秒。新建会话后终端马上打开，通常只等一秒左右。没有人打开的会话 10 秒后照常启动，只是没有底色；在终端里打开它再点 Restart 就有了。底色按启动时的终端主题计算，换主题后 Restart 一次才跟着变。
+
 早期版本的 Hub 还会扫描 tmux pane，给没有 hook 的 Codex 会话建一个合成 id（`codex-<tmux>-<ts>`）的记录。这个回退已经去掉。等待审批的提示仍然从 pane 的画面识别：Codex 没有审批 hook，Claude 也是这样识别的。
 
 ## 会话跟踪范围（仅 tmux）

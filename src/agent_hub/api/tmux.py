@@ -79,6 +79,34 @@ def launch_env(tool: str, config: Any) -> dict[str, str]:
     return {}
 
 
+# Codex asks the terminal for its background colour once, when it starts
+# (OSC 11, 250 ms), and shades the prompts you typed only if it gets an
+# answer. tmux answers for a pane only while a terminal is attached, and
+# the Hub starts sessions detached, before the web terminal connects. So a
+# Codex pane first asks the same question itself, every 0.25 s, until a
+# terminal answers or CODEX_TERMINAL_WAIT_S passes; then Codex starts.
+CODEX_TERMINAL_WAIT_S = 10
+
+
+def terminal_wait_sh() -> str:
+    """Shell commands that return once a terminal answers the colour
+    query, or after CODEX_TERMINAL_WAIT_S. The answer ends with ESC \\,
+    so `read -d '\\'` takes all of it."""
+    tries = max(1, round(CODEX_TERMINAL_WAIT_S * 4))
+    return (
+        r"""if [ -t 0 ] && s=$(stty -g); then stty raw -echo; n=%d; """
+        r"""while [ "$n" -gt 0 ]; do printf '\033]11;?\033\\'; """
+        r"""IFS= read -r -d '\' -t 0.25 reply && break; n=$((n-1)); done; """
+        r"""stty "$s"; fi; """
+    ) % tries
+
+
+def wait_for_terminal(argv: list[str]) -> list[str]:
+    """Pane command that runs argv once a terminal answers the colour
+    query (see CODEX_TERMINAL_WAIT_S)."""
+    return ["bash", "-c", terminal_wait_sh() + 'exec "$@"', "_", *argv]
+
+
 def session_path(env: Mapping[str, str] | None = None) -> str:
     """PATH pinned onto a session the Hub starts (launch, resume, fork).
 
@@ -310,8 +338,8 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
     for key, value in launch_env(req.command or "", request.app.state.config).items():
         tmux_args.extend(["-e", f"{key}={value}"])
     if cmd_path:
-        tmux_args.append(cmd_path)
-        tmux_args.extend(_COMMAND_ARGS.get(req.command or "", []))
+        argv = [cmd_path, *_COMMAND_ARGS.get(req.command or "", [])]
+        tmux_args.extend(wait_for_terminal(argv) if req.command == "codex" else argv)
 
     proc = await asyncio.create_subprocess_exec(
         *tmux_args,
