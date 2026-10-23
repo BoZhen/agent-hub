@@ -6,11 +6,13 @@ window.AgentHub = (() => {
     {id:'nord', name:'Nord', tone:'dark', swatches:['#242933','#3b4252','#88c0d0']},
     {id:'tokyo', name:'Tokyo Night', tone:'dark', swatches:['#101017','#24283b','#7aa2f7']},
     {id:'mocha', name:'Mocha', tone:'dark', swatches:['#11111b','#1e1e2e','#89b4fa']},
+    {id:'dracula', name:'Dracula', tone:'dark', swatches:['#21222c','#282a36','#bd93f9']},
     {id:'paper', name:'Paper', tone:'light', swatches:['#f4f6f8','#ffffff','#1677b8']},
     {id:'solarized', name:'Solarized', tone:'light', swatches:['#fdf6e3','#eee8d5','#268bd2']},
     {id:'one-light', name:'One Light', tone:'light', swatches:['#f4f4f5','#ffffff','#4078f2']},
     {id:'rose-dawn', name:'Rosé Dawn', tone:'light', swatches:['#faf4ed','#f2e9e1','#286983']},
     {id:'latte', name:'Latte', tone:'light', swatches:['#eff1f5','#e6e9ef','#1e66f5']},
+    {id:'gruvbox-light', name:'Gruvbox Light', tone:'light', swatches:['#f2e5bc','#fbf1c7','#076678']},
   ];
 
   function currentTheme() { return document.documentElement.dataset.theme || 'graphite'; }
@@ -198,14 +200,13 @@ window.AgentHub = (() => {
     return Promise.resolve();
   }
 
-  /* Hub WebSocket: reconnects with a capped backoff, mirrors state into
-     #ws-dot / #ws-label, forwards messages to window.onWsMessage. */
+  /* Hub WebSocket: reconnects with a capped backoff, shows #ws-conn
+     ("Reconnecting") only while the connection is down, forwards messages
+     to window.onWsMessage. */
   let ws = null, retryDelay = 1500;
   function setConn(state) {
-    const dot = document.getElementById('ws-dot');
-    const label = document.getElementById('ws-label');
-    if (dot) dot.className = 'dot ' + (state === 'live' ? 'dot-active' : state === 'connecting' ? 'dot-idle' : 'dot-danger');
-    if (label) label.textContent = state === 'live' ? 'Live' : state === 'connecting' ? 'Connecting' : 'Reconnecting';
+    const conn = document.getElementById('ws-conn');
+    if (conn) conn.hidden = state !== 'down';
   }
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';

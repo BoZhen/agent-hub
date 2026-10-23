@@ -7,7 +7,7 @@
   <title>{% block title %}Agent Hub{% endblock %}</title>
   <script>
     (() => {
-      const themes = ['graphite', 'midnight', 'nord', 'tokyo', 'mocha', 'paper', 'solarized', 'one-light', 'rose-dawn', 'latte'];
+      const themes = ['graphite', 'midnight', 'nord', 'tokyo', 'mocha', 'paper', 'solarized', 'one-light', 'rose-dawn', 'latte', 'dracula', 'gruvbox-light'];
       const requested = new URLSearchParams(location.search).get('theme');
       const stored = localStorage.getItem('agentHubTheme');
       document.documentElement.dataset.theme = themes.includes(requested) ? requested : (themes.includes(stored) ? stored : 'graphite');

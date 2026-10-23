@@ -41,6 +41,11 @@
   --text:#cdd6f4;--text-2:#bac2de;--muted:#7f849c;--brand:#89b4fa;--brand-strong:#6c91d4;--on-brand:#0d0d16;--active:#a6e3a1;
   --running:#89dceb;--waiting:#f9e2af;--idle:#9399b2;--stopped:#6c7086;--danger:#f38ba8;--approve:#94e2d5;--terminal-bg:#0d0d16;
 }
+:root[data-theme="dracula"] {
+  --canvas:#1e1f29;--panel:#21222c;--panel-2:#282a36;--panel-3:#343746;--border:#44475a;--border-strong:#565a73;
+  --text:#f8f8f2;--text-2:#c9cbd6;--muted:#8b93b8;--brand:#bd93f9;--brand-strong:#9d6ff0;--on-brand:#191a21;--active:#50fa7b;
+  --running:#8be9fd;--waiting:#ffb86c;--idle:#8b93b8;--stopped:#6272a4;--danger:#ff5555;--approve:#5af78e;--terminal-bg:#282a36;
+}
 :root[data-theme="paper"] {
   color-scheme: light;--canvas:#f4f6f8;--panel:#ffffff;--panel-2:#eef1f4;--panel-3:#e4e9ee;--border:#d5dbe2;--border-strong:#b8c3ce;
   --text:#17212b;--text-2:#465666;--muted:#71808f;--brand:#1677b8;--brand-strong:#0d5f96;--on-brand:#ffffff;--active:#168a57;
@@ -66,6 +71,11 @@
   --text:#4c4f69;--text-2:#5c5f77;--muted:#7c7f93;--brand:#1e66f5;--brand-strong:#1854c7;--on-brand:#ffffff;--active:#40a02b;
   --running:#209fb5;--waiting:#9a6a00;--idle:#6c6f85;--stopped:#9ca0b0;--danger:#d20f39;--approve:#17946d;--terminal-bg:#f7f8fb;--shadow:0 12px 30px rgba(76,79,105,.14);
 }
+:root[data-theme="gruvbox-light"] {
+  color-scheme: light;--canvas:#f2e5bc;--panel:#fbf1c7;--panel-2:#ebdbb2;--panel-3:#e5d5ad;--border:#d5c4a1;--border-strong:#bdae93;
+  --text:#3c3836;--text-2:#504945;--muted:#7c6f64;--brand:#076678;--brand-strong:#05505e;--on-brand:#fbf1c7;--active:#79740e;
+  --running:#076678;--waiting:#a8650a;--idle:#7c6f64;--stopped:#a89984;--danger:#9d0006;--approve:#427b58;--terminal-bg:#fbf1c7;--shadow:0 12px 30px rgba(60,56,54,.16);
+}
 
 /* ------------------------------------------------------------------ */
 /* 2. Base                                                             */
@@ -89,11 +99,15 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--idle); flex-shrink: 0; }
 .dot-active { background: var(--active); }
 .dot-running { background: var(--running); }
-.dot-waiting { background: var(--waiting); border-radius: 2px; animation: pulse 1.6s ease-in-out infinite; }
+.dot-waiting { background: var(--waiting); border-radius: 2px; }
 .dot-idle { background: transparent; border: 1.5px solid var(--idle); }
 .dot-stopped { background: transparent; border: 1.5px solid var(--stopped); }
 .dot-danger { background: var(--danger); }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+/* A light that breathes: something is working right now. */
+@keyframes breathe {
+  0%, 100% { opacity: .45; box-shadow: 0 0 0 0 transparent; }
+  50% { opacity: 1; box-shadow: 0 0 6px 1px color-mix(in srgb, var(--active) 70%, transparent); }
+}
 
 /* ------------------------------------------------------------------ */
 /* 3. Controls                                                         */
@@ -155,8 +169,12 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .stat { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-1); white-space: nowrap; }
 .stat strong { font-weight: 600; color: var(--text); }
 .stat.is-zero { color: var(--muted); }
+.stat.is-zero .dot { opacity: .4; }
+/* Top bar: the active light breathes while sessions work; waiting is a steady light. */
+.stat-active:not(.is-zero) .dot { animation: breathe 2.4s ease-in-out infinite; }
 .topbar-spacer { flex: 1; }
 .conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); white-space: nowrap; }
+.conn[hidden] { display: none; }
 .topbar-actions { display: flex; align-items: center; gap: 4px; }
 .mobile-only { display: none; }
 
@@ -554,5 +572,5 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  .dot-waiting { animation: none; opacity: 1; }
+  .stat-active:not(.is-zero) .dot { animation: none; }
 }

@@ -14,20 +14,22 @@ WORKSPACE_JS = (WEB / "static/workspace.js").read_text()
 HUB_CSS = (WEB / "static/hub.css").read_text()
 
 
-def test_theme_catalog_has_five_dark_and_five_light_palettes() -> None:
+def test_theme_catalog_has_six_dark_and_six_light_palettes() -> None:
     entries = re.findall(
         r"\{id:'([^']+)', name:'([^']+)', tone:'(dark|light)'",
         HUB_JS,
     )
 
-    assert len(entries) == 10
-    assert len({theme_id for theme_id, _, _ in entries}) == 10
-    assert sum(tone == "dark" for _, _, tone in entries) == 5
-    assert sum(tone == "light" for _, _, tone in entries) == 5
+    assert len(entries) == 12
+    assert len({theme_id for theme_id, _, _ in entries}) == 12
+    assert sum(tone == "dark" for _, _, tone in entries) == 6
+    assert sum(tone == "light" for _, _, tone in entries) == 6
     # Every theme the picker offers has a token block in the stylesheet.
     for theme_id, _, _ in entries:
         if theme_id != "graphite":
             assert f':root[data-theme="{theme_id}"]' in HUB_CSS
+        # The page applies a stored theme before the first paint.
+        assert f"'{theme_id}'" in BASE
 
 
 def test_no_utility_framework_or_cdn_in_the_shell() -> None:

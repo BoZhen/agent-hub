@@ -10,9 +10,10 @@
   <header class="topbar">
     <button type="button" class="btn btn-ghost icon-btn desktop-only" id="sidebar-toggle" data-action="toggle-sidebar" aria-controls="sidebar" aria-expanded="true" title="Hide sidebar"><svg class="icon"><use href="#i-sidebar"/></svg></button>
     <a class="brand" href="/"><span class="brand-mark">&gt;_</span>Agent Hub</a>
-    <span class="conn"><span class="dot dot-idle" id="ws-dot"></span><span id="ws-label">Connecting</span></span>
+    {# Shown only while the live connection is down. #}
+    <span class="conn" id="ws-conn" hidden><span class="dot dot-danger" id="ws-dot"></span><span id="ws-label">Reconnecting</span></span>
     <div class="stats">
-      <span class="stat"><span class="dot dot-active"></span><strong id="stat-active">{{ stats.active_sessions }}</strong> active</span>
+      <span class="stat stat-active{% if not stats.active_sessions %} is-zero{% endif %}" id="stat-active-wrap"><span class="dot dot-active"></span><strong id="stat-active">{{ stats.active_sessions }}</strong> active</span>
       <span class="stat{% if not stats.waiting_sessions %} is-zero{% endif %}" id="stat-waiting-wrap"><span class="dot dot-waiting"></span><strong id="stat-waiting">{{ stats.waiting_sessions }}</strong> waiting</span>
     </div>
     <span class="topbar-spacer"></span>

@@ -292,6 +292,7 @@ function scheduleStats() {
     try {
       const s = await api('GET', '/api/stats');
       $('stat-active').textContent = s.active_sessions;
+      $('stat-active-wrap').classList.toggle('is-zero', !s.active_sessions);
       $('stat-waiting').textContent = s.waiting_sessions;
       $('stat-waiting-wrap').classList.toggle('is-zero', !s.waiting_sessions);
     } catch (_) {}
@@ -1054,6 +1055,9 @@ $('utility-button').addEventListener('click', () => togglePopover($('utility-but
 document.addEventListener('click', event => {
   if (!event.target.closest('.popover, [aria-haspopup]')) closePopovers();
 });
+// A click inside a terminal frame never reaches this document, but it takes
+// the focus away from this window, so close the menus then as well.
+window.addEventListener('blur', closePopovers);
 window.addEventListener('agenthub:theme', event => {
   $('theme-label').textContent = H.themeName(event.detail.theme);
   broadcastToTerminals({type: 'agent-hub:set-theme', theme: event.detail.theme});
