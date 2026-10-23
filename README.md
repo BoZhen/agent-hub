@@ -91,6 +91,8 @@ Claude 通过本地 hooks 将事件推送到 Hub。推荐按 `SETUP.md` 或本�
 
 注意：Codex 在第一条 prompt 提交时才触发 SessionStart hook。刚启动、还没说话的 Codex 会话在 Hub 里先以扫描得到的合成 id 出现，第一条 prompt 之后自动换成 Codex 自己的会话 id。
 
+新版 Codex 在后台的 app-server 里运行会话，hook 也从那里执行，不在会话所在的终端里，所以 hook 拿不到 tmux 名。Hub 收到没有 tmux 名的 Codex SessionStart 时，找在同一目录运行 codex、并且此刻刚有输出的那个 tmux pane（提交第一条 prompt 时 TUI 会重画），只有恰好一个时才对应上；正在跑一轮的会话所在的 pane 不算。同一目录下 tmux 外的 Codex 不会改动这个 pane，因此不会被认错。
+
 ## 会话跟踪范围（仅 tmux）
 
 Agent Hub 以 tmux 作为会话持久化、远程审批与终端接入的载体，因此**只跟踪运行在 tmux 中的会话**。

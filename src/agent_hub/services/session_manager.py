@@ -12,6 +12,7 @@ import aiosqlite
 
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
+from agent_hub.services import tmux_input
 from agent_hub.services.pane_pipe import get_pipe_manager
 
 logger = logging.getLogger(__name__)
@@ -354,6 +355,51 @@ async def ensure_session(
             transcript_path=transcript_path,
             tool=tool,
         )
+
+
+# How recently a codex pane must have printed for a SessionStart without a
+# tmux name to be taken as its own (see match_codex_tmux).
+CODEX_MATCH_WINDOW_S = 15.0
+
+
+async def match_codex_tmux(
+    conn: aiosqlite.Connection, session_id: str, cwd: str
+) -> str | None:
+    """The tmux session a codex session runs in, for its SessionStart.
+
+    Codex runs a session in its app-server, a background process outside
+    the session's terminal, and fires the session's hooks from there: the
+    hook has no $TMUX, so codex-hub-hook.sh sends no tmux name. Codex fires
+    SessionStart when the first prompt is submitted, and submitting it makes
+    the TUI redraw its pane. So the session's pane is the one that runs
+    codex in the event's directory and printed just now. A codex in another
+    terminal, in the same directory, does not touch that pane.
+
+    A pane whose own codex session is in the middle of a turn is skipped:
+    its output is that turn, not a new session. Returns None unless exactly
+    one pane fits.
+    """
+    panes = await tmux_input.codex_panes(cwd)
+    recent = {name for name, idle in panes if idle <= CODEX_MATCH_WINDOW_S}
+    if not recent:
+        return None
+    marks = ",".join("?" * len(recent))
+    cursor = await conn.execute(
+        "SELECT DISTINCT tmux_session FROM sessions "
+        f"WHERE tmux_session IN ({marks}) AND status = 'active' "
+        "AND (tool LIKE 'codex%' OR tool LIKE 'omx%') "
+        "AND session_id != ? AND session_id NOT LIKE 'codex-%'",
+        (*recent, session_id),
+    )
+    busy = {r["tmux_session"] for r in await cursor.fetchall()}
+    free = recent - busy
+    if len(free) == 1:
+        return free.pop()
+    logger.info(
+        "Codex session %s in %s: no single tmux pane to match (recent=%s busy=%s)",
+        session_id, cwd, sorted(recent), sorted(busy),
+    )
+    return None
 
 
 async def _detect_transferred(

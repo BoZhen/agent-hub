@@ -49,6 +49,27 @@ async def process_event(
                     session_id, matched, cwd,
                 )
 
+        # Codex fires a session's hooks from its app-server, outside the
+        # session's terminal, so they carry no tmux name. Its SessionStart
+        # comes with the first prompt; match it to the pane that runs codex
+        # in this directory and printed just now. Later events find the row
+        # and its tmux below.
+        if (
+            not tmux_session
+            and event_type == "SessionStart"
+            and cli_tool.startswith(("codex", "omx"))
+            and cwd
+            and (existing is None or not existing["tmux_session"])
+        ):
+            matched = await session_manager.match_codex_tmux(conn, session_id, cwd)
+            if matched:
+                tmux_session = matched
+                payload["_tmux_session"] = matched
+                logger.info(
+                    "Matched codex session %s to tmux %s by directory and activity",
+                    session_id, matched,
+                )
+
         # Ignore tmux-less (console / headless SDK) sessions entirely.
         # Agent Hub is a tmux-centric control plane: with no tmux it can
         # neither attach, approve, nor sweep the row, so a tmux-less

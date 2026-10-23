@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import os
+import time
 
 TMUX = "tmux"
 # Process names of an agent CLI. An npm install runs as `node`, so a node
@@ -105,6 +106,71 @@ def runs_agent(pane_pid: int, table: dict[int, tuple[int, str]]) -> bool:
         if not level:
             return False
     return False
+
+
+def _is_codex(pid: int, name: str) -> bool:
+    """A codex process: the native binary, or node running the npm package."""
+    if name == "codex":
+        return True
+    if name != "node":
+        return False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            argv = f.read().decode("utf-8", errors="replace").split("\0")
+    except OSError:
+        return False
+    script = argv[1] if len(argv) > 1 else ""
+    return os.path.basename(script) == "codex" or "@openai/codex" in script
+
+
+def _codex_in_tree(pane_pid: int, table: dict[int, tuple[int, str]]) -> int | None:
+    """The pid of a codex process in the pane's process tree, or None."""
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    level = [pane_pid]
+    for _ in range(_TREE_DEPTH):
+        for pid in level:
+            if pid in table and _is_codex(pid, table[pid][1]):
+                return pid
+        level = [child for pid in level for child in children.get(pid, [])]
+        if not level:
+            return None
+    return None
+
+
+async def codex_panes(cwd: str) -> list[tuple[str, float]]:
+    """(tmux session, seconds since its window last printed) for every
+    pane that runs codex started in `cwd`.
+
+    Codex runs a session in its app-server and fires the session's hooks
+    from there, outside the session's terminal, so a hook carries no tmux
+    name. Its directory and the moment it fires are what tie it to a pane:
+    see session_manager.match_codex_tmux.
+    """
+    rc, out, _ = await _tmux(
+        "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}\t#{window_activity}",
+    )
+    if rc != 0:
+        return []
+    want = os.path.realpath(cwd)
+    table = _process_table()
+    now = time.time()
+    found: list[tuple[str, float]] = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            continue
+        pid = _codex_in_tree(int(parts[1]), table)
+        if pid is None:
+            continue
+        try:
+            if os.path.realpath(os.readlink(f"/proc/{pid}/cwd")) != want:
+                continue
+        except OSError:
+            continue
+        found.append((parts[0], max(0.0, now - int(parts[2]))))
+    return found
 
 
 def pick_agent_pane(panes: list[tuple[str, bool, bool]]) -> str | None:

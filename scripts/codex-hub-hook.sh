@@ -13,6 +13,12 @@
 # submitted, not at process start. Until then the Hub only knows the
 # session from tmux pane scanning (session_manager.py).
 #
+# Current Codex runs a session in its app-server, a background process
+# outside the session's terminal, and runs the hooks from there, so $TMUX
+# is usually unset and no tmux name is sent. The Hub then matches the
+# SessionStart to the tmux pane that runs codex in the same directory and
+# printed at that moment (session_manager.match_codex_tmux).
+#
 # The stdin payload is a codex-emitted JSON object. We forward it
 # verbatim to the hub and always echo `{}` to stdout so codex
 # accepts the hook as a no-op (codex rejects empty or non-JSON
