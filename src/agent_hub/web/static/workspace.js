@@ -992,11 +992,11 @@ function dropRow(sid) {
   scheduleStats();
 }
 /* The WebSocket carries hook events and approvals only. A session the
-   dead-tmux sweep ends, one deleted elsewhere (phone, API, another tab),
-   and anything sent while the socket was down never reach this page, and
-   a waiting row ignores later status changes. So compare the live rows
-   with the Hub every 15 s and on reconnect, and re-render the rows that
-   disagree. */
+   dead-tmux sweep ends, one the idle sweep marks idle after 10 quiet
+   minutes, one deleted elsewhere (phone, API, another tab), and anything
+   sent while the socket was down never reach this page, and a waiting row
+   ignores later status changes. So compare the live rows with the Hub
+   every 15 s and on reconnect, and re-render the rows that disagree. */
 let reconciling = false;
 async function reconcileRows() {
   const rows = allRows().filter(r => r.dataset.raw !== '1' && r.dataset.status !== 'stopped');
@@ -1011,7 +1011,8 @@ async function reconcileRows() {
     for (const card of rows) {
       const sid = card.dataset.sid;
       const s = live.get(sid);
-      if (s && (card.dataset.pending === '1') === !!s.pending_tool) continue;
+      if (s && (card.dataset.pending === '1') === !!s.pending_tool
+        && LIVE_STATES.has(card.dataset.status) === (s.status === 'active' || !!s.pending_tool)) continue;
       try {
         await replaceCard(sid);
         if (previewState.sid === sid) highlightRow(sid);
