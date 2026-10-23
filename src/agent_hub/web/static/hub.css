@@ -305,6 +305,7 @@ code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .drawer.is-open { transform: none; visibility: visible; }
 .drawer-file { width: min(760px, 62%); }
 .drawer-file:focus { outline: none; }
+.tabbar-end .btn[aria-pressed="true"] { color: var(--brand); }
 .file-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--canvas); }
 .drawer-head { display: flex; align-items: center; gap: 8px; flex-shrink: 0; height: var(--tabbar-h); padding: 0 6px 0 12px; border-bottom: 1px solid var(--border); }
 .drawer-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-2); font-weight: 500; }

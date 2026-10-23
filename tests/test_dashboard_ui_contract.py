@@ -252,7 +252,7 @@ def test_file_paths_from_a_terminal_open_in_a_preview_panel() -> None:
     assert 'id="file-preview"' in DASHBOARD and 'id="file-preview-frame"' in DASHBOARD
     assert "`${WEBFM_URL}/?open=${encodeURIComponent(path)}`" in WORKSPACE_JS
     # A click elsewhere closes it, a click into a terminal frame included.
-    assert "if (filePreviewOpen() && !event.target.closest('#file-preview')) closeFilePreview();" in WORKSPACE_JS
+    assert "if (filePreviewOpen() && !event.target.closest('#file-preview, [data-action=\"open-folder\"]')) closeFilePreview();" in WORKSPACE_JS
     assert "if (active?.tagName === 'IFRAME' && active.id !== 'file-preview-frame') closeFilePreview();" in WORKSPACE_JS
     # Guarded: the running Hub reloads templates before it reloads Python.
     assert 'data-webfm-url="{{ webfm_url() if webfm_url is defined else \'\' }}"' in BASE
@@ -269,3 +269,13 @@ def test_no_live_label_only_a_reconnecting_notice() -> None:
     assert 'id="ws-conn" hidden' in DASHBOARD and 'id="m-conn" hidden' in mobile_html
     assert "if (conn) conn.hidden = state !== 'down';" in HUB_JS
     assert "$('m-conn').hidden = state === 'live';" in mobile_js
+
+
+def test_tab_bar_folder_button_browses_the_session_directory() -> None:
+    # The tab bar's "+" duplicated the sidebar's New session; its place is
+    # the open session's folder in the preview panel.
+    tabbar = DASHBOARD.split('class="tabbar-end"')[1].split("</div>")[0]
+    assert 'data-action="new-session"' not in tabbar
+    assert 'id="preview-folder" data-action="open-folder"' in tabbar
+    assert "case 'open-folder': toggleSessionFolder(); break;" in WORKSPACE_JS
+    assert "else openFilePreview(previewState.cwd);" in WORKSPACE_JS

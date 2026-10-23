@@ -20,7 +20,7 @@ const GROUPS_KEY = 'agentHubGroups';
 const RAW = 'tmux:'; // key prefix for rows that are bare tmux sessions, not Hub sessions
 const ENDED_PREVIEW = 3; // ended rows shown per project before "more"
 
-const previewState = {sid: null, tmux: null};
+const previewState = {sid: null, tmux: null, cwd: ''};
 const STATE_LABELS = {waiting: 'Waiting', running: 'Running', active: 'Active', idle: 'Idle', stopped: 'Ended'};
 const STATUS_RANK = {waiting: 0, running: 1, active: 1, idle: 2, stopped: 3};
 const VERBS = {
@@ -586,6 +586,8 @@ function previewSession(el) {
   cwd.textContent = info.cwd || info.project;
   cwd.title = info.host ? `${info.cwd} on ${info.host}` : info.cwd;
   $('preview-detail').hidden = false;
+  previewState.cwd = info.cwd;
+  $('preview-folder').hidden = !info.cwd;
   const standalone = $('preview-standalone');
   standalone.hidden = false;
   standalone.href = `${TERMINAL_URL}/?attach=${encodeURIComponent(info.tmux)}&theme=${encodeURIComponent(theme)}`;
@@ -605,6 +607,8 @@ function clearTerminalStage() {
   $('preview-cwd').textContent = '';
   $('preview-detail').hidden = true;
   $('preview-standalone').hidden = true;
+  $('preview-folder').hidden = true;
+  previewState.cwd = '';
   setStageConn('idle');
   previewState.sid = null;
   previewState.tmux = null;
@@ -772,7 +776,10 @@ function inspectorOnEvent(data) {
    host on port 7701 (the file manager's default). */
 const WEBFM_URL = (document.body.dataset.webfmUrl || `${location.protocol}//${location.hostname}:7701`).replace(/\/+$/, '');
 let previewWatch = null;  // interval that closes the panel once a terminal has the focus
+let previewPath = '';     // what the panel shows
 function openFilePreview(path) {
+  previewPath = path;
+  $('preview-folder').setAttribute('aria-pressed', String(path === previewState.cwd));
   if (inspectorSid) closeInspector();
   const url = `${WEBFM_URL}/?open=${encodeURIComponent(path)}`;
   const title = $('file-preview-title');
@@ -794,10 +801,19 @@ function openFilePreview(path) {
     if (active?.tagName === 'IFRAME' && active.id !== 'file-preview-frame') closeFilePreview();
   }, 200);
 }
+/* The tab bar's folder button: the open session's directory in the same
+   panel, to browse its files and preview them. A second press closes it. */
+function toggleSessionFolder() {
+  if (!previewState.cwd) return;
+  if (filePreviewOpen() && previewPath === previewState.cwd) closeFilePreview();
+  else openFilePreview(previewState.cwd);
+}
 function filePreviewOpen() { return $('file-preview').classList.contains('is-open'); }
 function closeFilePreview() {
   clearInterval(previewWatch);
   previewWatch = null;
+  previewPath = '';
+  $('preview-folder').setAttribute('aria-pressed', 'false');
   const drawer = $('file-preview');
   drawer.classList.remove('is-open');
   drawer.setAttribute('aria-hidden', 'true');
@@ -1054,6 +1070,7 @@ document.addEventListener('click', event => {
     case 'toggle-sidebar': setSidebarHidden(!sidebarHidden()); break;
     case 'close-inspector': closeInspector(); break;
     case 'close-file-preview': closeFilePreview(); break;
+    case 'open-folder': toggleSessionFolder(); break;
     case 'inspect-current': if (previewState.sid) openInspector(previewState.sid); break;
     default: break;
   }
@@ -1099,7 +1116,7 @@ $('theme-button').addEventListener('click', () => togglePopover($('theme-button'
 $('utility-button').addEventListener('click', () => togglePopover($('utility-button'), $('utility-menu')));
 document.addEventListener('click', event => {
   if (!event.target.closest('.popover, [aria-haspopup]')) closePopovers();
-  if (filePreviewOpen() && !event.target.closest('#file-preview')) closeFilePreview();
+  if (filePreviewOpen() && !event.target.closest('#file-preview, [data-action="open-folder"]')) closeFilePreview();
 });
 // A click inside a terminal frame never reaches this document, but it takes
 // the focus away from this window, so close the menus then as well.
