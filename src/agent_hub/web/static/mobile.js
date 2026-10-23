@@ -307,6 +307,9 @@
     $('m-input').disabled = !!hint;
     $('m-send').disabled = !!hint;
     $('m-esc').disabled = !s;
+    // Restart needs a running CLI in tmux and an id to resume; a Codex
+    // session found only by pane scanning (codex-<tmux>-<time>) has none.
+    $('m-restart').hidden = !(s && s.tmux_session && /^(claude|codex|omx)/.test(s.tool) && !s.session_id.startsWith('codex-'));
     $('m-hint').hidden = !hint;
     $('m-hint').textContent = hint;
   }
@@ -527,6 +530,19 @@
           danger: true,
         });
         if (ok) act(button, () => H.api('POST', sessionUrl('/interrupt')), r => r.ignored ? 'Already stopping' : 'Stopped');
+        break;
+      }
+      case 'restart': {
+        const s = sessions.get(openSid);
+        const name = s ? s.name : openSid.slice(0, 8);
+        button.classList.add('is-busy');
+        try {
+          if (await H.restartSession(openSid, name)) H.toast(`Restarted ${name}`, 'success');
+        } catch (err) {
+          H.toast(err.message, 'error', 5000);
+        } finally {
+          button.classList.remove('is-busy');
+        }
         break;
       }
       case 'earlier':

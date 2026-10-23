@@ -84,9 +84,18 @@ def test_sessions_can_be_restarted_one_by_one_or_per_tool() -> None:
     assert 'data-action="restart-all" data-tool="codex"' in DASHBOARD
     assert "case 'restart': restartSession(sid, btn); break;" in WORKSPACE_JS
     assert "case 'restart-all': restartAll(btn.dataset.tool); break;" in WORKSPACE_JS
+    assert "H.restartSession(sid, name)" in WORKSPACE_JS
     # A session in the middle of a turn needs a second confirmation.
-    assert "`/api/sessions/${sid}/restart?force=true`" in WORKSPACE_JS
+    assert "await api('POST', `${url}?force=true`);" in HUB_JS
     assert "api('POST', '/api/restart-sessions', {tool: family})" in WORKSPACE_JS
+
+
+def test_phone_session_screen_can_restart_its_cli() -> None:
+    mobile_html = (WEB / "templates/mobile.html").read_text()
+    mobile_js = (WEB / "static/mobile.js").read_text()
+    assert 'id="m-restart" data-action="restart"' in mobile_html
+    assert "$('m-restart').hidden = !(s && s.tmux_session" in mobile_js
+    assert "await H.restartSession(openSid, name)" in mobile_js
 
 
 def test_close_workspace_tab_is_view_only() -> None:

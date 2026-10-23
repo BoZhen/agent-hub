@@ -168,6 +168,26 @@ window.AgentHub = (() => {
     });
   }
 
+  /* Restart a running session's CLI so it runs a newly installed version,
+     after the user confirms. The Hub respawns the agent's pane with the
+     resume command, so the conversation goes on in the same tmux and an
+     open terminal stays on it. A session in the middle of a turn asks once
+     more. Resolves true when restarted, false when the user cancelled. */
+  async function restartSession(sid, name) {
+    const ok = await confirmDialog({title: `Restart ${name}?`, body: 'The CLI exits and resumes this conversation in the same tmux, so it runs the version installed now. Text typed but not sent is lost.', confirmLabel: 'Restart'});
+    if (!ok) return false;
+    const url = `/api/sessions/${encodeURIComponent(sid)}/restart`;
+    try {
+      await api('POST', url);
+    } catch (e) {
+      if (!/middle of a turn/.test(e.message)) throw e;
+      const force = await confirmDialog({title: `${name} is working`, body: 'Restarting now stops the current turn. The conversation so far is kept.', confirmLabel: 'Restart anyway', danger: true});
+      if (!force) return false;
+      await api('POST', `${url}?force=true`);
+    }
+    return true;
+  }
+
   function copyText(text) {
     if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
     const ta = document.createElement('textarea');
@@ -205,5 +225,5 @@ window.AgentHub = (() => {
   }
   if (document.getElementById('ws-dot') || document.body.dataset.ws !== 'off') connectWS();
 
-  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, renderMarkdown, toast, api, confirmDialog, promptDialog, copyText};
+  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, renderMarkdown, toast, api, confirmDialog, promptDialog, restartSession, copyText};
 })();

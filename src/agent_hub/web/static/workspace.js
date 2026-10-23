@@ -923,26 +923,14 @@ async function resumeSession(sid) {
     if (inspectorSid === sid) openInspector(sid);
   } catch (e) { toast(e.message, 'error'); }
 }
-/* Restart a running session's CLI so it runs a newly installed version:
-   the Hub respawns the agent's pane with the resume command, so the
-   conversation goes on in the same tmux and the open terminal stays on
-   it. A session in the middle of a turn needs a second confirmation. */
+/* Restart a running session's CLI to pick up an update (see
+   H.restartSession). */
 async function restartSession(sid, btn) {
   const card = cardFor(sid);
   const name = card ? rowInfo(card).name : sid.slice(0, 8);
-  const ok = await H.confirmDialog({title: `Restart ${name}?`, body: 'The CLI exits and resumes this conversation in the same tmux, so it runs the version installed now. Text typed but not sent is lost.', confirmLabel: 'Restart'});
-  if (!ok) return;
   btn?.classList.add('is-busy');
   try {
-    try {
-      await api('POST', `/api/sessions/${sid}/restart`);
-    } catch (e) {
-      if (!/middle of a turn/.test(e.message)) throw e;
-      const force = await H.confirmDialog({title: `${name} is working`, body: 'Restarting now stops the current turn. The conversation so far is kept.', confirmLabel: 'Restart anyway', danger: true});
-      if (!force) return;
-      await api('POST', `/api/sessions/${sid}/restart?force=true`);
-    }
-    toast(`Restarted ${name}`, 'success');
+    if (await H.restartSession(sid, name)) toast(`Restarted ${name}`, 'success');
   } catch (e) { toast(e.message, 'error'); }
   finally { btn?.classList.remove('is-busy'); }
 }
