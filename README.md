@@ -101,6 +101,7 @@ Codex 只在启动时向终端询问一次背景色，得到回答才给你输�
 - 手机页的 Text 视图从 pi 自己的会话文件（`~/.pi/agent/sessions/`）读消息。pi 的会话文件是树形的（`/tree` 分支），读出的是文件末尾最近写入的部分。
 - 本机安装了 `pi` 时，New session、侧栏的工具筛选和右上角菜单的 Restart 才出现 pi。
 - tmux 3.4 需要在 `~/.tmux.conf` 加 `set -g extended-keys on`，pi 才能区分 Shift+Enter 与 Enter；否则 pi 启动时会提示。
+- pi 的 `system` 主题按终端的颜色生成配色。Hub 换主题、或打开一个 pi 会话的终端时，与 opencode 一样（见下）通知 pi 重新读取终端颜色，不用重启 pi。主题设成固定的 `dark` / `light` 时 pi 不跟随 Hub。
 
 ### opencode
 
@@ -112,6 +113,7 @@ Codex 只在启动时向终端询问一次背景色，得到回答才给你输�
 - 恢复与重启用 `opencode --standalone -s <id>`。
 - 审批跟随 opencode 自己的 `permissions` 设置，默认只有读取 `.env` 文件时询问。等待审批的提示从 pane 的画面识别：Approve 选 "Allow once"，Always 选 "Always allow"（同类请求在这个项目里以后不再询问）。
 - opencode 要按两次 Esc 才打断一轮，所以手机页的 Esc 对 opencode 连按两次。
+- opencode 按终端的背景色选浅色或深色配色。tmux 3.4 只在终端连上时问一次终端的颜色，也不把终端的浅色/深色切换通知转给 opencode，所以 Hub 换主题时：Web Terminal 把新主题的颜色告诉 tmux，Hub 再向 opencode 的 pane 发送切换通知（`ESC[?997;1n` / `ESC[?997;2n`），opencode 重新询问背景色并换配色。打开一个 opencode 会话的终端时也这样做一次。没有在任何终端里打开的会话，下次打开时才跟上。
 - 手机页的 Text 视图和 token 统计从 opencode 的数据库（`~/.local/share/opencode/opencode.db`，或 `OPENCODE_DB` 指定的文件）只读查询。
 - 子代理的会话不单独上报。
 - 本机安装了 `opencode` 时，New session、侧栏的工具筛选和右上角菜单的 Restart 才出现 opencode。

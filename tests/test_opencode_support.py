@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from agent_hub import db
 from agent_hub.api import sessions as sessions_api
@@ -246,6 +247,42 @@ def test_opencode_esc_presses_escape_twice(tmp_path, private_tmux, monkeypatch):
 
     _run(check)
     assert _read_bytes(keys_log, 2) == b"\x1b\x1b"
+
+
+@needs_tmux
+def test_theme_notice_reaches_opencode_and_pi_panes_only(tmp_path, private_tmux, monkeypatch):
+    # Panes that record what they are sent. Claude Code would read the
+    # notice as typed text, so its pane must get nothing.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("opencode", "pi", "claude"):
+        script = bin_dir / tool
+        script.write_text(f"#!/bin/sh\nstty raw -echo\ndd bs=1 count=9 of='{tmp_path}/{tool}.keys' 2>/dev/null\nsleep 600\n")
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    rows = (("ses_oc", "oc-1", "opencode"), ("pi-sid", "pi-1", "pi"), ("cl-sid", "cl-1", "claude"))
+    for _, name, tool in rows:
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, tool], check=True)
+    time.sleep(0.5)
+
+    async def check(conn):
+        for sid, name, tool in rows:
+            await db.upsert_session(
+                conn, session_id=sid, hub_id="h", hostname="h", cwd=str(tmp_path),
+                status="idle", tmux_session=name, tool=tool,
+            )
+        notice = sessions_api.theme_notice
+        res = await notice(_request(conn), sessions_api.ThemeNotice(tone="light"))
+        assert sorted(res["notified"]) == ["pi-sid", "ses_oc"]
+        assert await notice(_request(conn), sessions_api.ThemeNotice(tone="dark", session_ids=["other"])) == {"notified": []}
+        with pytest.raises(HTTPException):
+            await notice(_request(conn), sessions_api.ThemeNotice(tone="dim"))
+
+    _run(check)
+    assert _read_bytes(tmp_path / "opencode.keys", 9) == b"\x1b[?997;2n"
+    assert _read_bytes(tmp_path / "pi.keys", 9) == b"\x1b[?997;2n"
+    time.sleep(0.3)
+    assert (tmp_path / "claude.keys").read_bytes() == b""
 
 
 # ── opencode's database ──────────────────────────────────────

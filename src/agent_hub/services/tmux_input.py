@@ -246,3 +246,11 @@ async def press(pane: str, *keys: str) -> None:
     rc, _, err = await _tmux("send-keys", "-t", pane, *keys)
     if rc != 0:
         raise TmuxInputError(err or "tmux send-keys failed")
+
+
+async def type_literal(pane: str, text: str) -> None:
+    """Send `text` to the pane's program as its input, character for
+    character, escape sequences included (send-keys -l)."""
+    rc, _, err = await _tmux("send-keys", "-t", pane, "-l", text)
+    if rc != 0:
+        raise TmuxInputError(err or "tmux send-keys failed")

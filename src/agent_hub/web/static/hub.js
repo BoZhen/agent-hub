@@ -23,6 +23,14 @@ window.AgentHub = (() => {
     window.dispatchEvent(new CustomEvent('agenthub:theme', {detail: {theme: id}}));
   }
   function themeName(id) { return (THEMES.find(t => t.id === id) || THEMES[0]).name; }
+  /* opencode and pi do not follow a theme change by themselves inside
+     tmux: ask the Hub to tell them to look at the terminal's colours again
+     (POST /api/theme), once the terminals have reported the new colours to
+     tmux. Without ids, every running opencode and pi session. */
+  function noticeTheme(sessionIds) {
+    const tone = (THEMES.find(t => t.id === currentTheme()) || THEMES[0]).tone;
+    setTimeout(() => api('POST', '/api/theme', {tone, session_ids: sessionIds || null}).catch(() => {}), 500);
+  }
 
   function escapeHtml(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -226,5 +234,5 @@ window.AgentHub = (() => {
   }
   if (document.getElementById('ws-dot') || document.body.dataset.ws !== 'off') connectWS();
 
-  return {THEMES, currentTheme, setTheme, themeName, escapeHtml, icon, renderMarkdown, toast, api, confirmDialog, promptDialog, restartSession, copyText};
+  return {THEMES, currentTheme, setTheme, themeName, noticeTheme, escapeHtml, icon, renderMarkdown, toast, api, confirmDialog, promptDialog, restartSession, copyText};
 })();

@@ -360,6 +360,7 @@ tmux 3.5 及以上再加 `set -g extended-keys-format csi-u`。改完对 tmux se
 - 只发工具名和一个参数(命令、文件路径或搜索模式)。写入或编辑的文件内容不离开 pi。
 - pi 运行工具前不询问,Hub 里 pi 的 session 不会出现“等待审批”。
 - pi 的“工作中”提示是 `Working (escape to interrupt)`,Hub 据此判断一轮是否还在进行(Restart 时跳过正在工作的 session)。
+- pi 的主题设为 `system` 时按终端颜色生成配色。Hub 换主题、或打开一个 pi 会话的终端时,Hub 通知 pi 重新读取颜色(与 opencode 相同,见 2.8),不用重启。
 
 ### 2.8 opencode 插件配置（可选）
 
@@ -382,6 +383,7 @@ opencode 监视这个目录,正在运行的后台服务会自动加载插件,不
 - 只发工具名和一个参数(命令、文件路径、搜索模式或 URL)。写入或编辑的文件内容不离开 opencode。子代理的会话不上报。
 - 审批跟随 opencode 的 `permissions` 设置,默认只有读取 `.env` 文件时询问。Hub 从 pane 画面识别 "Permission required" 提示,Approve 发 Enter("Allow once"),Always 发 Right Enter("Always allow")。
 - opencode 的“工作中”提示是一排方块加 `esc interrupt`,按过一次 Esc 后是 `esc again to interrupt`;Hub 据此判断一轮是否还在进行。opencode 要第二次 Esc 才打断,Hub 的 Esc 对它连按两次。
+- opencode 按终端背景色选浅色或深色配色。Hub 换主题、或打开一个 opencode 会话的终端时,Web Terminal 先把新颜色告诉 tmux(OSC 10/11),Hub 再向 opencode 的 pane 发浅色/深色切换通知(`POST /api/theme`),opencode 随之换配色。需要 Web Terminal 也是新版本。
 - 消息和 token 统计从 opencode 的数据库只读查询:`$XDG_DATA_HOME/opencode/opencode.db`(默认 `~/.local/share/opencode/opencode.db`),设了 `OPENCODE_DB` 时用它指定的文件。Hub 服务和 opencode 要看到同一个路径。
 
 ---

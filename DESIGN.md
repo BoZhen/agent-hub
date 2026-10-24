@@ -483,7 +483,7 @@ pi 没有 hook 配置，扩展在 pi 进程内接收它的生命周期事件。`
 
 扩展在 pi 进程里运行，`$TMUX` 可用，tmux 名在第一次发事件时取一次。只在 mode 为 `tui` 且有 `$TMUX` 时发，RPC / JSON / print 模式（把 pi 当子进程运行的控制台）不发。
 
-Hub 侧：`tool` 为 `pi`，进程名 `pi`（pi 设置了 process title），恢复与重启用 `pi --session <id>`，启动时有名字就加 `--name`。pi 不在运行工具前询问，`parse_one` 对 pi 直接返回，不读画面找审批。“工作中”提示 `Working (escape to interrupt)` 由 `_WORKING_RES` 识别。会话文件 `~/.pi/agent/sessions/--<dir>--/<时间>_<id>.jsonl` 供手机页的 Text 视图（`conversation._pi_items`）与用量统计（`read_usage`）读取。
+Hub 侧：`tool` 为 `pi`，进程名 `pi`（pi 设置了 process title），恢复与重启用 `pi --session <id>`，启动时有名字就加 `--name`。pi 不在运行工具前询问，`parse_one` 对 pi 直接返回，不读画面找审批。“工作中”提示 `Working (escape to interrupt)` 由 `_WORKING_RES` 识别。会话文件 `~/.pi/agent/sessions/--<dir>--/<时间>_<id>.jsonl` 供手机页的 Text 视图（`conversation._pi_items`）与用量统计（`read_usage`）读取。pi 的 `system` 主题由终端颜色生成，跟随 Hub 主题的方式与 opencode 相同（见 10.4）：pi 也启用 mode 2031，收到 `ESC[?997;1n` / `ESC[?997;2n` 后重新询问终端颜色并重建主题；固定主题时 pi 收下这个通知但不改配色，不会把它当作输入的文字。
 
 ### 10.4 opencode
 
@@ -492,6 +492,8 @@ opencode 2.x 没有 hook 配置，插件接收它的事件。插件运行在 ope
 `scripts/opencode-hub-plugin.js` 订阅 `ctx.event.subscribe` 的事件流，按 Claude hook 的格式发到 `/api/events?tool=opencode`：`session.created` → SessionStart（`startup`），`session.inbox.enqueued`（用户输入）→ UserPromptSubmit，`session.tool.called` / `session.tool.success` / `session.tool.failed` → PreToolUse / PostToolUse / PostToolUseFailure（工具名取自 `session.tool.input.started`），`session.execution.succeeded` / `failed` / `interrupted` → Stop（带这一轮最后一段文字，取自 `session.text.ended`），`session.renamed` 发到 `/api/sessions/{id}/title`。全部取自同一个事件流，Hub 收到的顺序与 opencode 发出的顺序一致。用 `-s <id>` 打开已有会话时 opencode 不发事件，插件从父进程命令行取出这个 id，用 `ctx.session.get` 查到标题与模型，发 SessionStart（`resume`）。第一次见到的会话都这样查一次，`parentID` 非空的（子代理）记下并忽略。工具名换成 Claude 的名字（`shell` → Bash，`glob` → Glob，`subagent` → Agent 等），参数只带一个。
 
 opencode 在第一条 prompt 后用模型生成标题。Hub 的 New session 填了名字时，Hub 以 `env AGENT_HUB_TITLE=<名字> opencode --standalone` 启动，插件在 `title` hook 里把这个名字设为结果，opencode 就不再请求模型。只用于这个终端新建的第一个会话；`-s` 打开的会话保留原标题。
+
+opencode 按终端背景色选浅色或深色配色：启动时问一次（OSC 11），之后在终端发来浅色/深色切换通知（mode 2031，`ESC[?997;1n` 深色、`ESC[?997;2n` 浅色）时再问。经过 tmux 3.4 这两步都断了：tmux 只在终端连上时问一次终端的颜色，之后用缓存回答 pane 里程序的询问；它不支持 mode 2031，不转发切换通知。所以分两步补上：Web Terminal 换主题时把新颜色以 OSC 10/11 回答的形式发给 tmux（tmux 收下并更新缓存）；Hub 页面随后调用 `POST /api/theme`，Hub 用 `send-keys -l` 把切换通知输入 opencode 的 pane。opencode 收到后重新询问背景色，tmux 用新缓存回答。没有终端连着的会话得不到回答，opencode 保持原配色。Web Terminal 连上一个 opencode 会话时也调用一次，补上在别处换过主题的情况。切换通知只发给 opencode 与 pi：Claude Code 与 Codex 会把这串字符当作输入的文字。
 
 opencode 把所有会话存在一个 SQLite 数据库里（`$XDG_DATA_HOME/opencode/opencode.db`，`OPENCODE_DB` 可改）。opencode 的行没有 `transcript_path`：`services/opencode_store.py` 按会话 id 只读查询 `session_v2`（token 合计、模型）与 `session_message`（`user` / `assistant` 的文字与工具块、`shell`、`idle` 的打断与失败），供用量统计与手机页 Text 视图使用。
 

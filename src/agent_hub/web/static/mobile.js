@@ -515,7 +515,12 @@
       postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()});
       postToTerminal({type: 'agent-hub:visibility', visible: mode === 'terminal' && document.visibilityState === 'visible'});
     }
-    if (type === 'webterminal:connected') terminal.state = 'connected';
+    if (type === 'webterminal:connected') {
+      terminal.state = 'connected';
+      // opencode and pi chose their colours before this terminal was attached.
+      const s = sessions.get(openSid);
+      if (s && /^(opencode|pi)/.test(s.tool || '') && s.tmux_session === terminal.tmux) H.noticeTheme([openSid]);
+    }
     if (type === 'webterminal:reconnecting') terminal.state = 'reconnecting';
     if (type === 'webterminal:disconnected') terminal.state = 'disconnected';
     renderStage();

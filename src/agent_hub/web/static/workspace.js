@@ -740,7 +740,12 @@ window.addEventListener('message', event => {
     postToTerminal({type: 'agent-hub:set-theme', theme: H.currentTheme()}, frame);
     postToTerminal({type: 'agent-hub:visibility', visible: terminalIsVisible() && name === previewState.tmux}, frame);
   }
-  if (type === 'webterminal:connected') frame.state = 'connected';
+  if (type === 'webterminal:connected') {
+    frame.state = 'connected';
+    // opencode and pi chose their colours before this terminal was attached.
+    const card = allRows().find(r => r.dataset.tmux === name && ['opencode', 'pi'].includes(r.dataset.toolFamily));
+    if (card) H.noticeTheme([card.dataset.sid]);
+  }
   if (type === 'webterminal:reconnecting') frame.state = 'reconnecting';
   if (type === 'webterminal:disconnected') frame.state = 'disconnected';
   if (name === previewState.tmux) setStageConn(frame.state);
@@ -1198,6 +1203,7 @@ window.addEventListener('blur', closePopovers);
 window.addEventListener('agenthub:theme', event => {
   $('theme-label').textContent = H.themeName(event.detail.theme);
   broadcastToTerminals({type: 'agent-hub:set-theme', theme: event.detail.theme});
+  H.noticeTheme();
   const standalone = $('preview-standalone');
   if (!standalone.hidden && previewState.tmux) standalone.href = `${TERMINAL_URL}/?attach=${encodeURIComponent(previewState.tmux)}&theme=${encodeURIComponent(event.detail.theme)}`;
 });

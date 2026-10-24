@@ -490,6 +490,50 @@ async def interrupt(request: Request, session_id: str):
     return {"ok": True, "ignored": False}
 
 
+class ThemeNotice(BaseModel):
+    tone: str  # "dark" or "light"
+    session_ids: list[str] | None = None  # None: every running opencode and pi session
+
+
+@router.post("/theme")
+async def theme_notice(request: Request, body: ThemeNotice):
+    """Tell opencode and pi sessions to look at the terminal's colours again.
+
+    Both pick their colours from the ones they ask the terminal for, at
+    startup and when the terminal reports a light/dark change
+    (ESC[?997;1n dark, ESC[?997;2n light; mode 2031): opencode its light or
+    dark variant, pi's system theme its whole palette. tmux 3.4 does not
+    pass that report on, so the Hub page asks the Hub to type it into their
+    panes after a theme change and when a terminal attaches. tmux answers
+    the question with the colours the attached terminal last reported; with
+    no terminal attached there is no answer and the CLI keeps its colours.
+    Claude Code and Codex would read the sequence as typed text, so only
+    opencode and pi panes get it.
+    """
+    if body.tone not in ("dark", "light"):
+        raise HTTPException(status_code=400, detail="tone must be dark or light")
+    conn = request.app.state.db
+    cursor = await conn.execute(
+        "SELECT session_id, tmux_session FROM sessions "
+        "WHERE status IN ('active', 'idle') AND tmux_session IS NOT NULL "
+        "AND parent_session_id IS NULL AND (tool LIKE 'opencode%' OR tool LIKE 'pi%')"
+    )
+    rows = [dict(r) for r in await cursor.fetchall()]
+    wanted = set(body.session_ids) if body.session_ids is not None else None
+    report = "\x1b[?997;1n" if body.tone == "dark" else "\x1b[?997;2n"
+    notified = []
+    for row in rows:
+        if wanted is not None and row["session_id"] not in wanted:
+            continue
+        try:
+            pane = await tmux_input.agent_pane(row["tmux_session"])
+            await tmux_input.type_literal(pane, report)
+        except tmux_input.TmuxInputError:
+            continue
+        notified.append(row["session_id"])
+    return {"notified": notified}
+
+
 @router.get("/sessions/{session_id}/messages")
 async def session_messages(
     request: Request,
