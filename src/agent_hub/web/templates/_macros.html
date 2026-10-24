@@ -2,7 +2,8 @@
 {% macro tool_icon(tool) -%}
   {# Match the tool_family logic in _session_card.html so codex-yolo,
      the retired omx-yolo and any future codex-family launch marker get
-     the Codex glyph instead of falling back to Claude. pi gets a π. #}
+     the Codex glyph instead of falling back to Claude. pi gets a π, and
+     opencode the block-letter O of its wordmark, in the text colour. #}
   {%- set t = tool or '' -%}
   {%- if 'codex' in t or t.startswith('omx') -%}
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#10A37F" class="w-full h-full" aria-label="Codex">
@@ -13,6 +14,11 @@
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-full h-full" aria-label="pi">
     <title>pi</title>
     <path d="M4 7.5h16M9.2 7.5c0 4.6-.6 8.4-2.4 11.5M15 7.5v8.3c0 1.9.9 2.9 2.6 2.9" fill="none" stroke="#8B5CF6" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  {%- elif t.startswith('opencode') -%}
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-full h-full" aria-label="opencode">
+    <title>opencode</title>
+    <path d="M4 4.5h16v15H4zM8 7.5v9h8v-9z" fill="currentColor" fill-rule="evenodd"/>
   </svg>
   {%- else -%}
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-full h-full" aria-label="Claude">

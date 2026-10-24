@@ -19,8 +19,8 @@ import time
 TMUX = "tmux"
 # Process names of an agent CLI. An npm install runs as `node`, so a node
 # process counts when its command line names one of them. pi sets its
-# process title to "pi".
-AGENT_COMMANDS = ("claude", "codex", "pi")
+# process title to "pi", and opencode's terminal UI to "opencode".
+AGENT_COMMANDS = ("claude", "codex", "pi", "opencode")
 _TREE_DEPTH = 6
 
 _buffers = itertools.count(1)
@@ -90,7 +90,7 @@ def _is_agent(pid: int, name: str) -> bool:
 
 
 def runs_agent(pane_pid: int, table: dict[int, tuple[int, str]]) -> bool:
-    """Whether an agent CLI (claude, codex, pi) runs in the pane's process tree.
+    """Whether an agent CLI (claude, codex, pi, opencode) runs in the pane's process tree.
 
     A pane's own foreground process is not enough: the Hub resumes a
     session as `bash -c '...; claude --resume <id>; exec $SHELL -i'`, and

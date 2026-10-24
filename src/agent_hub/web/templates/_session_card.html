@@ -4,7 +4,7 @@
    lives in data-* attributes; actions are dispatched by data-action.
    `show_delete` is kept for callers; ended and idle rows always get it. #}
 {% macro session_card(s, terminal_url, show_delete=False) %}
-  {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if 'codex' in (s.tool or '') or (s.tool or '').startswith('omx') else ('pi' if (s.tool or '').startswith('pi') else 'other')) %}
+  {% set tool_family = 'claude' if (s.tool or '').startswith('claude') else ('codex' if 'codex' in (s.tool or '') or (s.tool or '').startswith('omx') else ('pi' if (s.tool or '').startswith('pi') else ('opencode' if (s.tool or '').startswith('opencode') else 'other'))) %}
   {% set display_name = s.title or s.tmux_session or s.hostname %}
   {% set status = 'waiting' if s.pending_tool else ('running' if s.running_tool else s.status) %}
   {% set labels = {'waiting': 'Waiting', 'running': 'Running', 'active': 'Active', 'idle': 'Idle', 'stopped': 'Ended'} %}
@@ -80,8 +80,8 @@
       <button type="button" class="btn icon-btn" data-action="inspect" title="Details"><svg class="icon icon-sm"><use href="#i-info"/></svg></button>
       {% if s.tmux_session and status != 'stopped' %}<a class="btn icon-btn" href="{{ terminal_url }}/?attach={{ s.tmux_session }}" target="_blank" title="Open in a new tab"><svg class="icon icon-sm"><use href="#i-external"/></svg></a>{% endif %}
       {% if s.tool and 'claude' in s.tool and s.tmux_session and not s.transferred and live %}<button type="button" class="btn icon-btn" data-action="fork" title="Fork into a new tmux"><svg class="icon icon-sm"><use href="#i-fork"/></svg></button>{% endif %}
-      {% if status != 'stopped' and tool_family in ('claude', 'codex', 'pi') and s.tmux_session and not s.parent_session_id and not s.session_id.startswith('codex-') %}<button type="button" class="btn icon-btn" data-action="restart" title="Restart the CLI, resuming this conversation (picks up an update)"><svg class="icon icon-sm"><use href="#i-refresh"/></svg></button>{% endif %}
-      {% if status == 'stopped' and tool_family in ('claude', 'codex', 'pi') %}<button type="button" class="btn icon-btn" data-action="resume" title="Resume in a new tmux"><svg class="icon icon-sm"><use href="#i-play"/></svg></button>{% endif %}
+      {% if status != 'stopped' and tool_family in ('claude', 'codex', 'pi', 'opencode') and s.tmux_session and not s.parent_session_id and not s.session_id.startswith('codex-') %}<button type="button" class="btn icon-btn" data-action="restart" title="Restart the CLI, resuming this conversation (picks up an update)"><svg class="icon icon-sm"><use href="#i-refresh"/></svg></button>{% endif %}
+      {% if status == 'stopped' and tool_family in ('claude', 'codex', 'pi', 'opencode') %}<button type="button" class="btn icon-btn" data-action="resume" title="Resume in a new tmux"><svg class="icon icon-sm"><use href="#i-play"/></svg></button>{% endif %}
       {% if show_delete or not live %}<button type="button" class="btn icon-btn btn-danger" data-action="delete" title="{% if status == 'idle' and s.tmux_session %}Delete record and kill its tmux{% else %}Delete record{% endif %}"><svg class="icon icon-sm"><use href="#i-trash"/></svg></button>{% endif %}
     </div>
   </div>

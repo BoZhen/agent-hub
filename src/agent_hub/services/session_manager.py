@@ -481,10 +481,13 @@ async def mark_session_idle(
 # interrupt)"; pi shows "Working (escape to interrupt)". Current Claude
 # Code dropped the hint and shows a verb with an ellipsis, then the
 # elapsed time: "✻ Elucidating… (9m 25s · ↓ 50.6k tokens · thought for
-# 22s)". A finished turn leaves neither behind.
+# 22s)". opencode shows a row of blocks and "esc interrupt", "esc again
+# to interrupt" after one Esc: "⬝■■■■■■⬝ esc interrupt". A finished turn
+# leaves none of these behind.
 _WORKING_RES = (
     _re.compile(r"\([^)]*esc(?:ape)? to interrupt[^)]*\)"),
     _re.compile(r"\u2026\s*\(\d+[hms]\b"),
+    _re.compile(r"[\u25a0\u2b1d]{4,} esc (?:again to )?interrupt"),
 )
 # Lines read from the bottom of the pane's content. The status line sits
 # above the input box, the footer and any task list.
@@ -497,8 +500,9 @@ def _pane_shows_working(pane_text: str) -> bool:
     running a tool.
 
     tmux pads a screen the TUI has not filled with blank rows, so those
-    are dropped before taking the tail. Both patterns need the
-    parentheses, which keeps free text that mentions the phrase out.
+    are dropped before taking the tail. The patterns need the parentheses
+    or opencode's blocks, which keeps free text that mentions the phrase
+    out.
     """
     tail = "\n".join(pane_text.rstrip().splitlines()[-_WORKING_TAIL:])
     return any(r.search(tail) for r in _WORKING_RES)
@@ -570,6 +574,10 @@ async def _list_alive_tmux_names() -> set[str]:
 
 def _is_pi_tool(tool: str | None) -> bool:
     return (tool or "").startswith("pi")
+
+
+def _is_opencode_tool(tool: str | None) -> bool:
+    return (tool or "").startswith("opencode")
 
 
 def _is_codex_tool(tool: str | None) -> bool:
@@ -1238,6 +1246,73 @@ def _parse_codex_approval_prompt(
     return (tool_name, detail, always_label)
 
 
+# opencode's permission prompt, at the bottom of its terminal UI:
+#
+#   △ Permission required
+#     → Read .env                 ("$ <command>" for a shell command)
+#
+#   Path: .env
+#
+#    Allow once   Always allow   Reject      ctrl+f fullscreen  ⇆ select  enter confirm
+#
+# Each row starts with the border of opencode's panel, and on a wide
+# terminal its sidebar shares the rows after a run of spaces. "Allow once"
+# is selected when the prompt opens; "Always allow" saves the request's
+# patterns for the project.
+_OPENCODE_BUTTONS_RE = _re.compile(r"Allow once\s+Always allow\s+Reject")
+_OPENCODE_TITLE = "Permission required"
+_OPENCODE_SIDEBAR_GAP_RE = _re.compile(r"\s{4,}")
+_OPENCODE_ALWAYS_LABEL = "Allow always in this project"
+
+
+def _opencode_row(line: str) -> str:
+    """The prompt's text on a row: what follows the panel border, up to
+    the sidebar. Empty for a row outside the panel and for a row that only
+    the sidebar fills."""
+    _, border, text = line.partition("┃")
+    body = text.lstrip(" ")
+    # The prompt's rows are indented 2 to 4 columns; a row the sidebar
+    # fills alone has the whole width of the panel before it.
+    if not border or len(text) - len(body) > 8:
+        return ""
+    return _OPENCODE_SIDEBAR_GAP_RE.split(body, maxsplit=1)[0].strip()
+
+
+def _parse_opencode_permission_prompt(
+    pane_text: str,
+) -> tuple[str, str, str | None] | None:
+    """Parse opencode's permission prompt from tmux pane text.
+
+    Returns (tool_name, detail, always_label) or None, the same shape as
+    `_parse_approval_prompt`. The prompt counts when its row of buttons is
+    near the bottom of the pane and its title is above it. The first row
+    under the title names the request: "$ <command>" for a shell command
+    (reported as Bash), "→ <Tool> <target>" for the other tools.
+    """
+    lines = pane_text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    total = len(lines)
+    buttons_idx = next(
+        (i for i in range(total - 1, max(-1, total - 12), -1) if _OPENCODE_BUTTONS_RE.search(lines[i])),
+        None,
+    )
+    if buttons_idx is None:
+        return None
+    title_idx = next(
+        (i for i in range(buttons_idx - 1, max(-1, buttons_idx - 60), -1) if _OPENCODE_TITLE in lines[i]),
+        None,
+    )
+    if title_idx is None:
+        return None
+    request = next((r for r in map(_opencode_row, lines[title_idx + 1:buttons_idx]) if r), "")
+    if request.startswith("$ "):
+        return ("Bash", request[2:].strip(), _OPENCODE_ALWAYS_LABEL)
+    request = request.lstrip("→").strip()
+    tool_name, _, target = request.partition(" ")
+    return (tool_name or "opencode", target.strip() or request, _OPENCODE_ALWAYS_LABEL)
+
+
 async def _broadcast_pending_clear(
     conn: aiosqlite.Connection, sid: str, tmux_name: str | None
 ) -> None:
@@ -1289,11 +1364,12 @@ async def parse_one(
     # Approval prompts render in exactly one pane. Run per-pane and
     # take the first match so split layouts (codex in pane 0, shell
     # in pane 1) still surface a real prompt.
-    parser = (
-        _parse_codex_approval_prompt
-        if _is_codex_tool(session.get("tool"))
-        else _parse_approval_prompt
-    )
+    if _is_codex_tool(session.get("tool")):
+        parser = _parse_codex_approval_prompt
+    elif _is_opencode_tool(session.get("tool")):
+        parser = _parse_opencode_permission_prompt
+    else:
+        parser = _parse_approval_prompt
     parsed = None
     for p in panes:
         result = parser(p)

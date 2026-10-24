@@ -181,7 +181,7 @@
   // ── Rendering ───────────────────────────────────────────────
 
   function toolIcon(tool) {
-    const family = /codex|^omx/.test(tool || '') ? 'codex' : /^pi/.test(tool || '') ? 'pi' : 'claude';
+    const family = /codex|^omx/.test(tool || '') ? 'codex' : /^pi/.test(tool || '') ? 'pi' : /^opencode/.test(tool || '') ? 'opencode' : 'claude';
     return $('m-icon-' + family).innerHTML;
   }
 
@@ -334,7 +334,7 @@
     // Restart needs a running CLI in tmux and an id to resume; a Codex
     // session found by pane scanning in earlier Hub versions
     // (codex-<tmux>-<time>) has none.
-    $('m-restart').hidden = !(s && s.tmux_session && /^(claude|codex|omx|pi)/.test(s.tool) && !s.session_id.startsWith('codex-'));
+    $('m-restart').hidden = !(s && s.tmux_session && /^(claude|codex|omx|pi|opencode)/.test(s.tool) && !s.session_id.startsWith('codex-'));
     $('m-hint').hidden = !hint;
     $('m-hint').textContent = hint;
   }

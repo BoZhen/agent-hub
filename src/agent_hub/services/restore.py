@@ -117,12 +117,18 @@ def is_pi_tool(tool: str | None) -> bool:
     return (tool or "").startswith("pi")
 
 
+def is_opencode_tool(tool: str | None) -> bool:
+    return (tool or "").startswith("opencode")
+
+
 def tool_family(tool: str | None) -> str | None:
-    """"claude", "codex" or "pi" for a session's `tool`, else None."""
+    """"claude", "codex", "pi" or "opencode" for a session's `tool`, else None."""
     if is_codex_tool(tool):
         return "codex"
     if is_pi_tool(tool):
         return "pi"
+    if is_opencode_tool(tool):
+        return "opencode"
     if (tool or "").startswith("claude"):
         return "claude"
     return None
@@ -138,7 +144,9 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
     (codex-<tmux>-<ts>), so the interactive picker is used. "omx-yolo" rows predate the bare-codex
     launcher; `omx --madmax` was an alias for the bypass flag, so the same
     codex command resumes them whether or not oh-my-codex is installed.
-    pi opens a session by id with `--session`.
+    pi opens a session by id with `--session`, opencode with `-s`; opencode
+    runs with a private server (`--standalone`), as at launch
+    (api/tmux.py).
     """
     tool = (tool or "").strip()
     if tool.startswith("claude"):
@@ -152,6 +160,8 @@ def resume_argv(tool: str, session_id: str) -> list[str] | None:
         return argv
     if is_pi_tool(tool):
         return ["pi", "--session", session_id]
+    if is_opencode_tool(tool):
+        return ["opencode", "--standalone", "-s", session_id]
     return None
 
 
@@ -442,8 +452,8 @@ async def restart_session(session_row: dict[str, Any], *, config: Any = None) ->
 async def restart_live_sessions(
     conn: aiosqlite.Connection, family: str, *, config: Any = None
 ) -> dict[str, Any]:
-    """Restart every live session of one CLI, family "claude", "codex" or
-    "pi", one after another.
+    """Restart every live session of one CLI, family "claude", "codex",
+    "pi" or "opencode", one after another.
 
     A session in the middle of a turn is skipped, since the restart would
     end that turn, and so is one that cannot be restarted (no CLI running

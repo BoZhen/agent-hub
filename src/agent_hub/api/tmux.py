@@ -24,6 +24,11 @@ from agent_hub.services import tmux_input
 # (`[features] hooks = true` plus ~/.codex/hooks.json), so no wrapper
 # such as oh-my-codex is needed. pi reports through the extension in
 # scripts/pi-hub-extension.js and does not ask before running tools.
+# opencode reports through the plugin in scripts/opencode-hub-plugin.js.
+# Its plugins run in its server, which by default is a background service
+# shared by every opencode client; `--standalone` gives each terminal UI a
+# private server of its own, started inside the pane, so the plugin knows
+# the session's tmux. Its approvals follow its own `permissions` setting.
 # The keys double as the session's `tool` value once hooks report in, so
 # restore.py can rebuild the same command and environment on resume;
 # keep them stable. "claude-yolo", "codex-yolo" and "omx-yolo" are
@@ -34,6 +39,7 @@ _ALLOWED_COMMANDS = {
     "claude2",
     "codex",
     "pi",
+    "opencode",
 }
 
 # Maps a virtual command key → the actual binary name that gets resolved
@@ -43,6 +49,7 @@ _COMMAND_BIN: dict[str, str] = {
     "claude2": "claude",
     "codex": "codex",
     "pi": "pi",
+    "opencode": "opencode",
 }
 
 # Extra args appended after the resolved command path.
@@ -51,15 +58,18 @@ _COMMAND_ARGS: dict[str, list[str]] = {
     "claude2": [],
     "codex": [],
     "pi": [],
+    "opencode": ["--standalone"],
 }
 
 # Auto-name prefix for the generated tmux name: "claude-<workdir>-N",
-# "claude2-<workdir>-N", "codex-<workdir>-N" and "pi-<workdir>-N".
+# "claude2-<workdir>-N", "codex-<workdir>-N", "pi-<workdir>-N" and
+# "opencode-<workdir>-N".
 _NAME_PREFIX: dict[str, str] = {
     "claude": "claude",
     "claude2": "claude2",
     "codex": "codex",
     "pi": "pi",
+    "opencode": "opencode",
 }
 
 
@@ -347,6 +357,10 @@ async def new_tmux(request: Request, req: NewTmuxRequest) -> dict[str, Any]:
         if req.command == "pi" and title:
             # pi keeps a session name of its own; give it the same one.
             argv += ["--name", title]
+        if req.command == "opencode" and title:
+            # opencode titles a new session itself after the first prompt;
+            # the plugin hands it this name instead.
+            argv = ["env", f"AGENT_HUB_TITLE={title}", *argv]
         tmux_args.extend(wait_for_terminal(argv) if req.command == "codex" else argv)
 
     proc = await asyncio.create_subprocess_exec(

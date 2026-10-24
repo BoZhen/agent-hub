@@ -19,6 +19,7 @@ from agent_hub.services.restore import (
     _list_alive_tmux_names,
     _resume_hint_command,
     is_codex_tool,
+    is_opencode_tool,
     find_orphan_sessions,
     restart_live_sessions,
     restart_session,
@@ -199,16 +200,16 @@ async def restart_one(
 
 
 class RestartAllRequest(BaseModel):
-    tool: str  # "claude", "codex" or "pi"
+    tool: str  # "claude", "codex", "pi" or "opencode"
 
 
 @router.post("/restart-sessions")
 async def restart_all(request: Request, req: RestartAllRequest):
-    """Restart every running session of one CLI (Claude, Codex or pi), so
-    they run the version installed now. Sessions in the middle of a turn
-    are skipped and listed with the reason."""
-    if req.tool not in ("claude", "codex", "pi"):
-        raise HTTPException(status_code=400, detail="tool must be claude, codex or pi")
+    """Restart every running session of one CLI (Claude, Codex, pi or
+    opencode), so they run the version installed now. Sessions in the
+    middle of a turn are skipped and listed with the reason."""
+    if req.tool not in ("claude", "codex", "pi", "opencode"):
+        raise HTTPException(status_code=400, detail="tool must be claude, codex, pi or opencode")
     return await restart_live_sessions(
         request.app.state.db, req.tool, config=request.app.state.config
     )
@@ -233,6 +234,8 @@ async def approve_session(
       the UI dismissed. `Enter`-based navigation leaves no residue
       and mirrors the Claude Always path, so both tools share the
       same key sequence for option 2.
+    - opencode: "Allow once" is selected when its prompt opens, so
+      `Enter`; "Always allow" is the next button, `Right Enter`.
 
     The `always=True` path is guarded against stale state: if the
     session has no active `pending_always_label`, we 400. This
@@ -272,7 +275,7 @@ async def approve_session(
 
     tool = session.get("tool") or "claude"
 
-    if is_codex_tool(tool):
+    if is_codex_tool(tool) or is_opencode_tool(tool):
         # Option 1 is highlighted by default in every codex approval
         # UI; Enter confirms it.
         #
@@ -290,9 +293,11 @@ async def approve_session(
         # parser set to "Bash" / "Edit" / "MCP" when it recognized
         # the UI. No new DB column — the discriminator is already
         # in the existing pending-state fields.
-        if always:
+        if is_opencode_tool(tool):
+            keys: tuple[str, ...] = ("Right", "Enter") if always else ("Enter",)
+        elif always:
             down_count = 2 if session.get("pending_tool") == "MCP" else 1
-            keys: tuple[str, ...] = tuple(["Down"] * down_count) + ("Enter",)
+            keys = tuple(["Down"] * down_count) + ("Enter",)
         else:
             keys = ("Enter",)
         proc = await asyncio.create_subprocess_exec(
@@ -466,15 +471,20 @@ async def interrupt(request: Request, session_id: str):
 
     A second press within two seconds is ignored: in Claude Code two
     Escapes in a row open the menu for going back to an earlier message.
+    opencode stops a turn only on a second Escape ("esc again to
+    interrupt"), so it gets both.
     """
     conn = request.app.state.db
-    _, pane = await _running_agent_pane(conn, session_id)
+    session, pane = await _running_agent_pane(conn, session_id)
     now = time.monotonic()
     if now - _last_interrupt.get(session_id, -_INTERRUPT_GAP_S) < _INTERRUPT_GAP_S:
         return {"ok": True, "ignored": True}
     _last_interrupt[session_id] = now
     try:
         await tmux_input.press(pane, "Escape")
+        if is_opencode_tool(session.get("tool")):
+            await asyncio.sleep(0.2)
+            await tmux_input.press(pane, "Escape")
     except tmux_input.TmuxInputError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"ok": True, "ignored": False}
@@ -498,7 +508,7 @@ async def session_messages(
     path = conversation.find_transcript(session, ["~/.claude", config.claude2_config_dir])
     if not path:
         return {"session_id": session_id, "items": []}
-    items = await asyncio.to_thread(conversation.read_messages, path, session.get("tool"), limit)
+    items = await asyncio.to_thread(conversation.read_messages, path, session.get("tool"), limit, session_id)
     return {"session_id": session_id, "items": items}
 
 

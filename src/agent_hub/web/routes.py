@@ -179,6 +179,7 @@ async def dashboard(request: Request):
             "current_page": "dashboard",
             "claude2_available": bool(claude2_config_dir(request.app.state.config)),
             "pi_available": bool(_resolve_command("pi")),
+            "opencode_available": bool(_resolve_command("opencode")),
         },
     )
 

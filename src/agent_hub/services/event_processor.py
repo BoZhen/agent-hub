@@ -8,7 +8,7 @@ import aiosqlite
 
 from agent_hub import db
 from agent_hub.api.ws import broadcaster
-from agent_hub.services import session_manager
+from agent_hub.services import opencode_store, session_manager
 from agent_hub.services.transcript_reader import read_usage
 
 logger = logging.getLogger(__name__)
@@ -182,18 +182,22 @@ async def process_event(
         await session_manager.update_session_activity(conn, session_id)
         status = "active"
 
-    # Update usage and model from transcript (local sessions only)
+    # Update usage and model from transcript (local sessions only). opencode
+    # has no transcript file: its sessions are rows in its database.
     transcript_path = payload.get("transcript_path")
     usage_info = {}
+    usage = None
     if transcript_path:
         usage = read_usage(transcript_path)
-        if usage:
-            transcript_model = usage.pop("model", None)
-            await db.update_session_usage(conn, session_id, **usage)
-            usage_info = usage
-            # Update model from transcript if changed
-            if transcript_model:
-                await db.update_session_model(conn, session_id, transcript_model)
+    elif cli_tool.startswith("opencode"):
+        usage = opencode_store.read_usage(session_id)
+    if usage:
+        transcript_model = usage.pop("model", None)
+        await db.update_session_usage(conn, session_id, **usage)
+        usage_info = usage
+        # Update model from transcript if changed
+        if transcript_model:
+            await db.update_session_model(conn, session_id, transcript_model)
 
     # Broadcast to WebSocket clients
     await broadcaster.broadcast({

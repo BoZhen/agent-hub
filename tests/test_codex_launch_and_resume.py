@@ -26,11 +26,13 @@ BYPASS = "--dangerously-bypass-approvals-and-sandbox"
 
 
 def test_launcher_runs_plain_claude_and_plain_codex():
-    assert _ALLOWED_COMMANDS == {"claude", "claude2", "codex", "pi"}
+    assert _ALLOWED_COMMANDS == {"claude", "claude2", "codex", "pi", "opencode"}
     for key in ("claude", "codex", "pi"):
         assert _COMMAND_BIN[key] == key
         assert _COMMAND_ARGS[key] == []
         assert _NAME_PREFIX[key] == key
+    # opencode runs a private server; see api/tmux.py.
+    assert _COMMAND_ARGS["opencode"] == ["--standalone"]
     assert _COMMAND_BIN["claude2"] == "claude"
     assert _COMMAND_ARGS["claude2"] == []
     assert _NAME_PREFIX["claude2"] == "claude2"

@@ -361,6 +361,29 @@ tmux 3.5 及以上再加 `set -g extended-keys-format csi-u`。改完对 tmux se
 - pi 运行工具前不询问,Hub 里 pi 的 session 不会出现“等待审批”。
 - pi 的“工作中”提示是 `Working (escape to interrupt)`,Hub 据此判断一轮是否还在进行(Restart 时跳过正在工作的 session)。
 
+### 2.8 opencode 插件配置（可选）
+
+opencode 2.x 没有 hook 配置文件,事件由插件接收。`scripts/opencode-hub-plugin.js` 把 opencode 的事件按 Claude hook 的格式发到 Hub(SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PostToolUseFailure / Stop),opencode 给会话起的标题发到 Hub 的重命名接口。
+
+**Step 1 —— 安装插件**(每台跑 opencode 的机器;链接而不是复制,仓库更新后插件跟着更新):
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -s ~/Git/agent-home/scripts/opencode-hub-plugin.js ~/.config/opencode/plugins/agent-hub.js
+```
+
+opencode 监视这个目录,正在运行的后台服务会自动加载插件,不用重启。Hub 不在本机 `127.0.0.1:7800` 时,在启动 opencode 的环境里设 `AGENT_HUB_URL`。
+
+**Step 2 —— 验证**:在 Hub 的 New session 里选 opencode(或在 tmux 里运行 `opencode --standalone`),发一条 prompt,Hub 侧栏应出现一行 opencode 的 session。opencode 在第一条 prompt 时才创建会话,所以发 prompt 之前只看得到一个普通的 tmux 会话。
+
+**已知行为**:
+
+- 插件运行在 opencode 的服务端进程里。只有终端界面用 `--standalone` 启动的私有服务端(它在 pane 里,能读到 `$TMUX`)才上报;所有客户端共用的后台服务(`opencode serve --service`)、`opencode run`、`opencode acp` 和 tmux 外的 opencode 都不上报。Hub 启动、恢复、重启 opencode 时都带 `--standalone`。
+- 只发工具名和一个参数(命令、文件路径、搜索模式或 URL)。写入或编辑的文件内容不离开 opencode。子代理的会话不上报。
+- 审批跟随 opencode 的 `permissions` 设置,默认只有读取 `.env` 文件时询问。Hub 从 pane 画面识别 "Permission required" 提示,Approve 发 Enter("Allow once"),Always 发 Right Enter("Always allow")。
+- opencode 的“工作中”提示是一排方块加 `esc interrupt`,按过一次 Esc 后是 `esc again to interrupt`;Hub 据此判断一轮是否还在进行。opencode 要第二次 Esc 才打断,Hub 的 Esc 对它连按两次。
+- 消息和 token 统计从 opencode 的数据库只读查询:`$XDG_DATA_HOME/opencode/opencode.db`(默认 `~/.local/share/opencode/opencode.db`),设了 `OPENCODE_DB` 时用它指定的文件。Hub 服务和 opencode 要看到同一个路径。
+
 ---
 
 ## Part 3: 踩坑总结

@@ -65,7 +65,7 @@ Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观�
 
 ## 4. 系统上下文
 
-系统目前支持三类事件来源：
+系统目前支持四类事件来源：
 
 1. **Claude Code（Hook Push）**  
    通过本地 hook 将事件推送到 Hub。
@@ -76,13 +76,16 @@ Agent Hub 是一个面向 AI CLI 会话的统一管理服务，用于集中观�
 3. **pi（扩展 Push）**  
    pi 扩展 `scripts/pi-hub-extension.js` 在 pi 进程内接收事件，按 Claude hook 的格式发到 Hub（见 10.3）。
 
+4. **opencode（插件 Push）**  
+   opencode 插件 `scripts/opencode-hub-plugin.js` 在 opencode 的私有服务端里接收事件，按 Claude hook 的格式发到 Hub（见 10.4）。
+
 总体关系如下：
 
 ```text
 Claude Code hooks  ───────┐
-                          │
-Codex hooks ──────────────┼──▶ Agent Hub (FastAPI)
-                          │       ├─ REST API
+Codex hooks ──────────────┤
+pi extension ─────────────┼──▶ Agent Hub (FastAPI)
+opencode plugin ──────────┤       ├─ REST API
 tmux panes (approvals) ───┘       ├─ Web UI
                                   ├─ WebSocket
                                   ├─ MCP SSE
@@ -457,7 +460,7 @@ Codex 解析器把**检测**和**分类**解耦，以避免 Claude 解析器从�
 
 ---
 
-## 10. Codex 与 pi 支持策略
+## 10. Codex、pi 与 opencode 支持策略
 
 ### 10.1 原生 Hook
 
@@ -482,7 +485,19 @@ pi 没有 hook 配置，扩展在 pi 进程内接收它的生命周期事件。`
 
 Hub 侧：`tool` 为 `pi`，进程名 `pi`（pi 设置了 process title），恢复与重启用 `pi --session <id>`，启动时有名字就加 `--name`。pi 不在运行工具前询问，`parse_one` 对 pi 直接返回，不读画面找审批。“工作中”提示 `Working (escape to interrupt)` 由 `_WORKING_RES` 识别。会话文件 `~/.pi/agent/sessions/--<dir>--/<时间>_<id>.jsonl` 供手机页的 Text 视图（`conversation._pi_items`）与用量统计（`read_usage`）读取。
 
-### 10.4 已去掉的 tmux 扫描
+### 10.4 opencode
+
+opencode 2.x 没有 hook 配置，插件接收它的事件。插件运行在 opencode 的服务端进程里，不在终端界面里。默认所有客户端共用一个后台服务（`opencode serve --service`），它不知道一个会话属于哪个 tmux。`--standalone` 让终端界面把一个私有服务端（`opencode serve --stdio`）作为子进程启动，这个子进程在 pane 里，继承 `$TMUX`。所以 Hub 启动、恢复、重启 opencode 都带 `--standalone`，插件只在 `--stdio` 服务端、有 `$TMUX`、且父进程不是 `opencode run` / `opencode acp` 时上报（父进程命令行读 `/proc/<ppid>/cmdline`）。后台服务也会加载这个插件，在那里它什么都不做。
+
+`scripts/opencode-hub-plugin.js` 订阅 `ctx.event.subscribe` 的事件流，按 Claude hook 的格式发到 `/api/events?tool=opencode`：`session.created` → SessionStart（`startup`），`session.inbox.enqueued`（用户输入）→ UserPromptSubmit，`session.tool.called` / `session.tool.success` / `session.tool.failed` → PreToolUse / PostToolUse / PostToolUseFailure（工具名取自 `session.tool.input.started`），`session.execution.succeeded` / `failed` / `interrupted` → Stop（带这一轮最后一段文字，取自 `session.text.ended`），`session.renamed` 发到 `/api/sessions/{id}/title`。全部取自同一个事件流，Hub 收到的顺序与 opencode 发出的顺序一致。用 `-s <id>` 打开已有会话时 opencode 不发事件，插件从父进程命令行取出这个 id，用 `ctx.session.get` 查到标题与模型，发 SessionStart（`resume`）。第一次见到的会话都这样查一次，`parentID` 非空的（子代理）记下并忽略。工具名换成 Claude 的名字（`shell` → Bash，`glob` → Glob，`subagent` → Agent 等），参数只带一个。
+
+opencode 在第一条 prompt 后用模型生成标题。Hub 的 New session 填了名字时，Hub 以 `env AGENT_HUB_TITLE=<名字> opencode --standalone` 启动，插件在 `title` hook 里把这个名字设为结果，opencode 就不再请求模型。只用于这个终端新建的第一个会话；`-s` 打开的会话保留原标题。
+
+opencode 把所有会话存在一个 SQLite 数据库里（`$XDG_DATA_HOME/opencode/opencode.db`，`OPENCODE_DB` 可改）。opencode 的行没有 `transcript_path`：`services/opencode_store.py` 按会话 id 只读查询 `session_v2`（token 合计、模型）与 `session_message`（`user` / `assistant` 的文字与工具块、`shell`、`idle` 的打断与失败），供用量统计与手机页 Text 视图使用。
+
+Hub 侧：`tool` 为 `opencode`，终端界面的进程名 `opencode`。等待审批从 pane 画面识别（`_parse_opencode_permission_prompt`）：底部的 `Allow once   Always allow   Reject` 一行加上方的 `Permission required`，其下第一行是 `$ <命令>`（记为 Bash）或 `→ <工具> <对象>`；宽终端上 opencode 的侧栏与提示共用行，按行首缩进与大段空格把它切掉。Approve 发 Enter，Always 发 Right Enter。“工作中”提示是一排 `■` / `⬝` 加 `esc interrupt`（按过一次 Esc 后为 `esc again to interrupt`），由 `_WORKING_RES` 识别。opencode 第二次 Esc 才打断，`/interrupt` 对它连按两次，间隔 0.2 秒。
+
+### 10.5 已去掉的 tmux 扫描
 
 早期 Codex 没有 hook，Hub 周期性扫描 tmux pane：识别 Codex pane，为它建一个合成 id（`codex-<tmux>-<ts>`）的记录，并按 pane 内容 hash 的变化判断活跃。2026-10 去掉：原生 hook 已覆盖发现与状态，而按 hash 判断活跃会把任何重画都算作活动。旧版本留下的合成 id 记录仍可显示与删除，恢复时退回 `codex resume` 的选择器。Hub 启动时会移除旧版本在 tmux 里装的 `session-created` hook。
 
@@ -635,6 +650,7 @@ Hook 配置与脚本接入属于部署说明，不在本文档展开写入本机
 - `SETUP.md`
 - `scripts/codex-hub-hook.sh`
 - `scripts/pi-hub-extension.js`
+- `scripts/opencode-hub-plugin.js`
 
 ---
 

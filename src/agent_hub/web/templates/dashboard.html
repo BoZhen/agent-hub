@@ -37,6 +37,7 @@
           <button type="button" class="menu-item" data-action="restart-all" data-tool="claude" title="Each running Claude Code CLI exits and resumes its conversation, so it runs the version installed now"><svg class="icon"><use href="#i-refresh"/></svg>Restart Claude sessions</button>
           <button type="button" class="menu-item" data-action="restart-all" data-tool="codex" title="Each running Codex CLI exits and resumes its conversation, so it runs the version installed now"><svg class="icon"><use href="#i-refresh"/></svg>Restart Codex sessions</button>
           {% if pi_available %}<button type="button" class="menu-item" data-action="restart-all" data-tool="pi" title="Each running pi exits and resumes its session, so it runs the version installed now"><svg class="icon"><use href="#i-refresh"/></svg>Restart pi sessions</button>{% endif %}
+          {% if opencode_available|default(false) %}<button type="button" class="menu-item" data-action="restart-all" data-tool="opencode" title="Each running opencode exits and reopens its session, so it runs the version installed now"><svg class="icon"><use href="#i-refresh"/></svg>Restart opencode sessions</button>{% endif %}
           <div class="menu-sep"></div>
           <button type="button" class="menu-item danger" data-action="clear-stopped"><svg class="icon"><use href="#i-trash"/></svg>Clear ended sessions</button>
         </div>
@@ -48,7 +49,7 @@
   <aside class="sidebar" id="sidebar" aria-label="Sessions">
     <div class="sidebar-tools">
       <label class="input-icon"><svg class="icon"><use href="#i-search"/></svg><input class="input" id="session-search" type="search" placeholder="Filter" aria-label="Filter sessions" title="Filter sessions (Ctrl+K)" autocomplete="off"></label>
-      <div class="segmented" role="group" aria-label="Tool"><button type="button" data-tool-filter="all" class="is-active">All</button><button type="button" data-tool-filter="claude">Claude</button><button type="button" data-tool-filter="codex">Codex</button>{% if pi_available %}<button type="button" data-tool-filter="pi">pi</button>{% endif %}</div>
+      <div class="segmented" role="group" aria-label="Tool"><button type="button" data-tool-filter="all" class="is-active">All</button><button type="button" data-tool-filter="claude">Claude</button><button type="button" data-tool-filter="codex">Codex</button>{% if pi_available %}<button type="button" data-tool-filter="pi">pi</button>{% endif %}{% if opencode_available|default(false) %}<button type="button" data-tool-filter="opencode">opencode</button>{% endif %}</div>
     </div>
     <div class="sidebar-scroll">
       <section class="attention" id="needs-section" hidden>
@@ -113,13 +114,15 @@
     <div class="field">
       <label>Tool</label>
       {# Three choices fill a row; two or four go in rows of two. #}
-      <div class="choice-grid{% if claude2_available == (pi_available|default(false)) %} choice-grid-2{% endif %}" id="nc-tools">
+      {% set tool_count = 2 + (1 if claude2_available else 0) + (1 if pi_available|default(false) else 0) + (1 if opencode_available|default(false) else 0) %}
+      <div class="choice-grid{% if tool_count in (2, 4) %} choice-grid-2{% endif %}" id="nc-tools">
         <button type="button" class="choice" data-tool="claude" title="claude">Claude Code</button>
         {% if claude2_available %}<button type="button" class="choice" data-tool="claude2" title="claude on the second account (its own CLAUDE_CONFIG_DIR)">Claude Code (account 2)</button>{% endif %}
         <button type="button" class="choice" data-tool="codex" title="codex">Codex</button>
         {% if pi_available %}<button type="button" class="choice" data-tool="pi" title="pi">pi</button>{% endif %}
+        {% if opencode_available|default(false) %}<button type="button" class="choice" data-tool="opencode" title="opencode --standalone (a private server, so the Hub plugin knows its tmux)">opencode</button>{% endif %}
       </div>
-      <p class="field-hint">Default model. Approvals follow your own Claude and Codex settings. Codex asks once before working in a directory it has not seen.{% if pi_available %} pi runs tools without asking.{% endif %}</p>
+      <p class="field-hint">Default model. Approvals follow your own Claude and Codex settings. Codex asks once before working in a directory it has not seen.{% if pi_available %} pi runs tools without asking.{% endif %}{% if opencode_available|default(false) %} opencode follows its own permissions setting; by default it asks only before reading .env files.{% endif %}</p>
     </div>
     <div class="field">
       <label for="nc-display">Agent session name</label>

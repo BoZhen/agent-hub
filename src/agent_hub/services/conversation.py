@@ -5,7 +5,8 @@ writes ~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<session id>.jsonl and
 pi writes ~/.pi/agent/sessions/--<dir>--/<time>_<session id>.jsonl. All
 are JSON Lines and can be large (Claude keeps whole API requests in some
 records), so the file is read backwards in blocks until enough messages
-are found.
+are found. opencode keeps its sessions in a database instead
+(services/opencode_store.py).
 
 Each message is {"role": "user" | "assistant" | "tool" | "note",
 "text": ..., "ts": ...}. "tool" is a one-line summary of a tool call;
@@ -20,8 +21,9 @@ import os
 import re
 from collections.abc import Iterator
 
+from agent_hub.services import opencode_store
 from agent_hub.services.event_processor import _summarize_tool_use
-from agent_hub.services.restore import is_codex_tool, is_pi_tool
+from agent_hub.services.restore import is_codex_tool, is_opencode_tool, is_pi_tool
 
 BLOCK = 256 * 1024
 MAX_SCAN = 32 * 1024 * 1024
@@ -50,12 +52,16 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
     file is looked up by session id: Claude under each config directory,
     Codex under ~/.codex/sessions, pi under its session directory. A Codex
     session the Hub only knows from pane scanning (earlier Hub versions)
-    has a made-up id and no transcript.
+    has a made-up id and no transcript. For opencode it is opencode's
+    database, which holds every session.
     """
     path = session.get("transcript_path")
     if path and os.path.isfile(path):
         return path
     sid = session["session_id"]
+    if is_opencode_tool(session.get("tool")):
+        path = opencode_store.db_path()
+        return path if os.path.isfile(path) else None
     if is_codex_tool(session.get("tool")):
         if not _UUID_RE.match(sid):
             return None
@@ -71,8 +77,11 @@ def find_transcript(session: dict, claude_config_dirs: list[str]) -> str | None:
     return max(hits, key=os.path.getmtime) if hits else None
 
 
-def read_messages(path: str, tool: str | None, limit: int = 30) -> list[dict]:
-    """The last `limit` messages of a transcript, oldest first."""
+def read_messages(path: str, tool: str | None, limit: int = 30, session_id: str | None = None) -> list[dict]:
+    """The last `limit` messages of a transcript, oldest first. An opencode
+    database holds every session, so it also needs the session id."""
+    if is_opencode_tool(tool):
+        return opencode_store.read_messages(session_id or "", limit, path)
     parse = _codex_items if is_codex_tool(tool) else _pi_items if is_pi_tool(tool) else _claude_items
     found: list[dict] = []
     for record in _records_backwards(path):

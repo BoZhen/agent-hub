@@ -778,7 +778,7 @@ async function openInspector(sid) {
     $('inspector-title').textContent = info.name;
     body.innerHTML = `<div class="drawer-section"><dl class="kv"><dt>Kind</dt><dd>tmux session without a Hub record</dd><dt>Directory</dt><dd>${esc(info.cwd || '—')}</dd><dt>tmux</dt><dd>${esc(info.name)}</dd></dl></div>`
       + `<div class="drawer-section"><div class="drawer-actions">${info.tmux ? `<a class="btn" href="${TERMINAL_URL}/?attach=${encodeURIComponent(info.tmux)}" target="_blank">${icon('external')}New tab</a>` : ''}<button type="button" class="btn btn-danger" data-action="kill" data-tmux="${esc(info.name)}">${icon('power')}Kill tmux</button></div></div>`
-      + '<div class="drawer-section"><p class="group-empty">Start Claude, Codex or pi inside it and the Hub will track it as a session.</p></div>';
+      + '<div class="drawer-section"><p class="group-empty">Start Claude, Codex, pi or opencode inside it and the Hub will track it as a session.</p></div>';
     return;
   }
   try {
@@ -798,8 +798,8 @@ function renderInspector(s, events, isOrphan) {
   const live = status !== 'stopped';
   const fmt = iso => String(iso || '').replace('T', ' ').slice(0, 19);
   const canFork = s.tool && s.tool.includes('claude') && s.tmux_session && !s.transferred && live;
-  const canResume = (isOrphan || status === 'stopped') && /^(claude|codex|omx|pi)/.test(s.tool || '');
-  const canRestart = live && !isOrphan && s.tmux_session && !s.parent_session_id && /^(claude|codex|omx|pi)/.test(s.tool || '') && !s.session_id.startsWith('codex-');
+  const canResume = (isOrphan || status === 'stopped') && /^(claude|codex|omx|pi|opencode)/.test(s.tool || '');
+  const canRestart = live && !isOrphan && s.tmux_session && !s.parent_session_id && /^(claude|codex|omx|pi|opencode)/.test(s.tool || '') && !s.session_id.startsWith('codex-');
   $('inspector-title').textContent = s.title || s.tmux_session || s.hostname;
   let html = '';
   if (s.pending_tool) {
@@ -1073,7 +1073,7 @@ async function restartSession(sid, btn) {
    skips sessions in the middle of a turn and says which. */
 async function restartAll(family) {
   closePopovers();
-  const label = {claude: 'Claude', codex: 'Codex', pi: 'pi'}[family] || family;
+  const label = {claude: 'Claude', codex: 'Codex', pi: 'pi', opencode: 'opencode'}[family] || family;
   const count = allRows().filter(r => r.dataset.raw !== '1' && r.dataset.toolFamily === family && r.dataset.status !== 'stopped' && r.dataset.tmux && !r.dataset.parentSid).length;
   if (!count) { toast(`No running ${label} sessions`); return; }
   const ok = await H.confirmDialog({title: `Restart ${count} ${label} session${count > 1 ? 's' : ''}?`, body: `Each ${label} CLI exits and resumes its conversation in the same tmux, so it runs the version installed now. Sessions in the middle of a turn are left alone.`, confirmLabel: 'Restart'});
