@@ -215,9 +215,15 @@ async def phone_page(request: Request):
     """The phone page: sessions that need you, each session's native TUI
     (or its latest exchange as text), and a box to answer it. It renders
     an empty shell; the sessions arrive over GET /api/stream
-    (static/mobile.js)."""
+    (static/mobile.js). The tools installed here decide the choices in its
+    New session view."""
     return templates.TemplateResponse(
-        request=request, name="mobile.html", context={"terminal_url": _terminal_url(request)},
+        request=request, name="mobile.html", context={
+            "terminal_url": _terminal_url(request),
+            "claude2_available": bool(claude2_config_dir(request.app.state.config)),
+            "pi_available": bool(_resolve_command("pi")),
+            "opencode_available": bool(_resolve_command("opencode")),
+        },
     )
 
 

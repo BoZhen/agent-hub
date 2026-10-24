@@ -154,8 +154,11 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 - `GET /api/stream`：Server-Sent Events。连接后先发 `snapshot`（接口版本 `api`、所有运行中的 tmux session 的状态，以及一小时内的 notice），之后只在某个状态变化时发 `session`，session 结束或被删除时发 `removed`，`POST /api/notify` 的消息作为 `notice` 发出；每 20 秒发一行注释，两端都能发现断开的连接。`GET /api/attention` 以一次 JSON 返回同样的快照。
 - 状态里的 `unseen` 表示上一轮结束之后还没人看过，`needs_you` 再加上等待审批的。一轮结束由 `Stop` hook 记录，hook 自带的 `last_assistant_message`（Claude 与 Codex 都有）就是 `last_message`。子代理和不在 tmux 里的 session 不在其中。
 - 以下情况算看过：手机打开这个 session（`POST /api/sessions/{id}/seen`）、从手机发出消息，或这个 session 的 tmux 终端在这一轮结束后收到输入。人在电脑前操作这个终端，手机不会被打扰；人走开了就没有输入，手机照常收到通知。
-- `POST /api/sessions/{id}/send`，body `{"text": "...", "submit": true}`：把文字以 bracketed paste 一次粘贴进 agent 所在的 pane，再按 Enter，多行文字是一条 prompt。正在等待审批（菜单里粘贴的字母可能选中选项），或 tmux 里的 agent 已经退出、只剩 shell（文字会被当成命令执行）时，返回 409。
+- `POST /api/sessions/{id}/send`，body `{"text": "...", "submit": true, "attachments": [...]}`：把文字以 bracketed paste 一次粘贴进 agent 所在的 pane，再按 Enter，多行文字是一条 prompt。正在等待审批（菜单里粘贴的字母可能选中选项），或 tmux 里的 agent 已经退出、只剩 shell（文字会被当成命令执行）时，返回 409。`attachments` 是 `POST /api/uploads` 返回的路径，最多 10 个，每个单独粘贴在文字之前：Claude Code 与 Codex 把单独粘贴的图片路径变成图片附件（`[Image #1]`），其他文件以及 pi、opencode 收到的是 agent 可以读取的路径。有附件时文字可以为空。
+- `POST /api/uploads?name=<文件名>`，body 为文件本身：保存手机发来的文件，返回 `{"path", "name", "size", "image"}`。电脑上 Ctrl+V 能把截图贴进 CLI，是因为 CLI 读的是工作站的剪贴板；手机的剪贴板在手机上，所以先上传。文件保存在 `AGENT_HUB_UPLOADS_DIR`（默认 `~/.cache/agent-hub/uploads`），文件名只保留字母、数字、`.`、`-`、`_`，前面加上时间；单个文件不超过 50 MB，14 天后在下一次上传时删除。
 - `POST /api/sessions/{id}/interrupt`：在 agent 的 pane 里按 Esc，停止正在运行的这一轮，或拒绝正在等待的审批。2 秒内的第二次会被忽略，因为 Claude Code 连按两次 Esc 会打开回到之前消息的菜单。
+- `POST /api/sessions/{id}/keys`，body `{"keys": ["Left"]}`：在 agent 的 pane 里按键，限于 `Escape`、`Enter`、方向键、`Tab`、`BTab`，一次最多 8 个。方向键用来在菜单和多问题提示之间移动；`Enter` 提交直接在 TUI 里输入的文字，等待审批时返回 409（Enter 会选中菜单项）。
+- `POST /api/tmux/input`，body `{"name": "<tmux>", "text": "...", "attachments": [...], "keys": [...]}`：按 tmux 名向其中的 agent 输入文字或按键。手机页刚启动、还没有 session 的 tmux 用它：Codex 与 opencode 在第一条 prompt 时才报告 session。
 - `GET /api/sessions/{id}/messages?limit=30`：从 Claude / Codex 自己的 transcript 读出最近的消息（用户、助手、一行一个的工具调用）。
 - `POST /api/notify`，body `{"message": "...", "title": "..."}`：脚本给手机发一条消息，例如长任务跑完时。
 - 接口版本：`snapshot` 里的 `api`，现在是 `1`。只有会让已有客户端出错的改动才升版本；新增字段或新增接口不升。手机 App 据此判断这个 Hub 能不能用。
@@ -164,7 +167,7 @@ Hub 记着每个 session 的 tmux 名、目录和启动参数（`tool`），恢�
 
 - `/`：工作台。侧栏按项目分组，每个项目下依次列出等待审批、活跃、空闲、已结束的 session 以及该目录下未被跟踪的 tmux；右侧是工作集标签与嵌入式终端，每个打开的标签各自保持一条终端连接，切换标签不重连；session 详情与重命名在右侧抽屉里
 - `/?session={id}`：直接打开某个 session 的终端（手机上进入全屏 Terminal 模式）
-- `/m`：手机页面。上面是需要你处理的 session（等待审批的、一轮结束后还没看过的）。点进去默认是 Terminal：原生的 Claude Code / Codex TUI；可切换到 Text，以文字查看最近一轮的消息。两种视图下都能用手机键盘回复（文字粘贴进 TUI）、审批或拒绝。`/m#/s/{id}` 直接打开某个 session
+- `/m`：手机页面，也是 Android App 唯一显示的页面。上面是需要你处理的 session（等待审批的、一轮结束后还没看过的），下面是运行中的，最后是折叠起来的已结束 session（点开后可 Resume）。点进去默认是 Terminal：原生的 Claude Code / Codex TUI；可切换到 Text，以文字查看最近一轮的消息。两种视图下都能用手机键盘回复（文字粘贴进 TUI）、审批或拒绝；回复框为空时 Send 在 TUI 里按 Enter，提交直接在终端里输入的文字。Terminal 视图在回复框上方多一行按键：Esc、↑ ↓（在菜单选项之间移动）和 ← →（在多问题提示的问题之间切换）。回形针按钮选择照片或文件，粘贴进回复框的截图也一样：文件立即上传，显示在回复框上方，可以逐个移除，随下一条回复一起发出。会话页右上角的 ⓘ 打开详情与操作（Rename、Restart、Resume、Kill tmux、Delete record）；首页右上角可切换主题、新建 session（选工具、名字、文件夹）。新建的 tmux 在 CLI 报告 session 之前显示为 `/m#/t/{tmux}`，可以直接发第一条消息。`/m#/s/{id}` 直接打开某个 session。App 里不显示 Workspace 入口；手机浏览器仍可从首页进入工作台
 - `/sessions/{id}`：单会话完整页（抽屉的降级页，含完整事件列表）
 - `/agent`：Monitor 只读助手
 - `/idle`、`/stopped`、`/tmux`：保留为跳转，回到工作台

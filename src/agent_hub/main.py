@@ -23,6 +23,7 @@ from agent_hub.api import (
     sessions,
     stream,
     tmux,
+    uploads,
     ws,
 )
 from agent_hub.web import routes as web_routes
@@ -188,6 +189,7 @@ def create_app(config: HubConfig) -> FastAPI:
     app.include_router(sessions.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")
     app.include_router(tmux.router, prefix="/api")
+    app.include_router(uploads.router, prefix="/api")
     app.include_router(agent_api.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(web_routes.router)
@@ -246,6 +248,7 @@ def cli():
             stopped_retention_days=retention_days,
             restore_mode=restore_mode,
             claude2_config_dir=os.environ.get("AGENT_HUB_CLAUDE2_CONFIG_DIR", HubConfig.claude2_config_dir),
+            uploads_dir=os.environ.get("AGENT_HUB_UPLOADS_DIR", HubConfig.uploads_dir),
         )
         app = create_app(config)
         ssl_kwargs = {}

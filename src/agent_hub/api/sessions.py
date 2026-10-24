@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from agent_hub import db
+from agent_hub.api.tmux import check_phone_keys
+from agent_hub.api.uploads import attachment_paths
 from agent_hub.api.ws import broadcaster
 from agent_hub.models import EventResponse, SessionResponse, StatsResponse
 from agent_hub.services import conversation, tmux_input
@@ -163,6 +165,9 @@ async def resume_one(request: Request, session_id: str):
     result = await restore_session(conn, session, mode="resume", config=request.app.state.config)
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error"))
+    # The row is live again: the phone stream lists it now, not only when
+    # the CLI sends its next hook (Codex sends none until a prompt).
+    attention.poke()
     return result
 
 
@@ -396,15 +401,14 @@ async def mark_seen(request: Request, session_id: str):
 
 
 class SendRequest(BaseModel):
-    text: str
+    text: str = ""
     # False leaves the text in the input box without pressing Enter.
     submit: bool = True
+    # Files saved by POST /api/uploads, pasted before the text.
+    attachments: list[str] = []
 
 
 _SEND_MAX_CHARS = 20000
-# Pause between the paste and the Enter, so the TUI has finished taking
-# the paste in; an Enter that arrives with it would become a newline.
-_SUBMIT_DELAY_S = 0.3
 
 
 async def _running_agent_pane(conn, session_id: str) -> tuple[dict, str]:
@@ -430,14 +434,16 @@ async def send_text(request: Request, session_id: str, body: SendRequest):
     """Type a message into the session's agent pane and press Enter.
 
     The text goes in as one bracketed paste (services/tmux_input.py), so
-    a multi-line message is one prompt. A session waiting for an approval
+    a multi-line message is one prompt; each attached file's path is
+    pasted on its own before it. A session waiting for an approval
     is refused: its pane shows a menu, and pasted letters could pick an
     option. So is a tmux whose agent has exited, where the text would run
     as a shell command.
     """
     conn = request.app.state.db
     text = body.text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
+    attachments = attachment_paths(request, body.attachments)
+    if not text and not attachments:
         raise HTTPException(status_code=400, detail="Message is empty")
     if len(text) > _SEND_MAX_CHARS:
         raise HTTPException(status_code=400, detail=f"Message is limited to {_SEND_MAX_CHARS} characters")
@@ -448,10 +454,7 @@ async def send_text(request: Request, session_id: str, body: SendRequest):
             detail="Session is waiting for an approval; approve or deny it first",
         )
     try:
-        await tmux_input.paste(pane, text)
-        if body.submit:
-            await asyncio.sleep(_SUBMIT_DELAY_S)
-            await tmux_input.press(pane, "Enter")
+        await tmux_input.send(pane, text, body.submit, attachments)
     except tmux_input.TmuxInputError as e:
         raise HTTPException(status_code=502, detail=str(e))
     await db.mark_session_seen(conn, session_id)
@@ -488,6 +491,36 @@ async def interrupt(request: Request, session_id: str):
     except tmux_input.TmuxInputError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return {"ok": True, "ignored": False}
+
+
+class KeysRequest(BaseModel):
+    keys: list[str]  # tmux key names from tmux_input.PHONE_KEYS
+
+
+@router.post("/sessions/{session_id}/keys")
+async def press_keys(request: Request, session_id: str, body: KeysRequest):
+    """Press keys in the session's agent pane, for a phone that has no key
+    bar: the arrows and Tab move through a CLI's menus and multi-question
+    prompts, and Enter submits what was typed into the TUI itself. Enter is
+    refused while the session waits for an approval, where it would pick
+    an option.
+    """
+    check_phone_keys(body.keys)
+    conn = request.app.state.db
+    session, pane = await _running_agent_pane(conn, session_id)
+    if "Enter" in body.keys and session.get("pending_tool"):
+        raise HTTPException(
+            status_code=409,
+            detail="Session is waiting for an approval; approve or deny it first",
+        )
+    try:
+        await tmux_input.press(pane, *body.keys)
+    except tmux_input.TmuxInputError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    if "Enter" in body.keys:
+        await db.mark_session_seen(conn, session_id)
+        attention.poke()
+    return {"ok": True}
 
 
 class ThemeNotice(BaseModel):

@@ -95,9 +95,10 @@ def test_sessions_can_be_restarted_one_by_one_or_per_tool() -> None:
 def test_phone_session_screen_can_restart_its_cli() -> None:
     mobile_html = (WEB / "templates/mobile.html").read_text()
     mobile_js = (WEB / "static/mobile.js").read_text()
-    assert 'id="m-restart" data-action="restart"' in mobile_html
-    assert "$('m-restart').hidden = !(s && s.tmux_session" in mobile_js
-    assert "await H.restartSession(openSid, name)" in mobile_js
+    # From the ⓘ sheet, which a running CLI with an id to resume offers it in.
+    assert 'id="m-more" data-action="sheet"' in mobile_html and 'id="m-restart"' not in mobile_html
+    assert "s && s.tmux_session && resumable ? ['restart', 'refresh', 'Restart'] : null" in mobile_js
+    assert "if (await H.restartSession(sid, name)) H.toast(`Restarted ${name}`, 'success');" in mobile_js
 
 
 def test_close_workspace_tab_is_view_only() -> None:
@@ -213,15 +214,42 @@ def test_phone_session_opens_on_the_native_tui() -> None:
     assert "detachTerminal();\n      openSid = sid;" in PHONE_JS
 
 
-def test_phone_terminal_view_has_esc_instead_of_touch_keys() -> None:
-    # The phone's own keyboard types into the TUI; the only extra key is Esc
-    # in the reply bar, sent through the Hub's interrupt (2 s double-press
-    # guard) without taking focus, so the phone keyboard stays open.
-    assert 'id="m-esc"' in PHONE
-    assert '#m-session[data-view="text"] .m-esc' in HUB_CSS
-    assert "act(escButton, () => H.api('POST', sessionUrl('/interrupt')))" in PHONE_JS
-    assert "escButton.addEventListener('touchstart', e => e.preventDefault(), {passive: false});" in PHONE_JS
-    assert "escButton.addEventListener('mousedown', e => e.preventDefault());" in PHONE_JS
+def test_phone_terminal_view_has_esc_and_arrows_instead_of_touch_keys() -> None:
+    # The phone's own keyboard types into the TUI; the only extra keys are
+    # Esc and the four arrows, on a row above the reply box. Esc goes through
+    # the Hub's interrupt (2 s double-press guard), the arrows through
+    # /keys; none takes focus, so the phone keyboard stays open.
+    assert 'id="m-esc" data-key="Escape"' in PHONE
+    assert all(f'data-key="{key}"' in PHONE for key in ("Up", "Down", "Left", "Right"))
+    assert ".m-keys { display: flex; flex-basis: 100%;" in HUB_CSS
+    assert '#m-session[data-view="text"] .m-keys' in HUB_CSS
+    assert "key === 'Escape' && openSid ? H.api('POST', sessionUrl('/interrupt')) : pressKeys([key])" in PHONE_JS
+    assert "button.addEventListener('touchstart', e => e.preventDefault(), {passive: false});" in PHONE_JS
+    assert "button.addEventListener('mousedown', e => e.preventDefault());" in PHONE_JS
+
+
+def test_phone_page_is_all_the_app_needs() -> None:
+    # The app shows only this page: it starts sessions, picks the theme,
+    # lists ended sessions to resume, and has the drawer's session actions.
+    assert 'data-action="new"' in PHONE and 'id="m-new"' in PHONE
+    assert 'data-action="theme"' in PHONE and "function openThemes()" in PHONE_JS
+    assert 'id="m-more" data-action="sheet"' in PHONE and "async function openSheet()" in PHONE_JS
+    assert 'id="m-resume"' in PHONE and "'/api/sessions?status=stopped&limit=20'" in PHONE_JS
+    assert "if (window.AgentHubAndroid) $('m-workspace').hidden = true;" in PHONE_JS
+    # An empty reply box submits what was typed into the terminal itself.
+    assert "if (inTerminal) act($('m-send'), () => pressKeys(['Enter']));" in PHONE_JS
+    # A tmux started here turns into its session once the CLI reports it.
+    assert "if (openTmux && s.tmux_session === openTmux) { route(); return; }" in PHONE_JS
+
+
+def test_phone_reply_carries_files() -> None:
+    # A phone screenshot cannot reach the CLI through Ctrl+V: the paperclip
+    # (or a paste into the reply box) uploads it, and the reply sends its path.
+    assert 'id="m-attach"' in PHONE and '<input type="file" id="m-file-input" multiple hidden>' in PHONE
+    assert "fetch('/api/uploads?name=' + encodeURIComponent(name)" in PHONE_JS
+    assert "$('m-input').addEventListener('paste'" in PHONE_JS
+    assert "typeText(text, sent.map(f => f.path))" in PHONE_JS
+    assert '<symbol id="i-paperclip"' in BASE
 
 
 def test_phone_page_reloads_when_the_hub_serves_a_newer_one() -> None:

@@ -20,7 +20,10 @@
     {# Shown only while the stream to the Hub is down. #}
     <span class="conn" id="m-conn" hidden><span class="dot dot-danger"></span><span>Reconnecting</span></span>
     <span class="topbar-spacer"></span>
-    <a class="btn btn-ghost" href="/">Workspace</a>
+    <button type="button" class="btn btn-ghost icon-btn" data-action="theme" aria-label="Theme"><svg class="icon"><use href="#i-contrast"/></svg></button>
+    <button type="button" class="btn btn-ghost icon-btn" data-action="new" aria-label="New session"><svg class="icon"><use href="#i-plus"/></svg></button>
+    {# The app shows this page only; a phone browser can still reach the desktop workspace. #}
+    <a class="btn btn-ghost" id="m-workspace" href="/">Workspace</a>
   </header>
   <main class="m-scroll" id="m-list"></main>
 </section>
@@ -33,7 +36,7 @@
     <div class="segmented m-mode" role="group" aria-label="View">
       <button type="button" data-mode="terminal">Terminal</button><button type="button" data-mode="text">Text</button>
     </div>
-    <button type="button" class="btn btn-ghost icon-btn" id="m-restart" data-action="restart" title="Restart the CLI, resuming this conversation (picks up an update)" aria-label="Restart the CLI" hidden><svg class="icon"><use href="#i-refresh"/></svg></button>
+    <button type="button" class="btn btn-ghost icon-btn" id="m-more" data-action="sheet" aria-label="Session details and actions"><svg class="icon"><use href="#i-info"/></svg></button>
   </header>
   <div class="m-working" id="m-working" hidden>
     <span class="dot dot-running"></span>
@@ -47,13 +50,66 @@
   <main class="m-scroll m-thread" id="m-thread"></main>
   <div class="m-dock">
     <div class="m-approval" id="m-approval" hidden></div>
+    {# An ended session takes no reply; it can be resumed. #}
+    <div class="m-resume" id="m-resume" hidden>
+      <span>This session has ended.</span>
+      <button type="button" class="btn btn-primary" data-action="resume"><svg class="icon"><use href="#i-play"/></svg>Resume</button>
+    </div>
+    {# Files picked or pasted for the next reply: uploaded at once (POST /api/uploads), sent with the reply. #}
+    <div class="m-attachments" id="m-attachments" hidden></div>
     <form class="m-composer" id="m-composer">
-      <button type="button" class="btn m-esc" id="m-esc" title="Press Esc in the agent: stops a running turn" aria-label="Press Esc">Esc</button>
+      {# Keys the TUI needs that the phone keyboard lacks, on a row of their own above the reply box: Esc stops a turn, ↑ ↓ move between a menu's options, ← → between the questions of a multi-question prompt. #}
+      <div class="m-keys" role="group" aria-label="Keys">
+        <button type="button" class="btn m-esc" id="m-esc" data-key="Escape" title="Press Esc in the agent: stops a running turn" aria-label="Press Esc">Esc</button>
+        <button type="button" class="btn m-key" data-key="Up" aria-label="Press the up arrow">↑</button>
+        <button type="button" class="btn m-key" data-key="Down" aria-label="Press the down arrow">↓</button>
+        <button type="button" class="btn m-key" data-key="Left" aria-label="Press the left arrow">←</button>
+        <button type="button" class="btn m-key" data-key="Right" aria-label="Press the right arrow">→</button>
+      </div>
+      <button type="button" class="btn m-attach" id="m-attach" title="Attach photos or files" aria-label="Attach photos or files"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+      <input type="file" id="m-file-input" multiple hidden>
       <textarea class="input" id="m-input" rows="1" placeholder="Reply" aria-label="Reply" autocomplete="off"></textarea>
-      <button type="submit" class="btn btn-primary" id="m-send">Send</button>
+      <button type="submit" class="btn btn-primary m-send" id="m-send" title="Send" aria-label="Send"><svg class="icon"><use href="#i-send"/></svg></button>
     </form>
     <p class="m-hint" id="m-hint" hidden></p>
   </div>
+</section>
+
+{# New session: the tool, a name and a folder; POST /api/tmux/new. #}
+<section class="m-view m-new" id="m-new" aria-label="New session" hidden>
+  <header class="m-bar">
+    <button type="button" class="btn btn-ghost icon-btn" data-action="close-new" aria-label="Cancel"><svg class="icon"><use href="#i-chevron-left"/></svg></button>
+    <span class="m-title"><span class="m-name">New session</span></span>
+    <button type="button" class="btn btn-primary" id="mn-create" data-action="create">Start</button>
+  </header>
+  <main class="m-scroll m-form">
+    <div class="field">
+      <label>Tool</label>
+      <div class="choice-grid choice-grid-2" id="mn-tools">
+        <button type="button" class="choice" data-tool="claude">Claude Code</button>
+        {% if claude2_available|default(false) %}<button type="button" class="choice" data-tool="claude2">Claude Code (account 2)</button>{% endif %}
+        <button type="button" class="choice" data-tool="codex">Codex</button>
+        {% if pi_available|default(false) %}<button type="button" class="choice" data-tool="pi">pi</button>{% endif %}
+        {% if opencode_available|default(false) %}<button type="button" class="choice" data-tool="opencode">opencode</button>{% endif %}
+      </div>
+    </div>
+    <div class="field">
+      <label for="mn-title">Agent session name</label>
+      <input class="input" id="mn-title" type="text" placeholder="Optional" maxlength="80" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="mn-path">Folder</label>
+      <input class="input mono" id="mn-path" type="text" placeholder="/absolute/path" autocomplete="off" spellcheck="false" enterkeyhint="go">
+      <div class="m-chips" id="mn-recent"></div>
+      <div class="crumbs" id="mn-crumbs"></div>
+      <div class="dirlist" id="mn-dirs"></div>
+    </div>
+    <div class="field">
+      <label for="mn-tmux">tmux session name</label>
+      <input class="input mono" id="mn-tmux" type="text" placeholder="Leave empty to generate one" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="form-error" id="mn-error" hidden></div>
+  </main>
 </section>
 
 {# A file path tapped in the terminal, shown by web-file-manager over the session. #}

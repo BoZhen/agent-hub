@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from agent_hub.api.uploads import attachment_paths
 from agent_hub.services import tmux_input
 
 # The launcher offers Claude Code, Codex, and — when a second config
@@ -401,6 +402,51 @@ async def kill_tmux(req: KillTmuxRequest) -> dict[str, Any]:
         err = stderr.decode("utf-8", errors="replace").strip() or "unknown"
         raise HTTPException(500, f"tmux kill-session failed: {err}")
     return {"name": req.name, "killed": True}
+
+
+def check_phone_keys(keys: list[str]) -> None:
+    """Refuse keys a phone may not press (tmux_input.PHONE_KEYS)."""
+    allowed = tmux_input.PHONE_KEYS
+    if not keys or len(keys) > 8 or any(k not in allowed for k in keys):
+        raise HTTPException(400, f"keys must be 1 to 8 of {', '.join(sorted(allowed))}")
+
+
+class TmuxInputRequest(BaseModel):
+    name: str
+    text: str | None = None  # pasted, then Enter unless submit is false
+    submit: bool = True
+    attachments: list[str] = []  # files saved by POST /uploads, pasted before the text
+    keys: list[str] = []  # tmux key names from tmux_input.PHONE_KEYS, pressed after the text
+
+
+@router.post("/tmux/input")
+async def tmux_type(request: Request, req: TmuxInputRequest) -> dict[str, Any]:
+    """Type into the agent CLI of a tmux by name. The phone page uses it for
+    a session it has just started and the Hub does not know yet: Codex and
+    opencode report a session only with its first prompt, which has to be
+    typed somewhere. Once the session reports, the session endpoints
+    (/sessions/{id}/send and /keys) take over."""
+    if not _valid_tmux_name(req.name):
+        raise HTTPException(400, "invalid tmux name")
+    text = (req.text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    attachments = attachment_paths(request, req.attachments)
+    if not text and not attachments and not req.keys:
+        raise HTTPException(400, "nothing to type")
+    if req.keys:
+        check_phone_keys(req.keys)
+    if req.name not in {s["name"] for s in await _tmux_ls()}:
+        raise HTTPException(404, f"tmux session '{req.name}' not found")
+    try:
+        pane = await tmux_input.agent_pane(req.name)
+        if text or attachments:
+            await tmux_input.send(pane, text, req.submit, attachments)
+        if req.keys:
+            await tmux_input.press(pane, *req.keys)
+    except tmux_input.NoAgentError as e:
+        raise HTTPException(409, str(e))
+    except tmux_input.TmuxInputError as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True}
 
 
 @router.get("/browse")

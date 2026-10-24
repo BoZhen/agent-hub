@@ -1196,6 +1196,8 @@ $('utility-button').addEventListener('click', () => togglePopover($('utility-but
 document.addEventListener('click', event => {
   if (!event.target.closest('.popover, [aria-haspopup]')) closePopovers();
   if (filePreviewOpen() && !event.target.closest('#file-preview, [data-action="open-folder"]')) closeFilePreview();
+  // On a phone's session list the drawer sits on a dimmed backdrop: the workspace itself.
+  if (inspectorSid && event.target.classList?.contains('workspace')) closeInspector();
 });
 // A click inside a terminal frame never reaches this document, but it takes
 // the focus away from this window, so close the menus then as well.

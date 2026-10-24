@@ -24,3 +24,6 @@ class HubConfig:
     # "claude2", and resuming or forking one of its sessions sets the same
     # variable. AGENT_HUB_CLAUDE2_CONFIG_DIR.
     claude2_config_dir: str = "~/.claude-alt"
+    # Files sent from the phone page (POST /api/uploads) for an agent to
+    # read; kept KEEP_DAYS days (services/uploads.py). AGENT_HUB_UPLOADS_DIR.
+    uploads_dir: str = "~/.cache/agent-hub/uploads"

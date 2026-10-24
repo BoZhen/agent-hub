@@ -11,7 +11,12 @@
    services/attention.py): a snapshot on every connect, then one state per
    change. Routes live in the hash (#/s/<session id>), so the Android app can
    open a session from a notification and its Back key walks the same
-   history. */
+   history. #/t/<tmux> shows a tmux started here before its CLI reports a
+   session (Codex and opencode do with the first prompt); it turns into the
+   session's route when the session appears.
+
+   The page is all the Android app shows, so it also starts sessions, picks
+   the theme, and has the session actions of the workspace's drawer. */
 (() => {
   const H = window.AgentHub;
   const $ = id => document.getElementById(id);
@@ -33,6 +38,7 @@
 
   const sessions = new Map();   // session_id → state from the stream
   const drafts = new Map();     // session_id → unsent reply
+  const attached = new Map();   // session_id, or "t:<tmux>" → files for the next reply
   let notices = [];
   let openSid = null;           // session in the session view
   let openRow = null;           // GET /api/sessions/{id}, for a session the stream does not list
@@ -44,6 +50,11 @@
   let cameFromList = false;
   let mode = readMode();         // 'terminal' or 'text'
   let terminal = null;          // {tmux, iframe, state} while the Terminal view is attached
+  let openTmux = null;          // tmux in the session view that has no session yet (#/t/<tmux>)
+  let startedTool = 'claude';   // the tool of the last session started here, for its icon
+  let ended = [];               // recently ended sessions, GET /api/sessions?status=stopped
+  let endedOpen = false;        // the Ended group is expanded
+  const RESUMABLE = /^(claude|codex|omx|pi|opencode)/;
 
   // ── Stream ──────────────────────────────────────────────────
 
@@ -66,6 +77,8 @@
       for (const s of data.sessions) sessions.set(s.session_id, s);
       notices = data.notices || [];
       if (openSid && !sessions.has(openSid)) loadOpenRow();
+      if (openTmux) { route(); return; }
+      loadEnded();
       render();
       if (openSid) { refreshView(false); markSeen(); schedulePoll(); }
     });
@@ -73,6 +86,9 @@
       const s = JSON.parse(e.data);
       const before = sessions.get(s.session_id);
       sessions.set(s.session_id, s);
+      // The tmux started here has its session now.
+      if (openTmux && s.tmux_session === openTmux) { route(); return; }
+      if (!before) ended = ended.filter(x => x.session_id !== s.session_id);
       if (s.session_id === openSid) {
         const turnChanged = !before || before.status !== s.status || before.turn_ended_at !== s.turn_ended_at;
         if (turnChanged && mode === 'text') loadMessages(false);
@@ -86,6 +102,7 @@
       const sid = JSON.parse(e.data).session_id;
       sessions.delete(sid);
       if (sid === openSid) { loadOpenRow(); schedulePoll(); }
+      loadEnded();
       render();
     });
     source.addEventListener('notice', e => {
@@ -114,11 +131,23 @@
   function route() {
     const match = location.hash.match(/^#\/s\/(.+)$/);
     const sid = match ? decodeURIComponent(match[1]) : null;
-    if (sid !== openSid) {
+    const tmuxMatch = location.hash.match(/^#\/t\/(.+)$/);
+    const tmux = tmuxMatch ? decodeURIComponent(tmuxMatch[1]) : null;
+    const reported = tmux && [...sessions.values()].find(s => s.tmux_session === tmux);
+    if (reported) { location.replace('#/s/' + encodeURIComponent(reported.session_id)); return; }
+    if (sid !== openSid || tmux !== openTmux) {
       closeFile();
       if (openSid) drafts.set(openSid, $('m-input').value);
-      detachTerminal();
+      // A tmux that turns into its session keeps its terminal, its reply and its files.
+      const nextTmux = sid ? (sessions.get(sid) || {}).tmux_session : tmux;
+      if (sid && openTmux && openTmux === nextTmux) {
+        drafts.set(sid, $('m-input').value);
+        if (attached.has('t:' + openTmux)) attached.set(sid, attached.get('t:' + openTmux));
+        attached.delete('t:' + openTmux);
+      }
+      if (terminal && terminal.tmux !== nextTmux) detachTerminal();
       openSid = sid;
+      openTmux = tmux;
       openRow = null;
       limit = PAGE;
       threadKey = '';
@@ -126,13 +155,16 @@
       $('m-thread').innerHTML = '';
       $('m-input').value = sid ? drafts.get(sid) || '' : '';
       autosize();
+      renderAttachments();
     }
-    $('m-home').hidden = !!sid;
-    $('m-session').hidden = !sid;
+    $('m-home').hidden = !!(sid || tmux);
+    $('m-session').hidden = !(sid || tmux);
     if (sid) {
       if (!sessions.has(sid)) loadOpenRow();
       refreshView(true);
       markSeen();
+    } else if (tmux) {
+      refreshView(true);
     }
     schedulePoll();
     render();
@@ -148,8 +180,9 @@
   function back() {
     const dialog = document.querySelector('.modal-backdrop [data-cancel]');
     if (dialog) { dialog.click(); return true; }
+    if (!$('m-new').hidden) { closeNew(); return true; }
     if (!$('m-file').hidden) { closeFile(); return true; }
-    if (!openSid) return false;
+    if (!openSid && !openTmux) return false;
     if (cameFromList) history.back();
     else location.replace('#/');
     cameFromList = false;
@@ -208,6 +241,9 @@
 
   /* What a row and the session header say about a state. */
   function describe(s) {
+    if (s.status === 'stopped') {
+      return {kind: 'ended', dot: 'dot-stopped', label: `Ended ${ago(s.stopped_at)}`, line: project(s.cwd), mono: true};
+    }
     if (s.pending) {
       const detail = s.pending.detail ? `${s.pending.tool}: ${s.pending.detail}` : s.pending.tool;
       return {kind: 'waiting', dot: 'dot-waiting', label: 'Waiting for approval', line: detail, mono: true};
@@ -279,13 +315,60 @@
     html += section('Working', working);
     html += section('Idle', idle);
     if (!all.length) {
-      html += `<div class="m-empty"><strong>No live sessions</strong>Sessions you start in the workspace, or in tmux with hooks set up, appear here.<a class="btn" href="/">Open the workspace</a></div>`;
+      html += `<div class="m-empty"><strong>No live sessions</strong>Sessions you start here, or in tmux with hooks set up, appear here.<button type="button" class="btn" data-action="new">New session</button></div>`;
+    }
+    // Ended sessions, folded away: open one to resume it.
+    if (ended.length) {
+      html += `<details class="m-section m-ended"${endedOpen ? ' open' : ''}>
+        <summary class="m-section-head">Ended<span class="count">${ended.length}</span></summary>
+        <div class="m-rows">${ended.map(row).join('')}</div>
+      </details>`;
     }
     $('m-list').innerHTML = html;
   }
 
+  async function loadEnded() {
+    try {
+      const rows = await H.api('GET', '/api/sessions?status=stopped&limit=20');
+      ended = rows.filter(r => !r.parent_session_id && !sessions.has(r.session_id)).map(r => ({
+        session_id: r.session_id,
+        name: r.title || r.tmux_session || r.session_id.slice(0, 8),
+        tool: r.tool,
+        cwd: r.cwd,
+        status: 'stopped',
+        stopped_at: r.stopped_at || r.last_seen_at,
+      }));
+    } catch (_) { return; }
+    if (!openSid && !openTmux) renderList();
+  }
+
+  /* The session view of a tmux started here, until its CLI reports a session. */
+  function renderStarting() {
+    $('m-name').textContent = openTmux;
+    $('m-tool').innerHTML = toolIcon(startedTool);
+    $('m-state').textContent = 'Starting: send it your first message';
+    $('m-state').className = 'm-state is-running';
+    $('m-session').dataset.view = 'terminal';
+    document.querySelector('.m-mode').hidden = true;
+    $('m-more').hidden = true;
+    $('m-working').hidden = true;
+    $('m-approval').hidden = true;
+    $('m-resume').hidden = true;
+    $('m-composer').hidden = false;
+    $('m-input').disabled = false;
+    $('m-send').disabled = false;
+    $('m-attach').disabled = false;
+    document.querySelectorAll('.m-keys [data-key]').forEach(b => { b.disabled = false; });
+    renderAttachments();
+    $('m-hint').hidden = true;
+    renderStage();
+  }
+
   function renderSession() {
+    if (openTmux) { renderStarting(); return; }
     if (!openSid) return;
+    document.querySelector('.m-mode').hidden = false;
+    $('m-more').hidden = false;
     const s = sessions.get(openSid);
     const name = s ? s.name : openRow ? (openRow.title || openRow.tmux_session || openSid.slice(0, 8)) : openSid.slice(0, 8);
     $('m-name').textContent = name;
@@ -326,21 +409,24 @@
       approval.innerHTML = '';
     }
 
-    const hint = !s ? 'This session is not running, so it cannot take a reply.'
+    // An ended session shows Resume instead of the reply box.
+    const isEnded = !s && !!openRow && openRow.status === 'stopped' && RESUMABLE.test(openRow.tool || '');
+    $('m-resume').hidden = !isEnded;
+    $('m-composer').hidden = isEnded;
+    const hint = isEnded ? ''
+      : !s ? 'This session is not running, so it cannot take a reply.'
       : s.pending ? 'Answer the approval first.' : '';
     $('m-input').disabled = !!hint;
     $('m-send').disabled = !!hint;
-    $('m-esc').disabled = !s;
-    // Restart needs a running CLI in tmux and an id to resume; a Codex
-    // session found by pane scanning in earlier Hub versions
-    // (codex-<tmux>-<time>) has none.
-    $('m-restart').hidden = !(s && s.tmux_session && /^(claude|codex|omx|pi|opencode)/.test(s.tool) && !s.session_id.startsWith('codex-'));
+    $('m-attach').disabled = !!hint;
+    renderAttachments();
+    document.querySelectorAll('.m-keys [data-key]').forEach(b => { b.disabled = !s; });
     $('m-hint').hidden = !hint;
     $('m-hint').textContent = hint;
   }
 
   function render() {
-    if (openSid) renderSession();
+    if (openSid || openTmux) renderSession();
     else renderList();
   }
 
@@ -445,8 +531,8 @@
 
   /* Load what the current view shows. */
   function refreshView(toEnd) {
-    if (!openSid) return;
-    if (mode === 'text') {
+    if (!openSid && !openTmux) return;
+    if (mode === 'text' && !openTmux) {
       loadMessages(toEnd);
       postToTerminal({type: 'agent-hub:visibility', visible: false});
     } else {
@@ -465,14 +551,20 @@
   /* Attach the open session's tmux in an iframe, once per tmux. The frame
      stays while the session view is open, so switching views is instant;
      leaving the session detaches it. */
-  function attachTerminal() {
+  /* The tmux the session view shows. */
+  function currentTmux() {
+    if (openTmux) return openTmux;
     const s = sessions.get(openSid);
-    const tmux = s && s.tmux_session;
+    return s ? s.tmux_session : null;
+  }
+
+  function attachTerminal() {
+    const tmux = currentTmux();
     if (!tmux || !TERMINAL_URL) { detachTerminal(); renderStage(); return; }
     if (terminal && terminal.tmux === tmux) return;
     detachTerminal();
     const iframe = document.createElement('iframe');
-    iframe.title = `Terminal of ${s.name}`;
+    iframe.title = `Terminal of ${(sessions.get(openSid) || {}).name || tmux}`;
     iframe.src = terminalSrc(tmux);
     iframe.allow = 'clipboard-read; clipboard-write';
     $('m-stage').appendChild(iframe);
@@ -494,8 +586,8 @@
     const status = $('m-stage-status');
     const s = openSid && sessions.get(openSid);
     let text = '';
-    if (!s) text = 'This session is not running, so there is no terminal to show.';
-    else if (!s.tmux_session) text = 'This session has no tmux to attach to.';
+    if (!s && !openTmux) text = 'This session is not running, so there is no terminal to show.';
+    else if (!currentTmux()) text = 'This session has no tmux to attach to.';
     else if (terminal) text = STAGE_TEXT[terminal.state] || '';
     status.textContent = text;
     status.hidden = !text;
@@ -549,10 +641,20 @@
     const modeButton = e.target.closest('.m-mode [data-mode]');
     if (modeButton) { setMode(modeButton.dataset.mode); return; }
     if (e.target.closest('#m-stage-status.is-action')) { detachTerminal(); attachTerminal(); return; }
+    const toolChoice = e.target.closest('#mn-tools .choice');
+    if (toolChoice) { setNewTool(toolChoice.dataset.tool); return; }
+    const folder = e.target.closest('#m-new [data-path]');
+    if (folder) { e.preventDefault(); browseNew(folder.dataset.path); return; }
     const button = e.target.closest('[data-action]');
     if (!button) return;
     switch (button.dataset.action) {
       case 'back': back(); break;
+      case 'theme': openThemes(); break;
+      case 'new': openNew(); break;
+      case 'close-new': closeNew(); break;
+      case 'create': createNew(); break;
+      case 'sheet': openSheet(); break;
+      case 'resume': resumeOpen(button); break;
       case 'close-file': closeFile(); break;
       case 'approve': act(button, () => H.api('POST', sessionUrl('/approve')), 'Approved'); break;
       case 'always': act(button, () => H.api('POST', sessionUrl('/approve?always=true')), 'Approved for good'); break;
@@ -565,19 +667,6 @@
           danger: true,
         });
         if (ok) act(button, () => H.api('POST', sessionUrl('/interrupt')), r => r.ignored ? 'Already stopping' : 'Stopped');
-        break;
-      }
-      case 'restart': {
-        const s = sessions.get(openSid);
-        const name = s ? s.name : openSid.slice(0, 8);
-        button.classList.add('is-busy');
-        try {
-          if (await H.restartSession(openSid, name)) H.toast(`Restarted ${name}`, 'success');
-        } catch (err) {
-          H.toast(err.message, 'error', 5000);
-        } finally {
-          button.classList.remove('is-busy');
-        }
         break;
       }
       case 'earlier':
@@ -595,36 +684,343 @@
     }
   });
 
+  // ── Sheets: session actions, theme ──────────────────────────
+
+  /* A sheet from the bottom of the screen. Back and a tap beside it close
+     it, as for the Hub's dialogs (an element with data-cancel). */
+  function showSheet(label, html, onClick) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop m-sheet-backdrop';
+    backdrop.innerHTML = `<div class="m-sheet" role="dialog" aria-modal="true" aria-label="${esc(label)}">${html}</div>`;
+    const close = () => backdrop.remove();
+    backdrop.addEventListener('click', e => {
+      if (e.target === backdrop || e.target.closest('[data-cancel]')) { close(); return; }
+      onClick(e, close);
+    });
+    document.body.appendChild(backdrop);
+  }
+
+  function sheetHead(title, sub, icon = '') {
+    return `<div class="m-sheet-head">${icon ? `<span class="m-tool">${icon}</span>` : ''}
+      <span class="m-title"><span class="m-name">${esc(title)}</span>${sub ? `<span class="m-state">${esc(sub)}</span>` : ''}</span>
+      <button type="button" class="btn btn-ghost icon-btn" data-cancel aria-label="Close">${H.icon('x')}</button></div>`;
+  }
+
+  /* The open session's details and every action on it: what the desktop
+     workspace has in its drawer. */
+  async function openSheet() {
+    const sid = openSid;
+    if (!sid) return;
+    let info;
+    try {
+      info = await H.api('GET', `/api/sessions/${encodeURIComponent(sid)}`);
+    } catch (err) {
+      H.toast(err.message, 'error', 5000);
+      return;
+    }
+    if (sid !== openSid) return;
+    const s = sessions.get(sid);
+    const name = s ? s.name : info.title || info.tmux_session || sid.slice(0, 8);
+    const resumable = RESUMABLE.test(info.tool || '') && !sid.startsWith('codex-');
+    const tokens = info.output_tokens ? `${Number(info.output_tokens).toLocaleString()} out, ${Number(info.cache_read_tokens || 0).toLocaleString()} cached` : '';
+    const actions = [
+      ['rename', 'edit', 'Rename'],
+      s && s.tmux_session && resumable ? ['restart', 'refresh', 'Restart'] : null,
+      !s && info.status === 'stopped' && resumable ? ['resume', 'play', 'Resume'] : null,
+      s && info.tmux_session ? ['kill', 'power', 'Kill tmux', true] : null,
+      info.status !== 'active' ? ['delete', 'trash', 'Delete record', true] : null,
+    ].filter(Boolean);
+    showSheet('Session', `${sheetHead(name, s ? describe(s).label : info.status === 'stopped' ? 'Ended' : 'Not running', toolIcon(info.tool))}
+      <dl class="kv">
+        <dt>Tool</dt><dd>${esc(info.tool || '')}${info.model ? ' / ' + esc(info.model) : ''}</dd>
+        <dt>Folder</dt><dd>${esc(info.cwd || '')}</dd>
+        <dt>tmux</dt><dd>${esc(info.tmux_session || '—')}</dd>
+        ${tokens ? `<dt>Tokens</dt><dd>${esc(tokens)}</dd>` : ''}
+      </dl>
+      <div class="m-sheet-actions">${actions.map(([action, icon, label, danger]) =>
+        `<button type="button" class="btn${danger ? ' btn-danger' : ''}" data-sheet="${action}">${H.icon(icon)}${esc(label)}</button>`).join('')}</div>`,
+    (e, close) => {
+      const b = e.target.closest('[data-sheet]');
+      if (!b) return;
+      close();
+      sessionAction(b.dataset.sheet, info, name);
+    });
+  }
+
+  async function sessionAction(action, info, name) {
+    const sid = info.session_id;
+    const url = `/api/sessions/${encodeURIComponent(sid)}`;
+    try {
+      if (action === 'rename') {
+        const next = await H.promptDialog({title: 'Rename session', label: `Shown instead of the tmux name (${info.tmux_session || 'none'}). Leave empty to use the tmux name.`, value: info.title || '', placeholder: info.tmux_session || '', confirmLabel: 'Rename'});
+        if (next === null || next === (info.title || '')) return;
+        const data = await H.api('POST', `${url}/title`, {title: next});
+        const s = sessions.get(sid);
+        if (s) s.name = data.title || info.tmux_session || sid.slice(0, 8);
+        if (openRow && openRow.session_id === sid) openRow.title = data.title;
+        render();
+        H.toast(data.title ? `Renamed to ${data.title}` : 'Name reset to the tmux name', 'success');
+      } else if (action === 'restart') {
+        if (await H.restartSession(sid, name)) H.toast(`Restarted ${name}`, 'success');
+      } else if (action === 'resume') {
+        await resumeOpen($('m-resume').querySelector('button'));
+      } else if (action === 'kill') {
+        const ok = await H.confirmDialog({title: `Kill tmux ${info.tmux_session}?`, body: 'This ends the CLI process inside it. The session then shows as ended, and can be resumed.', confirmLabel: 'Kill tmux', danger: true});
+        if (!ok) return;
+        await H.api('POST', '/api/tmux/kill', {name: info.tmux_session});
+        H.toast(`Killed ${info.tmux_session}`, 'success');
+      } else if (action === 'delete') {
+        const withTmux = info.status === 'idle' && info.tmux_session;
+        const ok = await H.confirmDialog({title: 'Delete this session record?', body: withTmux ? 'Its tmux is still running and will be killed as well.' : 'Only the Hub record goes away. Transcripts on disk are untouched.', confirmLabel: 'Delete', danger: true});
+        if (!ok) return;
+        await H.api('DELETE', url);
+        H.toast('Deleted', 'success');
+        ended = ended.filter(x => x.session_id !== sid);
+        if (openSid === sid) location.replace('#/');
+      }
+    } catch (err) {
+      H.toast(err.message, 'error', 5000);
+    }
+  }
+
+  /* An ended session comes back in a new tmux; the stream then lists it and
+     the view attaches its terminal. */
+  async function resumeOpen(button) {
+    const sid = openSid;
+    if (!sid) return;
+    const result = await act(button, () => H.api('POST', `/api/sessions/${encodeURIComponent(sid)}/resume`),
+      r => r.mode === 'resume' ? 'Resuming' : 'tmux recreated; run the resume command shown in it');
+    if (result) { ended = ended.filter(x => x.session_id !== sid); loadOpenRow(); }
+  }
+
+  function openThemes() {
+    const current = H.currentTheme();
+    const groups = [['dark', 'Dark'], ['light', 'Light']].map(([tone, title]) =>
+      `<div class="menu-heading">${title}</div><div class="theme-grid">${H.THEMES.filter(t => t.tone === tone).map(t =>
+        `<button type="button" class="theme-option${t.id === current ? ' is-active' : ''}" data-theme="${t.id}"><span class="swatches">${t.swatches.map(c => `<span class="swatch" style="background:${c}"></span>`).join('')}</span><span>${esc(t.name)}</span></button>`).join('')}</div>`).join('');
+    showSheet('Theme', sheetHead('Theme') + groups, (e, close) => {
+      const b = e.target.closest('[data-theme]');
+      if (!b) return;
+      H.setTheme(b.dataset.theme);
+      close();
+    });
+  }
+
+  // The terminal follows a theme change, and opencode and pi are told (H.noticeTheme).
+  window.addEventListener('agenthub:theme', event => {
+    postToTerminal({type: 'agent-hub:set-theme', theme: event.detail.theme});
+    H.noticeTheme();
+  });
+
+  // ── New session ─────────────────────────────────────────────
+
+  let newTool = 'claude';
+  let newPath = null;
+
+  function setNewTool(tool) {
+    newTool = tool;
+    document.querySelectorAll('#mn-tools .choice').forEach(b => b.classList.toggle('is-active', b.dataset.tool === tool));
+  }
+
+  function newError(message) {
+    $('mn-error').textContent = message || '';
+    $('mn-error').hidden = !message;
+  }
+
+  function openNew() {
+    newError('');
+    $('mn-title').value = '';
+    $('mn-tmux').value = '';
+    setNewTool(newTool);
+    // The folders of recent sessions, newest first.
+    const folders = [];
+    for (const s of [...sessions.values(), ...ended]) {
+      if (s.cwd && !folders.includes(s.cwd)) folders.push(s.cwd);
+    }
+    $('mn-recent').innerHTML = folders.slice(0, 6).map(f => `<button type="button" class="m-chip" data-path="${esc(f)}">${esc(project(f))}</button>`).join('');
+    $('m-new').hidden = false;
+    browseNew(newPath || '');
+  }
+
+  function closeNew() {
+    $('m-new').hidden = true;
+  }
+
+  async function browseNew(path) {
+    try {
+      const data = await H.api('GET', '/api/browse' + (path ? '?path=' + encodeURIComponent(path) : ''));
+      newPath = data.path;
+      $('mn-path').value = data.path;
+      const parts = data.path.split('/').filter(Boolean);
+      let acc = '';
+      $('mn-crumbs').innerHTML = '<a href="#" data-path="/">/</a>' + parts.map((p, i) => {
+        acc += '/' + p;
+        return i === parts.length - 1 ? `<span class="current">${esc(p)}</span>` : `<a href="#" data-path="${esc(acc)}">${esc(p)}</a><span>/</span>`;
+      }).join('');
+      const rows = (data.entries || []).map(e => {
+        const child = data.path.endsWith('/') ? data.path + e.name : data.path + '/' + e.name;
+        return `<button type="button" data-path="${esc(child)}">${esc(e.name)}/</button>`;
+      });
+      if (data.parent) rows.unshift(`<button type="button" data-path="${esc(data.parent)}">..</button>`);
+      $('mn-dirs').innerHTML = rows.length ? rows.join('') : '<div class="empty">No subfolders</div>';
+      newError('');
+    } catch (err) {
+      newError(err.message);
+    }
+  }
+
+  async function createNew() {
+    newError('');
+    const typed = $('mn-path').value.trim();
+    if (typed && typed !== newPath) await browseNew(typed);
+    if (!newPath || !$('mn-error').hidden) { if (!newPath) newError('Pick a folder first'); return; }
+    const name = $('mn-tmux').value.trim().replace(/[–—]/g, '-');
+    const title = $('mn-title').value.trim();
+    const result = await act($('mn-create'), () => H.api('POST', '/api/tmux/new', {name: name || null, cwd: newPath, command: newTool, title: title || null}));
+    if (!result) return;
+    closeNew();
+    startedTool = newTool;
+    H.toast(`Started ${result.title || result.name}`, 'success');
+    cameFromList = true;
+    location.hash = '#/t/' + encodeURIComponent(result.name);
+  }
+
+  $('mn-path').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); browseNew($('mn-path').value.trim()); } });
+
   function autosize() {
     const input = $('m-input');
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight + 2, window.innerHeight * 0.4) + 'px';
   }
 
+  /* Typing goes to the session's endpoints, or, for a tmux started here that
+     has no session yet, to the tmux by name (POST /api/tmux/input). */
+  function typeText(text, attachments) {
+    return openSid ? H.api('POST', sessionUrl('/send'), {text, attachments}) : H.api('POST', '/api/tmux/input', {name: openTmux, text, attachments});
+  }
+
+  // ── Attachments ─────────────────────────────────────────────
+
+  /* A phone's clipboard is not the workstation's, so Ctrl+V in the CLI
+     cannot reach a phone screenshot. A file picked with the paperclip, or
+     pasted into the reply box, is uploaded at once (POST /api/uploads); the
+     reply carries the saved paths, and the Hub pastes each one into the CLI
+     ahead of the text. Claude Code and Codex attach an image path as an
+     image. */
+  const attachKey = () => openSid || (openTmux ? 't:' + openTmux : null);
+
+  function attachments() {
+    const key = attachKey();
+    if (!key) return [];
+    if (!attached.has(key)) attached.set(key, []);
+    return attached.get(key);
+  }
+
+  function renderAttachments() {
+    const box = $('m-attachments');
+    const files = attachKey() ? attachments() : [];
+    box.hidden = !files.length || $('m-composer').hidden;
+    box.innerHTML = files.map((f, i) => `
+      <span class="m-attachment${f.path ? '' : ' is-uploading'}" title="${esc(f.name)}">
+        ${f.thumb ? `<img src="${esc(f.thumb)}" alt="">` : '<svg class="icon"><use href="#i-file"/></svg>'}
+        <span class="m-attachment-name">${f.path ? esc(f.name) : 'Uploading…'}</span>
+        <button type="button" class="m-attachment-remove" data-remove="${i}" aria-label="Remove ${esc(f.name)}"><svg class="icon"><use href="#i-x"/></svg></button>
+      </span>`).join('');
+  }
+
+  function forget(files, file) {
+    const i = files.indexOf(file);
+    if (i >= 0) files.splice(i, 1);
+    if (file.thumb) URL.revokeObjectURL(file.thumb);
+  }
+
+  async function upload(blob) {
+    const files = attachments();
+    const name = blob.name || `pasted.${(blob.type.split('/')[1] || 'bin').replace(/\W.*/, '')}`;
+    const file = {name, path: null, thumb: /^image\/(png|jpeg|gif|webp)$/.test(blob.type) ? URL.createObjectURL(blob) : ''};
+    files.push(file);
+    renderAttachments();
+    try {
+      const res = await fetch('/api/uploads?name=' + encodeURIComponent(name), {
+        method: 'POST', body: blob, headers: {'Content-Type': blob.type || 'application/octet-stream'},
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.detail) || res.statusText || 'Upload failed');
+      file.path = data.path;
+    } catch (err) {
+      forget(files, file);
+      H.toast(`${name}: ${err.message}`, 'error', 5000);
+    }
+    renderAttachments();
+  }
+
+  $('m-attach').addEventListener('click', () => $('m-file-input').click());
+  $('m-file-input').addEventListener('change', e => {
+    [...e.target.files].forEach(upload);
+    e.target.value = '';
+  });
+  $('m-attachments').addEventListener('click', e => {
+    const button = e.target.closest('[data-remove]');
+    if (!button) return;
+    const files = attachments();
+    const file = files[Number(button.dataset.remove)];
+    if (file) forget(files, file);
+    renderAttachments();
+  });
+  // A screenshot pasted into the reply box from the phone's clipboard.
+  $('m-input').addEventListener('paste', e => {
+    const pasted = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (!pasted.length) return;
+    e.preventDefault();
+    pasted.forEach(upload);
+  });
+
+  function pressKeys(keys) {
+    return openSid ? H.api('POST', sessionUrl('/keys'), {keys}) : H.api('POST', '/api/tmux/input', {name: openTmux, keys});
+  }
+
   async function send() {
     const input = $('m-input');
     const text = input.value.trim();
-    if (!text || !openSid) return;
+    if (!openSid && !openTmux) return;
+    const inTerminal = mode === 'terminal' || !!openTmux;
+    const files = attachments();
+    if (files.some(f => !f.path)) { H.toast('Wait for the upload to finish'); return; }
+    // Nothing in the box: what was typed into the terminal itself is
+    // submitted with Enter.
+    if (!text && !files.length) {
+      if (inTerminal) act($('m-send'), () => pressKeys(['Enter']));
+      return;
+    }
     const sid = openSid;
-    const result = await act($('m-send'), () => H.api('POST', sessionUrl('/send'), {text}), 'Sent');
+    const sent = files.slice();
+    const result = await act($('m-send'), () => typeText(text, sent.map(f => f.path)), 'Sent');
     if (!result) return;
-    drafts.delete(sid);
+    if (sid) drafts.delete(sid);
+    sent.forEach(f => forget(files, f));
+    renderAttachments();
     if (sid === openSid) { input.value = ''; autosize(); }
     // In the Terminal view the reply shows up in the TUI; close the keyboard so it has the room.
-    if (mode === 'terminal') input.blur();
+    if (inTerminal) input.blur();
     else setTimeout(() => loadMessages(true), 800);
   }
 
-  /* Esc for the TUI, through the Hub (which ignores a second press within
-     2 s: two Escapes open Claude Code's rewind menu). The press must not
+  /* Esc and the arrows for the TUI, through the Hub. Esc goes to POST
+     /interrupt, which ignores a second press within 2 s (two Escapes open
+     Claude Code's rewind menu); the arrows to POST /keys. A press must not
      take focus from the terminal or the reply box, or the phone keyboard
-     would close, so the button never takes focus and acts on release. */
-  const escButton = $('m-esc');
-  const pressEsc = () => { if (!escButton.disabled) act(escButton, () => H.api('POST', sessionUrl('/interrupt'))); };
-  escButton.addEventListener('touchstart', e => e.preventDefault(), {passive: false});
-  escButton.addEventListener('touchend', e => { e.preventDefault(); pressEsc(); });
-  escButton.addEventListener('mousedown', e => e.preventDefault());
-  escButton.addEventListener('click', e => { e.preventDefault(); pressEsc(); });
+     would close, so these buttons never take focus and act on release. */
+  document.querySelectorAll('.m-keys [data-key]').forEach(button => {
+    const press = () => {
+      if (button.disabled) return;
+      const key = button.dataset.key;
+      act(button, () => key === 'Escape' && openSid ? H.api('POST', sessionUrl('/interrupt')) : pressKeys([key]));
+    };
+    button.addEventListener('touchstart', e => e.preventDefault(), {passive: false});
+    button.addEventListener('touchend', e => { e.preventDefault(); press(); });
+    button.addEventListener('mousedown', e => e.preventDefault());
+    button.addEventListener('click', e => { e.preventDefault(); press(); });
+  });
 
   $('m-composer').addEventListener('submit', e => { e.preventDefault(); send(); });
   $('m-input').addEventListener('input', autosize);
@@ -642,6 +1038,9 @@
   setInterval(() => { if (!document.hidden) render(); }, 30000);
 
   window.AgentHubMobile = {back, openSession};
+  // In the Android app this page is all there is: no way out to the workspace.
+  if (window.AgentHubAndroid) $('m-workspace').hidden = true;
+  document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('m-ended')) endedOpen = e.target.open; }, true);
   connect();
   route();
 })();

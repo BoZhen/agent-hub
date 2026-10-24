@@ -15,12 +15,22 @@ import asyncio
 import itertools
 import os
 import time
+from collections.abc import Sequence
 
 TMUX = "tmux"
 # Process names of an agent CLI. An npm install runs as `node`, so a node
 # process counts when its command line names one of them. pi sets its
 # process title to "pi", and opencode's terminal UI to "opencode".
 AGENT_COMMANDS = ("claude", "codex", "pi", "opencode")
+# Keys a phone may press in an agent pane, by their tmux names: Esc, Enter,
+# and the arrows and Tab that move through a CLI's menus and questions.
+PHONE_KEYS = frozenset({"Escape", "Enter", "Left", "Right", "Up", "Down", "Tab", "BTab"})
+# Pause between a paste and its Enter, so the TUI has finished taking the
+# paste in; an Enter that arrives with it would become a newline.
+SUBMIT_DELAY_S = 0.3
+# Pause after an attached file's path, so the CLI has read the file before
+# the next paste (Claude Code takes about 0.3 s for an 11 MB photo).
+ATTACH_DELAY_S = 0.5
 _TREE_DEPTH = 6
 
 _buffers = itertools.count(1)
@@ -240,6 +250,24 @@ async def paste(pane: str, text: str) -> None:
     if rc != 0:
         await _tmux("delete-buffer", "-b", buffer)
         raise TmuxInputError(err or "tmux paste-buffer failed")
+
+
+async def send(pane: str, text: str, submit: bool = True, attachments: Sequence[str] = ()) -> None:
+    """Paste text into the pane and, with submit, press Enter after it.
+
+    Attachments (file paths, services/uploads.py) go first, each as a paste
+    of its own followed by a space: Claude Code and Codex turn a paste that
+    is one image path into an image attachment, but leave a path inside a
+    longer paste as text.
+    """
+    for path in attachments:
+        await paste(pane, path + " ")
+        await asyncio.sleep(ATTACH_DELAY_S)
+    if text:
+        await paste(pane, text)
+    if submit:
+        await asyncio.sleep(SUBMIT_DELAY_S)
+        await press(pane, "Enter")
 
 
 async def press(pane: str, *keys: str) -> None:
